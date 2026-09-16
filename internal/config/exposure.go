@@ -98,6 +98,35 @@ func WantsRandom(addr string) bool {
 // this has a reason, and refusing to start would leave them with an alarm
 // system that does not run. Saying it every time they start is the right
 // amount of pressure.
+// ackURLIsThisMachine reports whether the acknowledgement address names
+// loopback, which validate() already refuses for its own reasons.
+func ackURLIsThisMachine(rawurl string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawurl))
+	if err != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
+// ackHost is the host part, for saying WHICH address will not answer.
+func ackHost(rawurl string) string {
+	if u, err := url.Parse(strings.TrimSpace(rawurl)); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return strings.TrimSpace(rawurl)
+}
+
+func ackListenNote(ackListen string) string {
+	if strings.TrimSpace(ackListen) == "" {
+		return ", and web.ack_listen is not set"
+	}
+	return ", and web.ack_listen is bound to this machine only"
+}
+
 func (c Config) exposureWarnings() []string {
 	var w []string
 
@@ -137,6 +166,28 @@ func (c Config) exposureWarnings() []string {
 	// Not conditioned on the URL: a loopback-bound second listener cannot
 	// receive a forward whatever the acknowledgement address says, and if that
 	// address IS public the link points somewhere nothing can answer.
+	// An acknowledgement address that names somewhere other than this machine,
+	// while NOTHING is listening anywhere a phone could reach.
+	//
+	// This is the combination that produces a perfectly configured-looking
+	// install whose every acknowledgement link is dead: the alert arrives, the
+	// link is tapped, nothing answers, and the alarm keeps repeating with no
+	// way to stop it but the web UI -- which is on the machine the operator is
+	// not standing at.
+	//
+	// A warning and not a refusal, because there is a legitimate shape here: a
+	// tunnel or reverse proxy running ON this machine and connecting to
+	// loopback. Only the operator knows whether one exists.
+	if strings.TrimSpace(c.Web.AckBaseURL) != "" && !ackURLIsThisMachine(c.Web.AckBaseURL) &&
+		!forwardable && (!scoped || (!WantsRandom(c.Web.AckListen) &&
+		!listensOnEveryInterface(c.Web.AckListen))) {
+		w = append(w, "web.ack_base_url points at "+ackHost(c.Web.AckBaseURL)+
+			" but nothing is listening anywhere a phone could reach: web.listen "+
+			"is bound to this machine only"+ackListenNote(c.Web.AckListen)+
+			". Acknowledgement links will time out unless a tunnel or reverse "+
+			"proxy on this machine forwards to it. For a phone on the LAN, set "+
+			"web.listen to 0.0.0.0 and use this machine's LAN address")
+	}
 	if scoped && !WantsRandom(c.Web.AckListen) && !listensOnEveryInterface(c.Web.AckListen) {
 		w = append(w, "web.ack_listen is set but only accepts connections from "+
 			"this machine, so a forwarded port will not reach it -- use "+

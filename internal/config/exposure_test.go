@@ -244,3 +244,63 @@ func TestAutoPassesValidation(t *testing.T) {
 		t.Error("a malformed ack_listen was accepted")
 	}
 }
+
+// The combination that produces a perfectly configured-looking install whose
+// every acknowledgement link is dead: the address names somewhere other than
+// this machine, and nothing is listening anywhere a phone could reach. The
+// alert arrives, the link is tapped, nothing answers, and the alarm keeps
+// repeating with no way to stop it but the web UI -- on the machine the
+// operator is not standing at.
+//
+// Found on a real installation. Nothing checked it.
+func TestAnAckAddressWithNothingListeningForItIsWarnedAbout(t *testing.T) {
+	c := Default()
+	c.Web.Listen = "127.0.0.1:8322"
+	c.Web.AckBaseURL = "https://alerts.example.com"
+	c.Web.AckListen = ""
+
+	if !warnsAbout(c, "nothing is listening") {
+		t.Fatalf("no warning for an ack address nothing can answer:\n%v", c.Warnings())
+	}
+	// It has to name the address, or an operator with more than one does not
+	// know which is wrong.
+	if !warnsAbout(c, "alerts.example.com") {
+		t.Errorf("the warning does not name the address:\n%v", c.Warnings())
+	}
+}
+
+// A LAN address with the listener bound to every interface is the ordinary
+// working setup and must be silent, or the warning is noise.
+func TestAReachableAckAddressIsNotWarnedAbout(t *testing.T) {
+	c := Default()
+	c.Web.Listen = "0.0.0.0:8322"
+	c.Web.AckBaseURL = "http://192.168.20.115:8322"
+
+	if warnsAbout(c, "nothing is listening") {
+		t.Fatalf("a working LAN setup was warned about:\n%v", c.Warnings())
+	}
+}
+
+// A tunnel or reverse proxy on this machine connecting to loopback is
+// legitimate, which is why this is a warning and not a refusal -- but the
+// scoped ack listener bound to every interface is ALSO a working shape and
+// must not be nagged.
+func TestAScopedAckListenerOnEveryInterfaceIsNotWarnedAbout(t *testing.T) {
+	c := Default()
+	c.Web.Listen = "127.0.0.1:8322"
+	c.Web.AckBaseURL = "https://alerts.example.com"
+	c.Web.AckListen = "0.0.0.0:51234"
+
+	if warnsAbout(c, "nothing is listening") {
+		t.Fatalf("a scoped, forwardable ack listener was warned about:\n%v", c.Warnings())
+	}
+}
+
+func warnsAbout(c Config, substr string) bool {
+	for _, w := range c.Warnings() {
+		if strings.Contains(w, substr) {
+			return true
+		}
+	}
+	return false
+}
