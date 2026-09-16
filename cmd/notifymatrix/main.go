@@ -312,6 +312,9 @@ func dispatch(cmd, dataDir, user string, showLinks, showAll, interactive, portab
 	case "demo":
 		return demoCmd(dataDir, dataDirWasGiven)
 
+	case "setup-token":
+		return setupTokenCmd(dataDir, interactive)
+
 	case "set-password":
 		return setPassword(dataDir, interactive)
 
@@ -353,6 +356,7 @@ Either rename it to notifymatrix.exe, or read every command below as:
   notifymatrix start|stop   control the installed service
   notifymatrix status       report service state
   notifymatrix incidents    list open incidents (--links for ack URLs)
+  notifymatrix setup-token  show the one-time setup token (elevates if it must)
   notifymatrix set-password set the settings password (works with the service installed)
   notifymatrix demo         look around a fabricated site, no console needed
   notifymatrix setup        what is left to do, step by step (--all for everything)
@@ -868,11 +872,18 @@ It works once, and a new one is generated each time this starts.
 `, tok)
 			if where != "" {
 				fmt.Printf(`
-It is also in %s, readable only by
-administrators, and deleted as soon as a password is set. A service has
-no console to print to, so that file is where to look after installing.
+It is also in
+    %s
+deleted as soon as a password is set. A service has no console to print to,
+so that file is where to look after installing.
 
-`, where)
+Reading it needs an ELEVATED terminal -- being in the Administrators group
+is not enough on its own, because Windows withholds those rights until a
+process elevates. This will do it for you, prompting if it has to:
+
+    %s
+
+`, where, typedCommand("setup-token"))
 			}
 			fmt.Printf("Or set one directly, with nothing left on disk:  %s\n\n",
 				typedCommand("set-password"))

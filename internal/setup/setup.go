@@ -474,6 +474,10 @@ func passwordStep(in Input) Step {
 	if in.ServiceInstalled {
 		s.How = []string{
 			"Run: " + in.Command("set-password"),
+			"Or, to use the one-time token the service could not print: " +
+				in.Command("setup-token") + " -- it needs administrator rights and " +
+				"will ask for them, because being in the Administrators group is " +
+				"not enough until a process elevates.",
 			"It asks twice, does not echo, and writes the password straight to " +
 				"the configuration.",
 			"It offers to restart the service afterwards, which is required: a " +

@@ -54,8 +54,15 @@ func WriteSetupToken(dataDir, token string) error {
 		"It works once, and a new one is generated each time the daemon starts.\n" +
 		"This file is deleted as soon as a password is set.\n\n" +
 		"Anybody holding this can claim the settings page of this installation,\n" +
-		"so it is readable only by administrators. If you would rather not have\n" +
-		"it on disk at all, delete this file and run: notifymatrix set-password\n"
+		"so it is readable only by administrators and by the account the daemon\n" +
+		"runs as.\n\n" +
+		"Being IN the Administrators group is not enough to open it. Windows\n" +
+		"withholds those rights from a process until it elevates, so opening this\n" +
+		"file directly reports \"access denied\" even for an administrator. Use an\n" +
+		"elevated terminal, or let the program do it and prompt you:\n\n" +
+		"    notifymatrix setup-token\n\n" +
+		"If you would rather have no token on disk at all, delete this file and\n" +
+		"run: notifymatrix set-password\n"
 
 	// Created empty and locked down BEFORE the token is written into it, so
 	// there is no window in which the value exists under inherited

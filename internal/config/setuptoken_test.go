@@ -27,7 +27,10 @@ func TestTheTokenIsWrittenWhereAnOperatorCanFindIt(t *testing.T) {
 	}
 	// The file has to explain itself. Somebody finding it months later must be
 	// able to tell whether it is a live credential.
-	for _, want := range []string{"once", "deleted", "set-password"} {
+	// Including the one thing that stops an administrator reading it: being
+	// in the group is not enough until the process elevates, and the file has
+	// to say so or it reads as broken permissions.
+	for _, want := range []string{"once", "deleted", "set-password", "setup-token", "elevate"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the file never mentions %q, so it cannot be judged by whoever finds it:\n%s",
 				want, body)
