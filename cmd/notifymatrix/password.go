@@ -68,6 +68,10 @@ func setPassword(dataDir string, interactive bool) int {
 		fmt.Fprintln(os.Stderr, "error: could not save the configuration:", err)
 		return 1
 	}
+	// Any setup-token file is now spent in the only sense that matters: a
+	// password exists, so the interface will not accept the token. Leaving the
+	// file behind leaves something that reads as a live credential.
+	_ = config.RemoveSetupToken(dataDir)
 	fmt.Println("\nPassword set.")
 
 	// The daemon reads its config at start, so one that is already running is
@@ -100,10 +104,10 @@ func setPassword(dataDir string, interactive bool) int {
 	}
 
 	if interactive && askYesNo(os.Stdout, bufio.NewReader(os.Stdin), "Restart the service now?") {
-		if code := serviceCmd("stop", dataDir, ""); code != 0 {
+		if code := serviceCmd("stop", dataDir, "", false); code != 0 {
 			return code
 		}
-		return serviceCmd("start", dataDir, "")
+		return serviceCmd("start", dataDir, "", false)
 	}
 	fmt.Println("\nTo do it yourself:  " + typedCommand("stop") + " && " + typedCommand("start"))
 	return 0

@@ -246,6 +246,7 @@ func run(alone bool) int {
 	links := fs.Bool("links", false, "print acknowledgement links (they are credentials)")
 	all := fs.Bool("all", false, "with `setup`, show every step including the finished ones")
 	user := fs.String("user", "", "account the Linux service runs as (default notifymatrix)")
+	portable := fs.Bool("portable", false, "with `install`, run the service from where this file is rather than copying it somewhere only administrators can write")
 	fs.Usage = usage
 	if err := fs.Parse(flagArgs); err != nil {
 		return 2
@@ -270,10 +271,10 @@ func run(alone bool) int {
 		return 0
 	}
 
-	return dispatch(cmd, dir, *user, *links, *all, alone)
+	return dispatch(cmd, dir, *user, *links, *all, alone, *portable)
 }
 
-func dispatch(cmd, dataDir, user string, showLinks, showAll, interactive bool) int {
+func dispatch(cmd, dataDir, user string, showLinks, showAll, interactive, portable bool) int {
 	switch cmd {
 	case "version":
 		fmt.Printf("notifymatrix %s (%s/%s, %s)\n", version, runtime.GOOS, runtime.GOARCH, runtime.Version())
@@ -306,7 +307,7 @@ func dispatch(cmd, dataDir, user string, showLinks, showAll, interactive bool) i
 		return setPassword(dataDir, interactive)
 
 	case "install", "uninstall", "start", "stop", "status":
-		return serviceCmd(cmd, dataDir, user)
+		return serviceCmd(cmd, dataDir, user, portable)
 
 	case "":
 		// Double-clicked, or run with no arguments. Somebody who has never
@@ -352,6 +353,8 @@ Either rename it to notifymatrix.exe, or read every command below as:
 Flags:
   --data-dir PATH   config, incident store and lock (default %s)
   --user NAME       Linux service account (default %s)
+  --portable        with install, leave the program where it is instead of
+                    copying it somewhere only administrators can write
 
 Run "notifymatrix probe -h" for its own flags.
 
@@ -431,6 +434,9 @@ func runDaemon(ctx context.Context, dataDir string) error {
 	if exe, err := exePath(); err == nil {
 		update.CleanBackups(exe)
 	}
+	// And the one a re-install moved aside, for the same reason: at install
+	// time the file being replaced may still be the running process.
+	service.CleanPlacedBackup()
 
 	// A delivery failure is reported as it lands: a channel that has started
 	// failing is itself something the operator needs to know, not only a field
@@ -730,6 +736,10 @@ func runDaemon(ctx context.Context, dataDir string) error {
 				cfgMu.Lock()
 				current = &next
 				cfgMu.Unlock()
+				// The token is spent and the file is now a thing that looks
+				// like a credential and is not. Removed on the same path that
+				// makes it obsolete, so the two cannot drift apart.
+				_ = config.RemoveSetupToken(dataDir)
 				return nil
 			},
 			TestChannel: func(ctx context.Context, name string) error {
@@ -825,19 +835,42 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		}
 		mux.Handle("/", ui.Handler())
 		if tok := ui.SetupToken(); tok != "" {
+			// Written to a file as well as printed, because printing it is
+			// exactly what does not work where it matters most: a Windows
+			// service has no stdout, so on the installation this product tells
+			// everybody to make, the token was minted into a void and the
+			// settings page could not be claimed at all.
+			//
+			// Protected to administrators only, and if it cannot be protected
+			// it is not written -- see config.WriteSetupToken.
+			where := config.SetupTokenPath(dataDir)
+			if err := config.WriteSetupToken(dataDir, tok); err != nil {
+				fmt.Fprintln(os.Stderr, "note:", err)
+				where = ""
+			}
 			fmt.Printf(`
 No settings password is set yet. To set one, open the interface
 and enter this one-time setup token:
 
     %s
 
-It works once, and a new one is printed each time this starts.
-
-You are seeing this because the daemon has a console. Installed as a
-service it has none, and this token goes nowhere -- so from then on the
-way to set a password is:  notifymatrix set-password
-
+It works once, and a new one is generated each time this starts.
 `, tok)
+			if where != "" {
+				fmt.Printf(`
+It is also in %s, readable only by
+administrators, and deleted as soon as a password is set. A service has
+no console to print to, so that file is where to look after installing.
+
+`, where)
+			}
+			fmt.Printf("Or set one directly, with nothing left on disk:  %s\n\n",
+				typedCommand("set-password"))
+		} else {
+			// A password exists, so any token file is stale and its contents
+			// are spent. Leaving it would be a file that looks like a live
+			// credential and is not.
+			_ = config.RemoveSetupToken(dataDir)
 		}
 
 		srv := &http.Server{
@@ -997,22 +1030,48 @@ way to set a password is:  notifymatrix set-password
 	return runErr
 }
 
-func serviceCmd(cmd, dataDir, user string) int {
+func serviceCmd(cmd, dataDir, user string, portable bool) int {
 	m := service.New()
 
 	var err error
 	switch cmd {
 	case "install":
-		// Said BEFORE the install, because install records the path it was run
-		// from and keeps it for ever. Afterwards this is advice about a
-		// decision already taken.
-		if exe, e := os.Executable(); e == nil {
-			if w := service.LocationWarning(exe); w != "" {
+		// The binary is put where a service binary BELONGS before the service
+		// is created, because install records a path and keeps it for ever.
+		//
+		// Without this, install registered whatever path it was run from --
+		// which for a downloaded program is Downloads, a directory its own
+		// unelevated user can write to. A service running as LocalSystem out
+		// of there is a file anybody running as that user can replace,
+		// choosing what runs as the service account next time it starts, with
+		// no prompt and none of the updater's signature checking involved.
+		exePath, locErr := os.Executable()
+		if locErr != nil {
+			fmt.Fprintln(os.Stderr, "error: locating this executable:", locErr)
+			return 1
+		}
+		if portable {
+			if w := service.LocationWarning(exePath); w != "" {
 				fmt.Fprintln(os.Stderr, "\nWARNING: "+wrapText(w, 72))
+				fmt.Fprintln(os.Stderr, "\nInstalling from there anyway: --portable was given.")
 				fmt.Fprintln(os.Stderr)
 			}
+		} else {
+			placed, perr := service.PlaceBinary(exePath)
+			if perr != nil {
+				fmt.Fprintln(os.Stderr, "error:", perr)
+				fmt.Fprintln(os.Stderr, "       to install from where it is instead, add --portable")
+				return 1
+			}
+			if placed != exePath {
+				fmt.Printf("copied the program to %s\n", placed)
+				fmt.Printf("the download you ran this from is no longer needed\n")
+			}
+			exePath = placed
 		}
-		err = m.Install(service.InstallOptions{DataDir: dataDir, User: user})
+		err = m.Install(service.InstallOptions{
+			DataDir: dataDir, User: user, ExePath: exePath,
+		})
 	case "uninstall":
 		err = m.Uninstall()
 	case "start":
@@ -1041,6 +1100,11 @@ func serviceCmd(cmd, dataDir, user string) int {
 			args := cmd
 			if dataDir != "" {
 				args += fmt.Sprintf(` --data-dir "%s"`, dataDir)
+			}
+			// Carried across the elevation, or the elevated run would do the
+			// opposite of what was asked.
+			if portable {
+				args += " --portable"
 			}
 			if e := service.Elevate(args); e != nil {
 				fmt.Fprintln(os.Stderr, "error:", e)
@@ -1128,7 +1192,7 @@ this window open.
 
 It needs administrator rights, so Windows will ask you to confirm.`)
 		if interactive && askYesNo(os.Stdout, in, "Install and start it now?") {
-			return serviceCmd("install", dataDir, "")
+			return serviceCmd("install", dataDir, "", false)
 		}
 		fmt.Println("\nTo do it later, from a terminal:  " + typedCommand("install"))
 
@@ -1140,17 +1204,17 @@ WARNING: this service will NOT restart after a crash. It looks healthy right
 now and will stay down the next time it falls over, which is the whole thing
 you installed it to avoid. Reinstalling fixes it.`)
 		if interactive && askYesNo(os.Stdout, in, "Reinstall it now?") {
-			if code := serviceCmd("uninstall", dataDir, ""); code != 0 {
+			if code := serviceCmd("uninstall", dataDir, "", false); code != 0 {
 				return code
 			}
-			return serviceCmd("install", dataDir, "")
+			return serviceCmd("install", dataDir, "", false)
 		}
 		fmt.Println("\nTo do it later:  " + typedCommand("uninstall") + " && " + typedCommand("install"))
 
 	case st.State == service.StateStopped:
 		fmt.Println("\nInstalled, but not running -- so nothing is being watched.")
 		if interactive && askYesNo(os.Stdout, in, "Start it now?") {
-			return serviceCmd("start", dataDir, "")
+			return serviceCmd("start", dataDir, "", false)
 		}
 		fmt.Println("\nTo do it later:  " + typedCommand("start"))
 
