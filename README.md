@@ -203,11 +203,13 @@ advance, and proves **which workflow in which repository** built the file:
 
 ```bash
 cosign verify-blob notifymatrix-linux-amd64 \
-  --signature   notifymatrix-linux-amd64.sig \
-  --certificate notifymatrix-linux-amd64.pem \
+  --bundle notifymatrix-linux-amd64.sigstore.json \
   --certificate-identity-regexp '^https://github\.com/suburbazine/Unifi-Notification-Matrix/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+Download the `.sigstore.json` alongside the binary — it holds the signature,
+the signing certificate and the transparency-log proof in one file.
 
 ```bash
 gh attestation verify notifymatrix-linux-amd64 --repo suburbazine/Unifi-Notification-Matrix

@@ -16,7 +16,7 @@ Every released binary carries:
 | | Windows | Linux |
 |---|---|---|
 | Code signature | **Authenticode**, timestamped | — |
-| Detached signature | cosign (keyless) | cosign (keyless) |
+| Detached signature | cosign (keyless), `.sigstore.json` | cosign (keyless), `.sigstore.json` |
 | Transparency log | Rekor | Rekor |
 | Build provenance | SLSA, via `gh attestation` | SLSA, via `gh attestation` |
 | Optional | — | detached GPG `.asc` |
@@ -27,10 +27,13 @@ This is the strongest check, and the one to prefer. It proves **which workflow
 in which repository** produced the file. A bare signature only proves somebody
 holding a key signed something; this identifies the builder.
 
+Each binary ships with a `.sigstore.json` **bundle** beside it. One file, and
+it contains everything the check needs: the signature, the short-lived signing
+certificate, and the Rekor inclusion proof. Download it along with the binary.
+
 ```bash
 cosign verify-blob notifymatrix-linux-amd64 \
-  --signature   notifymatrix-linux-amd64.sig \
-  --certificate notifymatrix-linux-amd64.pem \
+  --bundle notifymatrix-linux-amd64.sigstore.json \
   --certificate-identity-regexp '^https://github\.com/suburbazine/Unifi-Notification-Matrix/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -38,6 +41,10 @@ cosign verify-blob notifymatrix-linux-amd64 \
 `Verified OK` means this exact byte sequence was signed by a GitHub Actions run
 in this repository, and that the signing certificate is in the public Rekor
 transparency log.
+
+> Most cosign instructions written before cosign 3 pass a separate
+> `--signature file.sig` and `--certificate file.pem`. Those flags are gone;
+> `--bundle` replaces both. Every release of this project publishes bundles.
 
 > **`--certificate-identity-regexp` is not optional.** Without an identity
 > constraint, cosign will happily verify a signature made by *anybody* with a
@@ -58,7 +65,7 @@ Reports the source commit, the workflow, and the runner that produced the file.
 
 ```bash
 cosign verify-blob SHA256SUMS \
-  --signature SHA256SUMS.sig --certificate SHA256SUMS.pem \
+  --bundle SHA256SUMS.sigstore.json \
   --certificate-identity-regexp '^https://github\.com/suburbazine/Unifi-Notification-Matrix/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 sha256sum -c SHA256SUMS --ignore-missing
@@ -117,7 +124,7 @@ before it:
 
 | # | Where | What | Time |
 |---|---|---|---|
-| §2b | Azure | a Trusted Signing account, identity validation, a certificate profile | **days** (validation) |
+| §2b | Azure | an Artifact Signing (formerly Trusted Signing) account, identity validation, a certificate profile | **days** (validation) |
 | §2c | Entra ID | an app registration, a federated credential, **and a role assignment** | minutes |
 | §2d | GitHub | three secrets, three variables, the `release` environment | minutes |
 | §3 | — | tag and watch | minutes |
@@ -212,12 +219,25 @@ The environment subject is stable and doubles as the approval gate.
 **A federated credential authenticates. It does not authorize.** This is the
 step most often missed, and it fails as a 403 from the signing endpoint long
 after the login step has reported success. On the signing account, **Access
-control (IAM) → Add role assignment → Trusted Signing Certificate Profile
+control (IAM) → Add role assignment → Artifact Signing Certificate Profile
 Signer**, assigned to that app registration:
 
 ```bash
-az role assignment create   --role "Trusted Signing Certificate Profile Signer"   --assignee <APP_CLIENT_ID>   --scope "/subscriptions/<SUB>/resourceGroups/<RG>/providers/Microsoft.CodeSigning/codeSigningAccounts/<ACCOUNT>"
+az role assignment create \
+  --role "Artifact Signing Certificate Profile Signer" \
+  --assignee <APP_CLIENT_ID> \
+  --scope "/subscriptions/<SUB>/resourceGroups/<RG>/providers/Microsoft.CodeSigning/codeSigningAccounts/<ACCOUNT>"
 ```
+
+**The role is called *Artifact* Signing, not *Trusted* Signing.** Microsoft
+renamed the service and the role name followed, so instructions still carrying
+the old name — including some of Microsoft's own — fail with a
+`Role ... doesn't exist` error rather than a permissions error.
+
+> If `az` itself reports *The system cannot find the file specified*, that is
+> not this command failing. It is `az` not being on `PATH`: the installer adds
+> it, but an already-open terminal keeps the environment it started with. Open
+> a new one.
 
 Role assignments take a minute or two to propagate. A 403 immediately after
 creating one is not necessarily wrong yet.
@@ -275,10 +295,16 @@ The workflow then:
 2. **build** — `linux/amd64`, `linux/arm64`, `windows/amd64`, reproducibly.
 3. **sign-windows** — Authenticode via Azure, then asserts the signature is
    `Valid` *and* timestamped before continuing.
-4. **release** — checksums, keyless cosign signatures, optional GPG, SLSA
-   provenance, and a **draft** release.
+4. **release** — checksums, SLSA provenance, keyless cosign bundles, optional
+   GPG, and a **draft** release.
 
 The release is a draft on purpose: look at it before it is public.
+
+Between signing and publishing, the workflow runs §1's `cosign verify-blob`
+command — identity constraint and all — against every artefact it just signed.
+A verification recipe is otherwise the one part of a release nobody exercises
+until an outsider tries it, and by then a wrong flag reads to them as *this
+binary is not what it claims to be*.
 
 `workflow_dispatch` with an existing tag re-runs the whole thing, which is the
 recovery path when a signing step fails midway.
@@ -313,7 +339,7 @@ recovery path when a signing step fails midway.
   match. It must be exactly `repo:OWNER/REPO:environment:release`, and the job
   must actually declare `environment: release`.
 - **403 from the signing endpoint** — the app registration is missing the
-  *Trusted Signing Certificate Profile Signer* role on the account (§2c), or
+  *Artifact Signing Certificate Profile Signer* role on the account (§2c), or
   the assignment has not propagated yet. Authentication succeeding tells you
   nothing about authorization; they are separate steps and they fail at
   different points in the run.

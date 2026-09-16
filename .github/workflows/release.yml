@@ -192,6 +192,19 @@ jobs:
           sha256sum notifymatrix-* > SHA256SUMS
           cat SHA256SUMS
 
+      # SLSA build provenance: a signed statement of which source commit, which
+      # workflow and which runner produced these exact bytes. Verified with
+      # `gh attestation verify`.
+      #
+      # Deliberately BEFORE the cosign step, so `dist/notifymatrix-*` is
+      # exactly the three binaries. Run after it and the glob also sweeps up
+      # the signature bundles, which are not build outputs and have no
+      # provenance to attest.
+      - name: attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/notifymatrix-*
+
       - uses: sigstore/cosign-installer@v4.1.2
 
       # Keyless: the signing identity is this workflow, proven by the OIDC
@@ -199,17 +212,38 @@ jobs:
       # log. Nothing to rotate, nothing to leak, and a verifier can check WHICH
       # workflow in WHICH repository produced the binary -- which a bare
       # detached signature cannot tell them.
+      #
+      # One `.sigstore.json` bundle per artefact, rather than the older
+      # `.sig` + `.pem` pair. cosign 3 removed the split-file flags; the bundle
+      # is also one fewer file for a verifier to fetch and pass correctly.
       - name: cosign sign (keyless)
         env:
           COSIGN_YES: "true"
         run: |
           cd dist
           for f in notifymatrix-* SHA256SUMS; do
-            cosign sign-blob "$f" \
-              --output-signature "${f}.sig" \
-              --output-certificate "${f}.pem"
+            cosign sign-blob "$f" --bundle "${f}.sigstore.json"
           done
           ls -l
+
+      # Run the exact command the release notes tell people to run. The
+      # verification recipe is the part of a release that is never exercised
+      # until somebody outside the project tries it -- by which point a wrong
+      # flag reads as "this binary is not what it claims to be".
+      #
+      # The identity regexp is the load-bearing half. Without it cosign
+      # verifies a signature from anyone, so a verification step that omitted
+      # it would pass no matter who signed.
+      - name: verify what we just signed
+        run: |
+          cd dist
+          for f in notifymatrix-* SHA256SUMS; do
+            case "$f" in *.sigstore.json) continue;; esac
+            cosign verify-blob "$f" \
+              --bundle "${f}.sigstore.json" \
+              --certificate-identity-regexp '^https://github\.com/${{ github.repository }}/' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          done
 
       # Optional, and deliberately so. GPG needs a long-lived private key in
       # repository secrets, which is a weaker posture than the keyless path
@@ -225,18 +259,11 @@ jobs:
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
           cd dist
           for f in notifymatrix-* SHA256SUMS; do
+            case "$f" in *.sigstore.json) continue;; esac
             gpg --batch --yes --pinentry-mode loopback \
                 --passphrase "$GPG_PASSPHRASE" \
                 --armor --detach-sign --output "${f}.asc" "$f"
           done
-
-      # SLSA build provenance: a signed statement of which source commit, which
-      # workflow and which runner produced these exact bytes. Verified with
-      # `gh attestation verify`.
-      - name: attest build provenance
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: dist/notifymatrix-*
 
       - name: publish release
         uses: softprops/action-gh-release@v3
@@ -258,11 +285,15 @@ jobs:
 
             ```
             cosign verify-blob notifymatrix-linux-amd64 \
-              --signature notifymatrix-linux-amd64.sig \
-              --certificate notifymatrix-linux-amd64.pem \
+              --bundle notifymatrix-linux-amd64.sigstore.json \
               --certificate-identity-regexp '^https://github\.com/${{ github.repository }}/' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
             ```
+
+            Download the `.sigstore.json` next to the binary; it carries the
+            signature, the certificate and the transparency-log proof. Keep
+            `--certificate-identity-regexp` — without it cosign verifies a
+            signature from *anyone*.
 
             **Build provenance (any platform):**
 
