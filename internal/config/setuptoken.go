@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/fileperm"
 )
 
 // SetupTokenFile is the name of the file the one-time setup token is written
@@ -74,7 +76,7 @@ func WriteSetupToken(dataDir, token string) error {
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	if err := restrictToAdmins(path); err != nil {
+	if err := fileperm.Restrict(path); err != nil {
 		os.Remove(path)
 		return fmt.Errorf("config: %s could not be protected, so it was not "+
 			"written -- use `notifymatrix set-password` instead: %w", path, err)

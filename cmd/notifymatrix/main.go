@@ -408,6 +408,19 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		Summary: fmt.Sprintf("started, version %s", version),
 	})
 
+	// Repair the configuration's permissions before reading it. Installations
+	// created before this existed left the file readable by every local
+	// account on Windows, and an operator who never saves a setting from the
+	// interface would never otherwise get the fix.
+	if err := config.SecureExisting(dataDir); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: could not restrict who can read the configuration:", err)
+		_ = auditLog.Append(ctx, audit.Entry{
+			Kind: audit.KindService, Actor: "system",
+			Summary: "could not restrict who can read the configuration",
+			Fields:  map[string]string{"error": err.Error()},
+		})
+	}
+
 	cfg, err := config.LoadOrCreate(dataDir)
 	if err != nil {
 		return err

@@ -9,6 +9,7 @@ import (
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ack"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/webhook"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/fileperm"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"sigs.k8s.io/yaml"
 )
@@ -30,6 +31,33 @@ var (
 
 // Path returns the config path inside a data directory.
 func Path(dataDir string) string { return filepath.Join(dataDir, FileName) }
+
+// SecureExisting re-applies the read restriction to a configuration file that
+// is already on disk.
+//
+// Save gets this right for every file it writes, but an installation that has
+// never saved a setting from the interface is still sitting on whatever
+// permissions it was first created with -- which on Windows meant readable by
+// every local account. Called at startup, so an upgrade repairs the file
+// rather than waiting for the operator to happen to save something.
+//
+// Returns nil when there is no configuration yet: a fresh install has nothing
+// to repair, and Save will create it correctly.
+func SecureExisting(dataDir string) error {
+	if _, err := os.Stat(dataDir); err == nil {
+		if err := fileperm.RestrictDir(dataDir); err != nil {
+			return err
+		}
+	}
+	path := Path(dataDir)
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return fileperm.Restrict(path)
+}
 
 // Load reads and validates the config.
 func Load(dataDir string) (*Config, error) {
@@ -224,6 +252,13 @@ func Save(dataDir string, cfg *Config) error {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return fmt.Errorf("config: creating %s: %w", dataDir, err)
 	}
+	// The directory, not just the files in it. 0o700 above is ignored on
+	// Windows, where this directory inherits FULL CONTROL for Everyone from
+	// ProgramData -- and full control of a directory is the right to delete
+	// and replace the files inside it, whatever their own permissions say.
+	if err := fileperm.RestrictDir(dataDir); err != nil {
+		return fmt.Errorf("config: restricting %s: %w", dataDir, err)
+	}
 	path := Path(dataDir)
 
 	// Same directory as the target, so the rename is on one filesystem and is
@@ -241,6 +276,27 @@ func Save(dataDir string, cfg *Config) error {
 	if err := tmp.Chmod(0o600); err != nil && !errors.Is(err, os.ErrInvalid) {
 		_ = tmp.Close()
 		return fmt.Errorf("config: securing the temporary file: %w", err)
+	}
+	// And the real permissions, which on Windows chmod does not set at all.
+	//
+	// This file lives in C:\ProgramData\NotifyMatrix, which grants read to
+	// Users by inheritance, so every console API key, SMTP password, hook
+	// credential and the ack signing key sat in a file any local account could
+	// open -- and the secrets inside are sealed with machine-scope DPAPI,
+	// which every local account can also unseal. The setup token was given a
+	// protected DACL precisely because of that inheritance; the file with far
+	// more in it was not.
+	//
+	// Applied to the TEMP file, before a single byte of content is written:
+	// the DACL travels with the file through the rename, so at no point does a
+	// readable file with secrets in it exist.
+	//
+	// Fatal rather than best-effort. Refusing to save is a loud and fixable
+	// problem; writing credentials somewhere the whole machine can read them
+	// is a quiet one, and this product's whole argument is against those.
+	if err := fileperm.Restrict(tmpName); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("config: restricting who can read %s: %w", path, err)
 	}
 	if _, err := tmp.Write(b); err != nil {
 		_ = tmp.Close()

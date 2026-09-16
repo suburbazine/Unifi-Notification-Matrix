@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/fileperm"
 )
 
 // FileName is the current audit file inside the data directory.
@@ -97,6 +99,18 @@ func (a *File) reopen() error {
 	f, err := os.OpenFile(a.path(), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("audit: opening %s: %w", a.path(), err)
+	}
+	// The 0600 above is a no-op on Windows, where the file inherits read
+	// access for every local account from ProgramData. Secrets are scrubbed
+	// from these entries, but the record still says which cameras and doors
+	// exist, when the site was empty, and when an alarm went unanswered --
+	// which for a security product is not public information either.
+	//
+	// Best-effort, unlike the configuration: an audit record that cannot be
+	// locked down is still worth far more than no audit record, and refusing
+	// to start over it would take the whole daemon down with it.
+	if err := fileperm.Restrict(a.path()); err != nil {
+		a.report(fmt.Errorf("audit: restricting who can read %s: %w", a.path(), err))
 	}
 	st, err := f.Stat()
 	if err != nil {
