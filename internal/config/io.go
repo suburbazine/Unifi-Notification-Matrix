@@ -116,6 +116,16 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// needsHookTokens reports whether any hook is missing its token.
+func needsHookTokens(cfg *Config) bool {
+	for _, h := range cfg.Hooks {
+		if h.Token.IsZero() {
+			return true
+		}
+	}
+	return false
+}
+
 // Save writes the config atomically.
 //
 // Atomic because the web UI rewrites this file while the daemon is running,
@@ -137,6 +147,22 @@ func Save(dataDir string, cfg *Config) error {
 	// Minted on first save rather than at install, so a config hand-written
 	// from scratch still gets one. Without a key no acknowledgement link can
 	// be signed, and every alert would repeat until the web UI stopped it.
+	// Minted here for the same reason as the ack key below: a hook added by
+	// hand -- or through the interface, where the operator only types a name --
+	// has no token, and a hook with no token has no URL to give anybody. The
+	// alternative is asking a person to invent a secret, which is how short
+	// secrets happen.
+	for i := range cfg.Hooks {
+		if !cfg.Hooks[i].Token.IsZero() {
+			continue
+		}
+		t, err := NewHookToken()
+		if err != nil {
+			return err
+		}
+		cfg.Hooks[i].Token = t
+	}
+
 	if cfg.Web.AckKey.IsZero() {
 		k, err := ack.NewSecret()
 		if err != nil {
@@ -153,6 +179,10 @@ func Save(dataDir string, cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("config: encoding: %w", err)
 	}
+	// The instructions are part of the file, and are rewritten every time --
+	// see header.go. A comment block that only survived the first write would
+	// disappear the moment somebody saved a setting from the interface.
+	b = withHeader(b)
 
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return fmt.Errorf("config: creating %s: %w", dataDir, err)
@@ -200,6 +230,18 @@ func Save(dataDir string, cfg *Config) error {
 func LoadOrCreate(dataDir string) (*Config, error) {
 	cfg, err := Load(dataDir)
 	if err == nil {
+		// A hook added by hand has no token, and a hook with no token has no
+		// URL -- so it is silently skipped, the endpoint never exists, and the
+		// operator has a configuration that looks complete and does nothing.
+		// Minting one needs a write, so it happens HERE rather than in Load:
+		// reading a config must never have a side effect, but "open it the way
+		// a program that is about to use it would" may.
+		if needsHookTokens(cfg) {
+			if err := Save(dataDir, cfg); err != nil {
+				return cfg, fmt.Errorf("config: a hook has no token and one could "+
+					"not be generated -- that hook will not receive anything: %w", err)
+			}
+		}
 		return cfg, nil
 	}
 	if !errors.Is(err, ErrNotFound) {

@@ -47,15 +47,21 @@ func TestABrokenEntryDoesNotCostTheConsoleItsOtherSources(t *testing.T) {
 	}
 }
 
-// `network` is warned about by Config.Warnings and must not be reported twice.
-func TestTheUnimplementedNetworkSourceIsNotReportedTwice(t *testing.T) {
-	got, problems := BuildSources(consoleWith("protect", "network"))
-	if len(got) != 1 {
-		t.Errorf("built %d source(s), want protect", len(got))
-	}
+// All three products now build. The Network source is the odd one -- its
+// Integration API has no events at all, so it polls for device state and its
+// alarm classes arrive on an inbound hook instead.
+func TestTheNetworkSourceBuilds(t *testing.T) {
+	got, problems := BuildSources(consoleWith("network"))
 	if len(problems) != 0 {
-		t.Errorf("problems = %v; Config.Warnings already says this, and a fact "+
-			"printed twice in one second teaches the reader that warnings repeat", problems)
+		t.Fatalf("problems = %v", problems)
+	}
+	if len(got) != 1 || got[0].Name() != "network" {
+		t.Fatalf("built %v, want the network source", got)
+	}
+	// It opts out of the deadman on purpose: a healthy network emits nothing
+	// for weeks, so a deadman here would fire on every quiet site.
+	if got[0].Liveness() != 0 {
+		t.Errorf("liveness = %v, want zero for network", got[0].Liveness())
 	}
 }
 

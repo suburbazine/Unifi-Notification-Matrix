@@ -27,6 +27,7 @@
 
 <nav class="tabs" role="tablist">
   <button role="tab" data-tab="incidents" aria-selected="true">Incidents</button>
+  <button role="tab" data-tab="setup" aria-selected="false">Setup</button>
   <button role="tab" data-tab="health" aria-selected="false">Health</button>
   <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
   <button role="tab" data-tab="audit" aria-selected="false">Audit</button>
@@ -38,6 +39,11 @@
     <div id="open-incidents"></div>
     <h3>Recently closed</h3>
     <div id="recent-incidents"></div>
+  </section>
+
+  <section id="tab-setup" hidden>
+    <h3>What is left to do</h3>
+    <div id="setup-body"></div>
   </section>
 
   <section id="tab-health" hidden>

@@ -33,7 +33,15 @@ type Config struct {
 	Version int `json:"version"`
 
 	Consoles []Console `json:"consoles,omitempty"`
-	Channels Channels  `json:"channels,omitempty"`
+
+	// Hooks are inbound webhook endpoints, one per UniFi Alarm Manager rule.
+	//
+	// They exist because Alarm Manager rules can be created only in the UniFi
+	// UI -- no API creates them -- so this product cannot provision its own
+	// push path and a person has to make the rule by hand. See internal/inbound.
+	Hooks []Hook `json:"hooks,omitempty"`
+
+	Channels Channels `json:"channels,omitempty"`
 
 	// Policies overrides the shipped defaults, keyed by severity. Absent means
 	// escalate.DefaultPolicies().
@@ -180,6 +188,29 @@ type Web struct {
 	// repeating means the only way left to acknowledge them is the web UI.
 	// That is a real cost, so it is not done automatically.
 	AckKey secret.Secret `json:"ack_key,omitempty"`
+
+	// AckListen is a SECOND listener that serves the acknowledgement routes
+	// and nothing else. Empty means one listener for everything.
+	//
+	// It exists for one situation, and it is a common one: somebody who is not
+	// at the site has to be able to stop an alarm. That means the ack surface
+	// has to be reachable from outside, and the ordinary way people do that is
+	// a NAT port forward.
+	//
+	// A NAT FORWARD CANNOT SCOPE BY PATH. Forwarding the main listener
+	// publishes the status page -- which names cameras, doors and open alarms
+	// -- and the settings sign-in, to the entire internet. ARCHITECTURE.md
+	// section 8b accepts a public status page on the reasoning that anyone on
+	// that LAN can query the console directly anyway; that reasoning does not
+	// survive contact with the open internet.
+	//
+	// So this gives the forward something safe to point at: a port on which
+	// /ack/ is the only thing that exists. Everything else 404s, including the
+	// status page and the settings API.
+	//
+	// It is still plain HTTP, and the acknowledgement token travels in the
+	// URL. Put TLS in front of it, or use a VPN instead -- see docs/SETUP.md.
+	AckListen string `json:"ack_listen,omitempty"`
 
 	// AckBaseURL is the externally reachable base for acknowledgement links.
 	//

@@ -360,26 +360,18 @@ func TestInsecureWithNoPinIsWarnedAboutButStillStarts(t *testing.T) {
 	}
 }
 
-// Likewise: said out loud, but it does not take away the Protect and Access
-// coverage on the same console.
-func TestAnUnimplementedSourceWarnsWithoutRefusingTheConsole(t *testing.T) {
+// A name that is not a source at all is a refusal: it is a typo, and a typo
+// silently watching nothing is exactly the failure this guards against.
+func TestAMisspelledSourceIsRefused(t *testing.T) {
 	c := workable()
-	c.Consoles[0].Sources = []string{"protect", "network"}
-
-	if err := c.Validate(); err != nil {
-		t.Fatalf("one unimplemented source refused the whole config: %v", err)
-	}
-	w := strings.Join(c.Warnings(), "\n")
-	if !strings.Contains(w, "network") {
-		t.Errorf("an unimplemented source was accepted silently, which reads as "+
-			"a WAN that is being watched: %v", c.Warnings())
-	}
-
-	// But a name that is not a source at all is still a refusal: it is a typo,
-	// and a typo silently watching nothing is the failure this guards.
 	c.Consoles[0].Sources = []string{"protekt"}
 	if err := c.Validate(); err == nil {
 		t.Error("a misspelled source name was accepted")
+	}
+
+	c.Consoles[0].Sources = []string{"protect", "access", "network"}
+	if err := c.Validate(); err != nil {
+		t.Errorf("all three real sources were refused: %v", err)
 	}
 }
 

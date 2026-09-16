@@ -66,14 +66,8 @@ func (c Config) Warnings() []string {
 				"so nothing authenticates the console; pin a certificate "+
 				"(notifymatrix will show you its fingerprint) or turn verification back on")
 		}
-		for _, src := range con.Sources {
-			if strings.EqualFold(strings.TrimSpace(src), "network") {
-				w = append(w, where+": lists source \"network\", which this build does "+
-					"not implement yet -- nothing on this console's Network application "+
-					"will be reported")
-			}
-		}
 	}
+	w = append(w, c.exposureWarnings()...)
 	return w
 }
 
@@ -92,6 +86,7 @@ func (c Config) Validate() error {
 	}
 
 	p = append(p, c.validateConsoles()...)
+	p = append(p, c.validateHooks()...)
 	p = append(p, c.validateChannels()...)
 	p = append(p, c.validateWeb()...)
 
@@ -141,11 +136,7 @@ func (c Config) validateConsoles() Problems {
 		}
 		for _, s := range con.Sources {
 			switch strings.ToLower(strings.TrimSpace(s)) {
-			case "protect", "access":
-			case "network":
-				// Usable, and reported by Warnings rather than refused here:
-				// taking away a console's working Protect and Access coverage
-				// because one entry is unimplemented helps nobody.
+			case "protect", "access", "network":
 			case "":
 			default:
 				p = append(p, fmt.Sprintf("%s: unknown source %q (want protect or access)", where, s))
@@ -198,6 +189,17 @@ func (c Config) validateWeb() Problems {
 	var p Problems
 	if _, _, err := net.SplitHostPort(c.Web.Listen); err != nil {
 		p = append(p, fmt.Sprintf("web.listen %q is not host:port", c.Web.Listen))
+	}
+	if a := strings.TrimSpace(c.Web.AckListen); a != "" {
+		// "auto" and "host:auto" are legal: the port is chosen at first start
+		// and written back, so the value in the file is only briefly not an
+		// address.
+		if _, wantsRandom := WantsRandomAckPort(a); !wantsRandom {
+			if _, _, err := net.SplitHostPort(a); err != nil {
+				p = append(p, fmt.Sprintf("web.ack_listen %q is not host:port "+
+					"(or %q, to pick a port once and keep it)", a, AckListenAuto))
+			}
+		}
 	}
 
 	if c.Web.AckBaseURL == "" {

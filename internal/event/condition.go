@@ -101,6 +101,26 @@ const (
 	// Kind and Detail instead, where it is readable without being load-bearing.
 	ConditionAccessCritical = "access-critical"
 
+	// Network. Its Integration API carries no events of any kind -- the
+	// OpenAPI spec contains zero occurrences of "event", "alarm", "webhook" or
+	// "subscribe" -- so everything here arrives either by polling device state
+	// or through an Alarm Manager webhook the operator configured by hand.
+	ConditionWANDown    = "wan-down"
+	ConditionThreat     = "threat-detected"
+	ConditionPoEFault   = "poe-fault"
+	ConditionClientLost = "client-lost"
+
+	// ConditionInboundAlarm is an alarm that arrived on a webhook the operator
+	// did not give a specific meaning to.
+	//
+	// Deliberately generic rather than parsed out of the body. Alarm Manager's
+	// payload is undocumented and has spelled its message field four different
+	// ways across firmware, so a condition derived from it would be a guess
+	// baked into a stored dedup key. The operator attaches meaning by pointing
+	// each Alarm Manager rule at its own hook URL; this is what a hook means
+	// until they do.
+	ConditionInboundAlarm = "inbound-alarm"
+
 	// ConditionStreamMute is a source reporting on ITSELF: a stream that
 	// connected and whose traffic has never been understood. See
 	// DESIGN-RULES.md §2 — a live-but-mute stream is a fault, not a success,

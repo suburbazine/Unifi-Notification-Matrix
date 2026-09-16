@@ -1,0 +1,146 @@
+package config
+
+import (
+	"net"
+	"net/url"
+	"strings"
+)
+
+// internalSuffixes are hostname endings that are never on the public internet.
+//
+// Used only to keep a warning from firing on an obviously-internal name. A
+// name that is not on this list is not necessarily public -- it is merely not
+// provably private, which for a warning is the right side to err on.
+var internalSuffixes = []string{
+	".local", ".lan", ".internal", ".home", ".home.arpa", ".localdomain",
+	".intranet", ".corp", ".localhost",
+}
+
+// LooksInternetFacing reports whether a URL is plausibly reachable from the
+// open internet.
+//
+// Deliberately imprecise, and only ever used to raise a WARNING. There is no
+// way to know from a string whether an address is forwarded, and guessing
+// wrong in the cautious direction costs a line of text -- guessing wrong in
+// the other direction means a status page naming somebody's cameras is
+// published and nothing said so.
+func LooksInternetFacing(rawurl string) bool {
+	rawurl = strings.TrimSpace(rawurl)
+	if rawurl == "" {
+		return false
+	}
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !isPrivateIP(ip)
+	}
+
+	lower := strings.ToLower(host)
+	if lower == "localhost" || !strings.Contains(lower, ".") {
+		// A bare name is resolved by the local network's own DNS, so it is not
+		// a public address even when it is reachable from elsewhere.
+		return false
+	}
+	for _, suffix := range internalSuffixes {
+		if strings.HasSuffix(lower, suffix) {
+			return false
+		}
+	}
+	return true
+}
+
+// isPrivateIP covers the ranges that cannot be routed from the internet, plus
+// the one that usually is not: RFC 6598, which is both ISP CGNAT space and
+// what Tailscale hands out. A Tailscale address is the GOOD answer to reaching
+// an acknowledgement link from off-site, so it must not be warned about.
+func isPrivateIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsPrivate() {
+		return true
+	}
+	_, cgnat, err := net.ParseCIDR("100.64.0.0/10")
+	if err != nil {
+		return false
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return cgnat.Contains(v4)
+	}
+	return false
+}
+
+// listensOnEveryInterface reports whether an address accepts connections from
+// anywhere rather than only from this machine.
+func listensOnEveryInterface(addr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		return false
+	}
+	host = strings.Trim(host, "[]")
+	return host == "" || host == "0.0.0.0" || host == "::"
+}
+
+// WantsRandom reports whether an address is still asking for a port to be
+// chosen. Until it is, there is nothing to say about which interface it binds.
+func WantsRandom(addr string) bool {
+	_, ok := WantsRandomAckPort(addr)
+	return ok
+}
+
+// exposureWarnings reports configurations that publish more than the operator
+// probably meant to.
+//
+// Warnings rather than refusals, throughout. Somebody deliberately exposing
+// this has a reason, and refusing to start would leave them with an alarm
+// system that does not run. Saying it every time they start is the right
+// amount of pressure.
+func (c Config) exposureWarnings() []string {
+	var w []string
+
+	public := LooksInternetFacing(c.Web.AckBaseURL)
+	scoped := strings.TrimSpace(c.Web.AckListen) != ""
+
+	// The main listener being bound to every interface is what makes a forward
+	// to it possible at all. Somebody running a reverse proxy in front has
+	// web.listen on loopback, is already scoping by path, and must not be
+	// nagged every start about a risk they have already dealt with.
+	forwardable := listensOnEveryInterface(c.Web.Listen)
+
+	if public && !scoped && forwardable {
+		// The whole point of AckListen. A forward aimed at the main listener
+		// publishes the status page and the settings sign-in along with the
+		// acknowledgement routes, because a NAT rule cannot scope by path.
+		w = append(w, "web.ack_base_url looks like a public address but "+
+			"web.ack_listen is not set -- if you have forwarded a port to the "+
+			"main listener, the status page (which names your cameras, doors "+
+			"and open alarms) and the settings sign-in are on the internet "+
+			"too. Set web.ack_listen to a second port and forward THAT; see "+
+			"docs/SETUP.md")
+	}
+	if public && strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Web.AckBaseURL)), "http://") {
+		// The acknowledgement token travels in the path. Over plain HTTP on
+		// the open internet, anyone between the phone and here can read it and
+		// silence the alarm.
+		w = append(w, "web.ack_base_url is a public address over plain http -- "+
+			"the acknowledgement token is in the URL, so anyone on the path can "+
+			"read it and silence an alarm. Put TLS in front of it, or reach it "+
+			"over a VPN instead")
+	}
+	if scoped && strings.EqualFold(strings.TrimSpace(c.Web.AckListen), strings.TrimSpace(c.Web.Listen)) {
+		w = append(w, "web.ack_listen is the same address as web.listen, so it "+
+			"scopes nothing -- give it a different port")
+	}
+	// Not conditioned on the URL: a loopback-bound second listener cannot
+	// receive a forward whatever the acknowledgement address says, and if that
+	// address IS public the link points somewhere nothing can answer.
+	if scoped && !WantsRandom(c.Web.AckListen) && !listensOnEveryInterface(c.Web.AckListen) {
+		w = append(w, "web.ack_listen is set but only accepts connections from "+
+			"this machine, so a forwarded port will not reach it -- use "+
+			"0.0.0.0 rather than 127.0.0.1")
+	}
+	return w
+}

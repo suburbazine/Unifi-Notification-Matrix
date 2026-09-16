@@ -36,11 +36,13 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/inbound"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ingest"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/rule"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/service"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/store"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/web"
 )
@@ -107,6 +109,7 @@ func main() {
 	fs := flag.NewFlagSet("notifymatrix", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "where config, the incident store and the lock live")
 	links := fs.Bool("links", false, "print acknowledgement links (they are credentials)")
+	all := fs.Bool("all", false, "with `setup`, show every step including the finished ones")
 	user := fs.String("user", "", "account the Linux service runs as (default notifymatrix)")
 	fs.Usage = usage
 	if err := fs.Parse(flagArgs); err != nil {
@@ -132,10 +135,10 @@ func main() {
 		return
 	}
 
-	os.Exit(dispatch(cmd, dir, *user, *links))
+	os.Exit(dispatch(cmd, dir, *user, *links, *all))
 }
 
-func dispatch(cmd, dataDir, user string, showLinks bool) int {
+func dispatch(cmd, dataDir, user string, showLinks, showAll bool) int {
 	switch cmd {
 	case "version":
 		fmt.Printf("notifymatrix %s (%s/%s, %s)\n", version, runtime.GOOS, runtime.GOARCH, runtime.Version())
@@ -149,6 +152,9 @@ func dispatch(cmd, dataDir, user string, showLinks bool) int {
 			return 1
 		}
 		return 0
+
+	case "setup":
+		return setupCmd(dataDir, showAll)
 
 	case "selfcheck":
 		return selfcheck(dataDir)
@@ -182,6 +188,7 @@ func usage() {
   notifymatrix start|stop   control the installed service
   notifymatrix status       report service state
   notifymatrix incidents    list open incidents (--links for ack URLs)
+  notifymatrix setup        what is left to do, step by step (--all for everything)
   notifymatrix selfcheck    report what this machine can do
   notifymatrix probe        ask a console what it exposes (local networks only)
   notifymatrix version
@@ -387,6 +394,22 @@ func runDaemon(ctx context.Context, dataDir string) error {
 			config.Path(dataDir))
 	}
 
+	// The inbound receiver. Alarm Manager rules exist only in the UniFi UI, so
+	// the console pushes to us and there is nothing to poll -- which also means
+	// there is nothing to verify until an alarm actually arrives. The receiver
+	// records that, and every setup surface reads it.
+	hooks := config.BuildHooks(cfg)
+	receiver := inbound.New(hooks, inbound.Options{
+		Emit: func(ev event.Event) {
+			if _, err := engine.Handle(context.Background(), ev); err != nil {
+				fmt.Fprintln(os.Stderr, "inbound:", err)
+			}
+		},
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, format+"\n", args...)
+		},
+	})
+
 	supervisor, err := ingest.New(sources, ingest.Deps{
 		Handle: func(ctx context.Context, ev event.Event) error {
 			_, err := engine.Handle(ctx, ev)
@@ -444,6 +467,11 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		// than the UI needs, and wrapping the UI's middleware around it would
 		// loosen it.
 		mux.Handle("/ack/", ackHandler)
+
+		// The webhook endpoint. Mounted beside the acknowledgement routes and
+		// outside the UI's middleware, because a console posting an alarm is
+		// not a browser and must not be asked for a session.
+		mux.Handle(inbound.PathPrefix, receiver)
 
 		// The operator interface. Status is public so a wall display can show
 		// it; every change needs the password.
@@ -539,6 +567,38 @@ func runDaemon(ctx context.Context, dataDir string) error {
 				cfgMu.Unlock()
 				return nil
 			},
+			Checklist: func() setup.Input {
+				cfgMu.RLock()
+				c := current
+				cfgMu.RUnlock()
+
+				in := fromConfig(setup.Input{
+					DataDir: dataDir, ConfigPath: config.Path(dataDir),
+					Listen: "127.0.0.1:8322",
+				}, c)
+				if st, err := service.New().Status(); err == nil {
+					in.ServiceInstalled = st.State != service.StateNotInstalled
+					in.ServiceRunning = st.State == service.StateRunning
+					in.RecoversFromCrash = st.RecoversFromCrash
+				}
+				// The half only this process knows: whether a webhook has ever
+				// fired, and whether a source is actually running.
+				for _, rec := range receiver.Receipts() {
+					for i := range in.Hooks {
+						if in.Hooks[i].Name == rec.Name {
+							in.Hooks[i].Count = rec.Count
+							in.Hooks[i].LastAt = rec.LastAt
+						}
+					}
+				}
+				for _, st := range supervisor.Statuses() {
+					in.SourcesLive = append(in.SourcesLive, setup.SourceState{
+						Name: st.Name, Silent: st.Silent, Fatal: st.Fatal,
+						Events: st.Events,
+					})
+				}
+				return in
+			},
 			Version: version,
 		})
 		if err != nil {
@@ -595,6 +655,67 @@ It works once, and a new one is printed each time this starts.
 			defer cancel()
 			_ = srv.Shutdown(shutdown)
 		}()
+		// The ack-only listener, for reaching an alarm from off-site.
+		//
+		// A NAT port forward CANNOT SCOPE BY PATH. A forward aimed at the main
+		// listener publishes the status page -- which names cameras, doors and
+		// open alarms -- and the settings sign-in, to the whole internet. This
+		// gives the forward something safe to point at: a port on which /ack/
+		// is the only thing that exists and everything else is a 404.
+		if want := strings.TrimSpace(cfg.Web.AckListen); want != "" {
+			// Bound BEFORE being written down. Pinning a port this daemon
+			// cannot actually bind is worse than not pinning at all: the
+			// firewall rule and every acknowledgement link already sent would
+			// point at it forever.
+			resolved, ackLn, err := config.ResolveAckListen(want)
+			if err != nil {
+				return fmt.Errorf("cannot listen on %s for acknowledgements "+
+					"(if this port was pinned earlier, something else has taken "+
+					"it -- free it, or set web.ack_listen back to \"auto\" to "+
+					"choose another): %w", want, err)
+			}
+
+			if resolved != want {
+				// Chosen at random and now KEPT. A port that changed on every
+				// start would break the forward and every link already sent.
+				cfgMu.Lock()
+				next := *current
+				next.Web.AckListen = resolved
+				cfgMu.Unlock()
+				if err := config.Save(dataDir, &next); err != nil {
+					_ = ackLn.Close()
+					return fmt.Errorf("chose port %s for acknowledgements but could "+
+						"not write it to the configuration, so it would change on "+
+						"the next start: %w", resolved, err)
+				}
+				cfgMu.Lock()
+				current = &next
+				cfgMu.Unlock()
+				fmt.Println("note:", config.AckPortPinnedMessage(resolved, config.Path(dataDir)))
+			}
+
+			ackMux := http.NewServeMux()
+			ackMux.Handle("/ack/", ackHandler)
+			ackSrv := &http.Server{
+				Handler:           ackMux,
+				ReadHeaderTimeout: 10 * time.Second,
+				ReadTimeout:       30 * time.Second,
+				WriteTimeout:      30 * time.Second,
+				IdleTimeout:       60 * time.Second,
+			}
+			go func() {
+				if err := ackSrv.Serve(ackLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					fmt.Fprintf(os.Stderr, "the acknowledgement listener stopped: %v\n", err)
+				}
+			}()
+			defer func() {
+				shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = ackSrv.Shutdown(shutdown)
+			}()
+			fmt.Printf("acknowledgements only on http://%s/ack/  (this is the port to forward)\n", resolved)
+		}
+
 		fmt.Printf("interface on http://%s/  (acknowledgements at /ack/)\n", cfg.Web.Listen)
 		if cfg.Web.AckBaseURL == "" {
 			fmt.Fprintln(os.Stderr, "note: web.ack_base_url is unset, so alerts will "+

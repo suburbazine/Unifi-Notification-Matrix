@@ -45,6 +45,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
 )
 
 //go:embed assets
@@ -79,6 +80,14 @@ type Deps struct {
 
 	// SetPasswordHash persists a new hash.
 	SetPasswordHash func(string) error
+
+	// Checklist reports what is still needed to make this installation work.
+	//
+	// Optional: a build that does not supply it simply has no setup panel. The
+	// daemon assembles it, because most of the answer -- whether a webhook has
+	// ever fired, whether a source is running -- lives in the running process
+	// rather than in the configuration file.
+	Checklist func() setup.Input
 
 	// Version is shown in the header. Optional.
 	Version string
@@ -231,6 +240,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /static/{file}", s.handleAsset)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/incidents", s.handleIncidents)
+	mux.HandleFunc("GET /api/checklist", s.handleChecklist)
 
 	// Authentication itself.
 	mux.HandleFunc("POST /api/session", s.handleSignIn)

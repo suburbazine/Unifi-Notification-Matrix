@@ -566,10 +566,70 @@ function refreshAudit() {
   });
 }
 
+// ---------- setup ----------
+
+// The checklist. It is a tab of its own rather than a line on the health page
+// because the two answer different questions: health says what is WRONG, and
+// this says what has never been DONE. A product that has simply not been
+// finished looks perfectly healthy.
+function refreshSetup() {
+  var body = byId("setup-body");
+  api("GET", "/api/checklist").then(function (r) {
+    clear(body);
+    if (!r.ok || !r.data || !r.data.available) {
+      body.appendChild(el("p", "muted", "No checklist available from this build."));
+      return;
+    }
+    var d = r.data;
+
+    var banner = el("div", "card");
+    if (d.ready) {
+      banner.appendChild(el("p", "", "This installation can raise and deliver an alarm."));
+    } else {
+      banner.appendChild(badge("not ready", "crit"));
+      banner.appendChild(el("p", "",
+        "Nothing can be delivered yet. The steps marked TODO below are what is missing."));
+    }
+    if (!d.authenticated) {
+      banner.appendChild(el("p", "muted",
+        "Sign in to see the webhook URLs. They are credentials, so they are not " +
+        "shown to a signed-out viewer."));
+    }
+    body.appendChild(banner);
+
+    (d.steps || []).forEach(function (s, i) {
+      var card = el("div", "card");
+      var head = el("div", "row");
+      head.appendChild(badge(s.status, statusClass(s.status)));
+      head.appendChild(el("strong", "", (i + 1) + ". " + s.title));
+      card.appendChild(head);
+
+      if (s.state) card.appendChild(el("p", "muted", "Now: " + s.state));
+      if (s.status !== "done") {
+        if (s.why) card.appendChild(el("p", "", s.why));
+        if (s.how && s.how.length) {
+          var ol = el("ol", "how");
+          s.how.forEach(function (h) { ol.appendChild(el("li", "", h)); });
+          card.appendChild(ol);
+        }
+      }
+      body.appendChild(card);
+    });
+  });
+}
+
+function statusClass(status) {
+  if (status === "done") return "ok";
+  if (status === "todo") return "crit";
+  if (status === "unverified") return "warn";
+  return "";
+}
+
 // ---------- shell ----------
 
 function refreshTab() {
   if (state.tab === "incidents") refreshIncidents();
+  else if (state.tab === "setup") refreshSetup();
   else if (state.tab === "settings") refreshSettings();
   else if (state.tab === "audit") refreshAudit();
 }
@@ -581,7 +641,7 @@ function selectTab(name) {
   for (var i = 0; i < tabs.length; i++) {
     tabs[i].setAttribute("aria-selected", tabs[i].getAttribute("data-tab") === name ? "true" : "false");
   }
-  ["incidents", "health", "settings", "audit"].forEach(function (t) {
+  ["incidents", "setup", "health", "settings", "audit"].forEach(function (t) {
     byId("tab-" + t).hidden = (t !== name);
   });
   refreshTab();

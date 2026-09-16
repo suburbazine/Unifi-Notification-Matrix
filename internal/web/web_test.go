@@ -20,6 +20,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
 )
 
 // canary is planted in every secret in the test config. No response body may
@@ -253,6 +254,20 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 		},
 		PasswordHash:    func() string { h.mu.Lock(); defer h.mu.Unlock(); return h.hash },
 		SetPasswordHash: h.setHash,
+		Checklist: func() setup.Input {
+			return setup.Input{
+				ConfigPath: "/tmp/config.yaml", Listen: "127.0.0.1:8322",
+				Consoles: 1, HasConsoleKey: true,
+				SourceNames:     []string{"protect"},
+				ChannelsEnabled: []string{"ntfy"},
+				Hooks: []setup.HookState{{
+					Name: "wan", Product: "network",
+					// The URL carries the token. It must never reach a
+					// signed-out caller.
+					URL: "http://192.168.1.50:8322/hook/" + canary,
+				}},
+			}
+		},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

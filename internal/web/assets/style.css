@@ -110,3 +110,13 @@ textarea{min-height:7rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,
 .signin{max-width:24rem}
 .msg{font-size:13px;margin-top:8px}
 .empty{color:var(--muted);font-size:13px;padding:2px 0 10px}
+
+/* The setup checklist. Instructions are read once, carefully, by somebody who
+   has not done this before -- so they get more line height and more room than
+   the operational surfaces beside them, which are scanned rather than read. */
+ol.how{
+  margin:8px 0 0;padding-left:20px;color:var(--muted);
+  font-size:13px;line-height:1.55;
+}
+ol.how li{margin:0 0 5px}
+ol.how li:last-child{margin-bottom:0}

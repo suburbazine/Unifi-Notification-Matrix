@@ -7,17 +7,13 @@ import (
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/source/access"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/source/network"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/source/protect"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/unifi"
 )
 
 // KnownSources are the source names a console entry may list.
-//
-// `network` is absent because there is no Network source yet. Listing it as
-// known and then not running it would be worse than refusing it: the operator
-// would see it accepted in the config and reasonably conclude their WAN was
-// being watched.
-var KnownSources = []string{protect.SourceName, access.SourceName}
+var KnownSources = []string{protect.SourceName, access.SourceName, network.SourceName}
 
 // BuildSources constructs a source for every enabled entry on every console.
 //
@@ -63,11 +59,15 @@ func BuildSources(c *Config) ([]event.Source, []error) {
 				}
 				out = append(out, s)
 
-			case "network":
-				// Reported once, by Config.Warnings, which runs at startup and
-				// shows in the interface. Reporting it again here would print
-				// the same fact twice in the same second and teach the reader
-				// that warnings repeat themselves.
+			case network.SourceName:
+				s, err := network.New(network.Config{
+					Host: con.Host, APIKey: key, TLS: tls,
+				})
+				if err != nil {
+					problems = append(problems, fmt.Errorf("console %q: network: %w", con.Name, err))
+					continue
+				}
+				out = append(out, s)
 
 			case "":
 				// A blank entry in the list. Ignored rather than reported:

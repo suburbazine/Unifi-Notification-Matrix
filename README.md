@@ -1,13 +1,12 @@
 # UniFi Notification Matrix
 
-> **Status: watching UniFi Protect and Access; Network is not written.**
+> **Status: all three products ingest.** Protect, Access and Network.
 > Built and tested: the incident lifecycle, the durable store, the escalation
 > scheduler, the rule engine, acknowledgement, the secret store, configuration,
-> the **Protect and Access sources**, the ingest supervisor and its deadman,
-> the ntfy and email channels, the audit record, the local web UI, the
-> capability probe, and Windows-service / systemd integration.
-> **The Network source is not written**, so a console's Network application is
-> not watched.
+> the three sources, the inbound webhook receiver, the ingest supervisor and
+> its deadman, the ntfy and email channels, the audit record, the local web UI,
+> the capability probe, the setup checklist, and Windows-service / systemd
+> integration.
 
 UniFi tells you a thing happened. Once.
 
@@ -19,14 +18,19 @@ camera that went dark an hour before a break-in, it is the whole failure.
 **This turns a one-shot UniFi event into a tracked incident that keeps
 escalating until a human closes it.**
 
-- Ingests from UniFi **Protect** and **Access**. Network is designed and
-  researched but not yet written.
+- Ingests from UniFi **Protect**, **Access** and **Network** — the API where
+  one exists, and an inbound webhook for the alarms that exist nowhere else.
+- **Tells you what is left to configure**, checked against your real setup:
+  `notifymatrix setup`. It can tell "configured" from "actually working".
 - **Derives the two door alarms UniFi Access does not report at all**: a door
   forced open, and a door held open past a threshold. Neither exists as a
   readable value on any Access surface.
 - Escalates on a policy ladder that widens over time: push, then email, then
   (later) an automated phone call.
-- **Acknowledgement works from a phone with one tap**, no login and no VPN.
+- **Acknowledgement works from a phone with one tap**, no login required.
+  For somebody off-site, a second listener carrying *only* the acknowledgement
+  route can be pinned to a random high port — so a firewall forward has
+  something safe to point at instead of publishing your status page.
 - **Notices its own sources dying.** Every source declares how long its silence
   may last, and silence past that becomes an incident — because a dead source
   and a quiet site look identical from outside.
@@ -43,10 +47,36 @@ escalating until a human closes it.**
 - API keys are encrypted at rest — **DPAPI** on Windows, and a machine-bound
   equivalent on Linux.
 
+**New here? [docs/SETUP.md](docs/SETUP.md) walks through a first installation
+from nothing.**
+
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design,
 [docs/SOURCES.md](docs/SOURCES.md) for what each UniFi application actually
 exposes, and [docs/DESIGN-RULES.md](docs/DESIGN-RULES.md) for the rules the
 code follows and why.
+
+---
+
+## The alarms that need a rule made by hand
+
+Some UniFi alarms are **not readable by any API**: WAN outages, threat
+detections and PoE faults in Network; disk failure, storage and power loss in
+Protect. They exist only as **Alarm Manager** rules that push to a URL — and no
+API can create those rules, so nothing can provision them for you.
+
+This product is designed *for* that rather than around it. You add a hook, it
+generates a URL, you paste that URL into the rule, and then:
+
+```
+ check 5. Create the UniFi Alarm Manager rules
+        now: configured, but nothing has ever arrived at wan-offline
+             -- the rule may not exist yet
+```
+
+A hook that looks right is not evidence that anybody made the rule, so the
+checklist reports it as **unverified** until an alarm actually arrives. Press
+Test in UniFi and it changes to done.
+
 
 ---
 

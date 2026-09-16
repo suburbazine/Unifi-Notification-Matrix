@@ -90,8 +90,9 @@ nothing about channels, and a channel knows nothing about UniFi.
     source/
   ✓   protect/          Protect ingest: two WebSockets + reconciliation sweep
   ✓   access/           Access ingest: socket + system-log tail + door polling
-  ·   network/          Network ingest: poll + Alarm Manager webhook
-  ·   inbound/          generic webhook receiver (Alarm Manager, other apps)
+  ✓   network/          Network ingest: device polling (the API has no events)
+  ✓ inbound/            webhook receiver: the alarms no API exposes
+  ✓ setup/              what is left to configure, rendered everywhere
   ✓ ingest/             runs the sources; the deadman that notices a dead one
   ✓ event/              Event, Entity, the shared condition vocabulary
   ✓ rule/               matching, severity mapping, event → incident
@@ -487,14 +488,60 @@ Two honest limits:
 
 The Local Integration API (`/proxy/network/integration/v1/`, Network 9.0+) is
 broad — sites, devices, clients, firewall CRUD — and contains **zero**
-occurrences of "event", "alarm", "webhook" or "subscribe". Network's events
-come from **its own Alarm Manager** (Network 9.3+, separate from Protect's),
-and there is no other path.
+occurrences of "event", "alarm", "webhook" or "subscribe". It will tell you
+what every device *is*; it will never tell you that something *happened*.
 
-Its payload is undocumented, field-inconsistent across firmware (the message
-field has been `message`, `msg`, `text` and `description`), and carries **no
-controller timestamp** — unlike Protect's, which does. Stamp on arrival and say
-so in the incident.
+So the Network source is two halves that do not resemble each other:
+
+- **Polling**, for device reachability. With no events, the only way to tell a
+  device that WENT down from one that is merely still down is to have looked
+  before — so the source remembers, and a device must read down for three
+  minutes before it is an incident, because a poll landing during a reboot must
+  not page anybody.
+- **An inbound webhook** for everything else. WAN outages, threats, PoE faults
+  and client events exist only in Network's own Alarm Manager (9.3+).
+
+It is also the only source with **no prior in-house client to copy shapes
+from**. Every field name and every state value comes from documentation rather
+than from a console anybody here has queried, which changes two things: the
+decoding is tolerant of both the documented envelope and a bare array, and the
+state vocabulary is treated as **unestablished**.
+
+That last one is an uncomfortable trade, taken deliberately. A state absent
+from the recognised lists is never alarmed on — so a future firmware value
+meaning "down" would pass unreported. The alternative, treating every
+unrecognised state as an outage, pages the operator every time Ubiquiti adds a
+value, and an alarm product that cries wolf gets switched off, which costs
+more. So the unknown is made **visible** instead: counted by name in Health and
+surfaced by `notifymatrix probe`, which is how the list gets corrected.
+
+### The alarms that no API exposes, and designing for that
+
+Some alarm classes exist **only** as Alarm Manager rules: Network's WAN,
+threat and PoE triggers, and Protect's NVR disk failure, storage and power
+loss, which are absent from the public API entirely.
+
+**Alarm Manager rules are created in the UniFi UI and in no API.** This product
+cannot provision its own push path. A person has to make the rule by hand.
+
+Three consequences, and they shape `internal/inbound` completely:
+
+- **The URL is the discriminator, not the payload.** The payload is
+  undocumented and has spelled its message field `message`, `msg`, `text` and
+  `description` across firmware, with no controller timestamp at all. So each
+  Alarm Manager rule points at its OWN hook URL, and the meaning is attached to
+  the token rather than parsed out of the body — because the operator chooses
+  the URL when they create the rule, which makes it the one fact about an
+  inbound alarm that is knowable.
+- **GET is accepted, unlike the acknowledgement endpoint.** There, GET must not
+  act, because a mail scanner prefetching a link in an alert would acknowledge
+  an alarm nobody saw. Here, Alarm Manager offers GET or POST and nothing
+  prefetches a hook URL — it is never sent to anybody. What is true of both is
+  that the URL is a credential.
+- **Receipt is tracked, because configuration is not evidence.** Nothing can
+  verify a rule exists except an alarm arriving through it, so the receiver
+  counts arrivals per hook and every setup surface reports a hook that has
+  never fired as **unverified** rather than done.
 
 ### Running them: the supervisor, and the deadman
 
@@ -537,6 +584,39 @@ unimplemented `network` source. Both are now **warnings**: said at startup and
 shown in the interface, but not a reason to leave a site unmonitored. An
 unpinned daemon that is watching beats a pinned one that is not running, and an
 operator locked out at setup never reaches the step that fixes it.
+
+### Telling somebody what is left to do
+
+Every surface in this product reported what was WRONG. None of them reported
+what had never been DONE — and those are different questions. A configuration
+that validates, a service that is running and a status page that is entirely
+green can all coexist with a product that will never raise an alarm, because
+nobody added a console, or enabled a channel, or made the Alarm Manager rule
+that is the only way some events exist at all.
+
+`internal/setup` is one assessment rendered in several places — the terminal
+(`notifymatrix setup`), the first-run screen, and a tab in the interface — so
+they cannot drift apart and disagree about what is left.
+
+Four things make it useful rather than decorative:
+
+- **Every step says what goes wrong if it is skipped.** "Do this" without "or
+  else" is an instruction people postpone.
+- **Every step says what is true NOW**, read from the real configuration and,
+  where it matters, from the running process. Whether a webhook has ever fired
+  is not knowable from a file.
+- **Ready is not the same as complete.** A console, a source and a channel is a
+  working product; the rest makes it better. Telling somebody they are not
+  ready when they are is how a checklist gets ignored.
+- **The configuration file carries its own instructions**, rewritten on every
+  save — including the saves the interface makes, so the guidance is not
+  removed from the person who has just proved they edit this file.
+
+One security note that a test found rather than review: a hook URL carries its
+token, and the checklist is public so a wall display can show that nothing is
+set up. Gating the URL field is not enough if the instruction prose next to it
+also contains the URL. It lives on exactly one field now, and a test asserts it
+appears nowhere else.
 
 ### One operational consequence of pinning
 
@@ -662,6 +742,58 @@ ngrok is for development and is labelled as such.
 **mTLS is not offered.** It is impractical against every cloud sender in scope
 and would be security theatre on the LAN path, which already has a bearer token
 and no route from outside.
+
+### Scoping a port forward — *built*
+
+The tunnel answer above is right and people will still forward a port, because
+their router has a form for it and a tunnel is another thing to run. So the
+product has to make the version they will actually do survivable.
+
+**A NAT forward cannot restrict by path.** Forwarding the interface's port
+publishes everything on it — including the status page, which §8b makes
+readable without a password so a wall display works. That trade was taken on
+the reasoning that anyone on that LAN can query the console directly anyway.
+**It does not survive contact with the open internet**, and nothing in the
+configuration made the difference visible.
+
+So `web.ack_listen` starts a **second listener carrying only `/ack/`**.
+Everything else on that port is a 404 — the status page, the settings API, and
+the webhook receiver, which has its own token and its own reasons to stay put.
+A forward now has something safe to aim at.
+
+Set it to `auto` and the port is **chosen at random from the IANA dynamic range
+(49152–65535) on first start and written back to the configuration**, where it
+stays. Three details decide whether that is useful or harmful:
+
+- **It is bound before it is written down.** The listener that proved the port
+  is the one the daemon keeps. Closing it to re-open later leaves a window for
+  something else to take the port — and a pinned port this daemon cannot bind
+  is worse than no pin at all, because the firewall rule and every
+  acknowledgement link already sent point at it permanently.
+- **It never changes again.** A port that moved on each start would break the
+  forward and every link already delivered.
+- **It is not a security control, and the code says so.** A port scan finds an
+  open port whatever its number. What a random port buys is that the forwarded
+  port is not one of the handful scanners probe constantly, and that it will
+  not collide with something else. The HMAC token is what protects an
+  acknowledgement. `crypto/rand` rather than the clock, because a port derived
+  from install time is guessable, which would undo even that much.
+
+Three configurations are then **warned about at every start**, not refused:
+
+| | |
+|---|---|
+| Public ack URL, no `ack_listen`, main listener on `0.0.0.0` | a forward would publish the status page and the sign-in |
+| Public ack URL over plain `http` | the ack token is in the URL and readable in transit |
+| `ack_listen` on loopback, or equal to `listen` | it scopes nothing, or cannot receive a forward at all |
+
+The first is deliberately conditioned on the main listener being bound to every
+interface. Somebody running a reverse proxy has it on loopback, is already
+scoping by path, and must not be nagged about a risk they have dealt with.
+
+RFC 6598 space is treated as private throughout, because it is what Tailscale
+hands out — and a Tailscale address is the *good* answer here. Warning about it
+would push people off the safest option toward the one with a firewall rule.
 
 One open operator-experience question, recorded rather than guessed: whether
 the LAN-only Protect listener should *also* require the shared secret, for
