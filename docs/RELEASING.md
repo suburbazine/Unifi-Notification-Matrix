@@ -102,6 +102,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
 sha256sum notifymatrix-linux-amd64    # compare against SHA256SUMS
 ```
 
+`main.version` has to be the tag with its leading `v` stripped, exactly — it is
+baked into the binary, so `1.2.3` and `v1.2.3` produce different bytes.
+
 A mismatch is worth reporting. The usual innocent cause is a different Go patch
 release — `.go-version` records the one the release used, and it is kept on the
 **latest** patch of its line deliberately: CI runs `govulncheck`, and a Go

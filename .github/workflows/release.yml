@@ -62,9 +62,23 @@ jobs:
           go-version-file: .go-version
           cache: true
 
+      # `github.ref_name` alone is wrong for `workflow_dispatch`: the run's ref
+      # is the DEFAULT BRANCH, not the tag being built, so a dispatched release
+      # shipped binaries reporting `version main`. The checkout above already
+      # prefers `inputs.tag`; this has to agree with it, or the source and the
+      # version baked into it come from different places.
       - name: resolve version
         id: v
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        env:
+          REF: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version="${REF#v}"
+          case "$version" in
+            [0-9]*) ;;
+            *) echo "refusing to build: version '$version' is not a version number" >&2; exit 1;;
+          esac
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "building version ${version}"
 
       # Reproducibility is the point, not a bonus. For a source-available
       # security tool, source nobody can check against the published binary
