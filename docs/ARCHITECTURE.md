@@ -559,7 +559,96 @@ because it occupies the slot a working one would have.
 
 ---
 
-## 10. Distribution, signing, licence
+## 9a. Running as a service, and coming back by itself
+
+A watchdog that stops when somebody logs out is not a watchdog. The product
+must survive a logout, a crash and a reboot with no human involved, and it must
+be controllable without one either.
+
+### The GUI question is already answered, and that is why the web UI won
+
+**A GUI application cannot run as a Windows service.** Services run in Session
+0, isolated from the interactive desktop, so a native window cannot appear
+there. Every product that tries ends up with two processes — a headless
+enforcer and a separate viewer — and then has to stop them fighting each other.
+
+The choice in §5 of a **headless daemon plus a local web UI** removes that
+problem rather than solving it. The operator's interface is a browser page
+served *by* the service, so there is no Session 0 boundary to cross, no second
+process, and the same interface works from a phone on the LAN.
+
+### Supervision
+
+| | Windows | Linux |
+|---|---|---|
+| Survives logout | Service, inherently | systemd unit, inherently |
+| Starts at boot | `StartType: Automatic` | `WantedBy=multi-user.target`, enabled |
+| Restarts on crash | **SCM recovery actions** | `Restart=always`, `RestartSec=5` |
+| Restart storm guard | reset period | `StartLimitIntervalSec` / `StartLimitBurst` |
+
+**Recovery actions are the part that is usually missed.** Installing a service
+with `StartType: Automatic` covers reboot and logout but does **not** restart it
+after a crash — the SCM leaves a crashed service stopped unless failure actions
+are set explicitly. Prior in-house work installs the service correctly and never
+sets them, so a crash at 2am is silent until somebody notices. Set them at
+install time: restart on first, second and subsequent failures, with a reset
+period measured in hours rather than minutes.
+
+**A restart-storm guard must not be able to give up permanently.** systemd's
+default is to stop trying after a burst, which is the wrong polarity here: a
+daemon that has crash-looped five times still needs to be trying at 4am. Use a
+long `StartLimitIntervalSec` with `Restart=always` and accept a slow loop, never
+a terminal stop.
+
+### A crash is itself an incident
+
+On start, the daemon compares a clean-shutdown marker against what it finds. An
+unclean previous exit raises an internal incident through the ordinary
+escalation machinery.
+
+This matters more than it sounds. Without it, a crash loop is *invisible* — the
+service restarts, the web UI looks healthy, and the only evidence is a gap in
+the event history that nobody reads. The deadman in §9 catches a source going
+quiet; this catches the product itself going quiet, which is the failure an
+operator has no other way to see.
+
+### Exactly one instance, enforced
+
+The classic way this breaks is a service **and** a logon task both running:
+two processes ingesting the same events and sending duplicate alerts, on a
+product whose credibility depends on not crying wolf. Prior work removes the
+logon task when installing the service, which is right but relies on knowing
+every way the app could have been started.
+
+**A single-instance lock is held by whichever process owns the data directory**
+— a lock file on Linux, a named mutex on Windows. A second instance refuses to
+start and says which process holds it. The lock is on the *data directory*, not
+the executable, so two installations with separate configs remain legal.
+
+### Control surface
+
+- **The web UI** shows service state and offers stop and restart. It cannot
+  *start* the service, for the obvious reason that it is served by it.
+- **CLI verbs** — `install`, `uninstall`, `start`, `stop`, `status` — always
+  work, and self-elevate through UAC on Windows rather than failing with an
+  access-denied message the operator has to interpret.
+- **Double-clicking the executable** when it is not running as a service enters
+  a control mode: it reports service state, offers to install and start it, and
+  opens the browser on the UI. An operator who has never used a command line
+  must be able to get from "downloaded a file" to "it is running and will keep
+  running" without being told to open a terminal.
+
+### One decision this forces
+
+**Which account the Linux service runs as** — ARCHITECTURE.md §11 item 4 — stops
+being deferrable here, because the unit file has to say. Running as root makes
+secret tier 1 work directly; running as `User=notifymatrix` needs either a root
+helper for the write path or a fall to tier 2, with reads coming from
+`LoadCredentialEncrypted=`.
+
+Windows has no equivalent problem: DPAPI **machine** scope (§6) was chosen
+precisely so that the `LocalSystem` service and the operator's browser session
+share one config. That decision pays off here.
 
 - **`CGO_ENABLED=0`, always.** Load-bearing three times over: it produces static
   Linux binaries that run anywhere including Alpine and Docker, it makes builds
@@ -606,8 +695,10 @@ see §6, §7, §8, §8a and [SOURCES.md](SOURCES.md). What remains:
    action-availability table says Webhook is Network & Protect only; community
    reports describe an Access-side Delivery URL. A direct contradiction in the
    sources. Needs one look at a live console.
-4. **Does the Linux service run as root?** §6 — decides whether tier 1 needs a
-   root helper, and it costs a migration if deferred.
+4. **Does the Linux service run as root?** §6 — decides whether secret tier 1
+   needs a root helper. **No longer deferrable**: §9a means the systemd unit
+   file has to name an account, and changing it later costs a migration of
+   every stored secret.
 5. **Is power loss a Protect trigger, or only a Network one?** Ubiquiti
    documents Power (PoE issues, power loss) under *Network* triggers. If it is
    Network-only, that is a second console app to configure and a second webhook
