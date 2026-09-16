@@ -120,11 +120,17 @@ func ackHost(rawurl string) string {
 	return strings.TrimSpace(rawurl)
 }
 
+// ackListenNote deliberately avoids the phrase "ack_listen is not set".
+//
+// That exact wording belongs to the OTHER warning -- the one about forwarding
+// a port to the main listener and publishing the status page with it -- and
+// two warnings sharing a distinguishing phrase is how a test asserting on one
+// starts matching the other. It did.
 func ackListenNote(ackListen string) string {
 	if strings.TrimSpace(ackListen) == "" {
-		return ", and web.ack_listen is not set"
+		return ", and there is no separate acknowledgement listener"
 	}
-	return ", and web.ack_listen is bound to this machine only"
+	return ", and the acknowledgement listener is bound to this machine only"
 }
 
 func (c Config) exposureWarnings() []string {
