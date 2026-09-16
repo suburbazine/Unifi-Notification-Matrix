@@ -295,15 +295,33 @@ create it implicitly on the first run, but making it yourself is what lets you
 put a human in front of the signing key:
 
 ```bash
-gh api -X PUT repos/suburbazine/Unifi-Notification-Matrix/environments/release
+gh api -X PUT repos/suburbazine/Unifi-Notification-Matrix/environments/release \
+  -F wait_timer=0 \
+  -F prevent_self_review=false \
+  -F can_admins_bypass=false \
+  -f 'reviewers[][type]=User' -F 'reviewers[][id]=<YOUR NUMERIC USER ID>'
 ```
+
+`gh api users/<login> --jq .id` gives the numeric id; the API takes ids, not
+logins. See §3 for why `prevent_self_review` stays false and
+`can_admins_bypass` does not.
+
+> Required reviewers on an environment need a **public** repository on the
+> free plan (this one is), or GitHub Pro/Team/Enterprise for a private one.
+> Without it the `PUT` is accepted and the protection rule silently is not.
+> Read it back, below, rather than assuming.
 
 Check it before you tag anything:
 
 ```bash
 gh secret list && gh variable list
-gh api repos/suburbazine/Unifi-Notification-Matrix/environments --jq '.environments[].name'
+gh api repos/suburbazine/Unifi-Notification-Matrix/environments/release \
+  --jq '{admins_bypass: .can_admins_bypass,
+         rules: [.protection_rules[] | {(.type): [.reviewers[]?.reviewer.login]}]}'
 ```
+
+That last one must show a `required_reviewers` rule with a name in it. An
+empty `rules` list means the gate is not there, whatever the `PUT` returned.
 
 If `gh secret list` is empty, the workflow will fail at `azure/login` with an
 empty client id — which reads like a broken action rather than a missing
@@ -323,12 +341,35 @@ The workflow then:
 1. **verify** — `go vet` and `go test -count=2` on Linux *and* Windows. The
    secret store is a different implementation per OS, so both must run.
 2. **build** — `linux/amd64`, `linux/arm64`, `windows/amd64`, reproducibly.
-3. **sign-windows** — Authenticode via Azure, then asserts the signature is
-   `Valid` *and* timestamped before continuing.
+3. **sign-windows** — **pauses for your approval** (see below), then
+   Authenticode via Azure, then asserts the signature is `Valid` *and*
+   timestamped before continuing.
 4. **release** — checksums, SLSA provenance, keyless cosign bundles, optional
    GPG, and a **draft** release.
 
 The release is a draft on purpose: look at it before it is public.
+
+### The run will stop and wait for you
+
+`sign-windows` declares `environment: release`, and that environment has
+**required reviewers**. So the run gets as far as the three builds and then
+parks at status `waiting`, with the signing job un-started. GitHub emails you;
+the run page shows **Review deployments → Approve and deploy**.
+
+Nothing has touched the certificate at that point. This is the whole reason
+the gate exists: pushing a tag should not be sufficient, on its own, to sign
+something with a publicly-trusted code-signing certificate in the name of a
+real legal entity. The tag says *what* to build; the approval says *yes,
+really, sign it*.
+
+Two settings on that environment are load-bearing and easy to get wrong:
+
+- **`prevent_self_review` must stay off.** With one maintainer, turning it on
+  means nobody is left who can approve, and releases block forever.
+- **`can_admins_bypass` is off**, deliberately. Left at its default the rule
+  is advisory — an admin skips it. Since the admin and the reviewer are the
+  same person here, bypassing and approving cost the same click; only one of
+  them is a decision.
 
 Between signing and publishing, the workflow runs §1's `cosign verify-blob`
 command — identity constraint and all — against every artefact it just signed.

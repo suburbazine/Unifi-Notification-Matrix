@@ -124,9 +124,12 @@ jobs:
     # The federated credential's subject is pinned to this environment, NOT to a
     # tag: Entra ID federated credentials do not accept wildcards in the
     # subject, so a tag-based subject would need a new credential for every
-    # release. An environment gives one stable subject -- and, if you enable
-    # required reviewers on it, a human approval gate in front of the signing
-    # key. See docs/RELEASING.md.
+    # release. An environment gives one stable subject.
+    #
+    # It also carries REQUIRED REVIEWERS, so this job parks at `waiting` until
+    # a human approves it, and the run does not reach the certificate before
+    # then. Pushing a tag is deliberately not sufficient, on its own, to sign
+    # something as a real legal entity. See docs/RELEASING.md section 3.
     environment: release
     permissions:
       id-token: write # the OIDC token azure/login exchanges
