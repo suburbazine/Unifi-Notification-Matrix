@@ -38,7 +38,7 @@ func (s *Source) runSweeper(ctx context.Context, out event.Sink) {
 
 		if err != nil && ctx.Err() == nil {
 			attempt++
-			d := backoffDelay(attempt, s.cfg.MinBackoff, s.cfg.MaxBackoff, s.cfg.Rand)
+			d := s.backoff.Delay(attempt)
 			s.cfg.Logf("protect: reconciliation sweep failed: %v; retrying in %s", err, d.Round(time.Millisecond))
 			retry = time.After(d)
 			return

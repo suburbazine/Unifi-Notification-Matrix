@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/unifi"
 )
 
 // fakeConsole is a REAL gorilla/websocket server behind httptest.
@@ -269,6 +270,12 @@ func startSource(t *testing.T, c *fakeConsole, states StateReader, tune func(*Co
 		SweepEvery:    time.Hour,
 		SweepDebounce: -1, // no debounce: tests want the sweep to happen now
 		Logf:          t.Logf,
+
+		// A real pacer, at a test interval. Not nil: the production default is
+		// the shared per-console pacer at 220ms, and a test that quietly ran
+		// with no pacer would stop exercising the path every console request
+		// now takes.
+		Pace: unifi.NewPacer(time.Millisecond).Wait,
 	}
 	if tune != nil {
 		tune(&cfg)

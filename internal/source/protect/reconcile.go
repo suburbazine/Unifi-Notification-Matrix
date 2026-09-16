@@ -100,9 +100,10 @@ func (r *restReader) Devices(ctx context.Context) ([]DeviceState, error) {
 
 func (r *restReader) collection(ctx context.Context, path, kind string) ([]DeviceState, error) {
 	if r.pace != nil {
-		// One pacer per console, shared with every other caller. The sweep is
-		// bursty by nature -- three collection reads the instant a socket
-		// reconnects -- and a console reboot reconnects everything at once.
+		// One pacer per console, shared with every other caller -- including
+		// this source's own WebSocket dials. The sweep is bursty by nature
+		// (three collection reads the instant a socket reconnects) and a
+		// console reboot reconnects everything at once.
 		if err := r.pace(ctx); err != nil {
 			return nil, err
 		}

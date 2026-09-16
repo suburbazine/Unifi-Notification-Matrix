@@ -86,7 +86,7 @@ nothing about channels, and a channel knows nothing about UniFi.
 ```
 ✓ cmd/notifymatrix/     main; CLI verbs (version, selfcheck)
   internal/
-  · unifi/              shared per-console pacing, backoff, TLS + cert pinning
+  ✓ unifi/              shared per-console pacing, backoff, TLS + cert pinning
     source/
   ✓   protect/          Protect ingest: two WebSockets + reconciliation sweep
   ·   access/           Access ingest: notifications socket + system-log tail
@@ -446,6 +446,22 @@ Its payload is undocumented, field-inconsistent across firmware (the message
 field has been `message`, `msg`, `text` and `description`), and carries **no
 controller timestamp** — unlike Protect's, which does. Stamp on arrival and say
 so in the incident.
+
+### One operational consequence of pinning
+
+**A certificate pin mismatch stops the source**, and does not retry. That is
+DESIGN-RULES §1 applied literally — pinning refuses rather than warns, and only
+a pin mismatch is terminal — but it has a consequence worth stating before
+somebody meets it at 3am: a console whose certificate is legitimately renewed
+will stop being ingested until an operator re-pins it.
+
+That is the intended trade. Trust-on-first-use is an operator action, so
+silently accepting a new certificate would defeat the pin on exactly the
+connection an attacker would target. What makes it survivable is that the
+failure is **loud**: `Run` returns the error rather than looping, the supervisor
+sees a source that stopped, and the §9 deadman raises it as an incident through
+the ordinary escalation machinery. A pin mismatch must never be the quiet kind
+of failure.
 
 ### The shape this forces
 

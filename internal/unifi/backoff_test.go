@@ -1,8 +1,7 @@
-package protect
+package unifi
 
 import (
 	"net/http"
-	"net/url"
 	"testing"
 	"time"
 )
@@ -11,33 +10,30 @@ import (
 // limiter is exactly the behaviour backoff exists to prevent. Half jitter
 // cannot: the floor is always half the ladder value.
 func TestHalfJitterNeverCollapsesToZero(t *testing.T) {
-	const (
-		base = 1 * time.Second
-		max  = 32 * time.Second
-	)
+	b := Backoff{Base: time.Second, Max: 32 * time.Second, Rand: func() float64 { return 0 }}
 
-	// The pathological generator: a full-jitter implementation returns 0 here
-	// and reconnects with no delay at all.
+	// The pathological draw: a full-jitter implementation returns 0 here and
+	// reconnects with no delay at all.
 	for attempt := 1; attempt <= 10; attempt++ {
-		got := backoffDelay(attempt, base, max, func() float64 { return 0 })
+		got := b.Delay(attempt)
 		if got <= 0 {
 			t.Fatalf("attempt %d with rand()=0 returned %v; a zero delay is a reconnect storm", attempt, got)
 		}
-		if got < base/2 {
-			t.Fatalf("attempt %d returned %v, which is below the half-jitter floor of %v", attempt, got, base/2)
+		if got < b.Base/2 {
+			t.Fatalf("attempt %d returned %v, below the half-jitter floor of %v", attempt, got, b.Base/2)
 		}
 	}
 }
 
-func TestBackoffLadderStaysWithinItsBandAndCaps(t *testing.T) {
+// The contract, stated once: the result is always within [d/2, d).
+func TestEveryDelayLandsInsideItsHalfJitterBand(t *testing.T) {
 	const (
 		base = 1 * time.Second
 		max  = 30 * time.Second
 	)
-	rands := []float64{0, 0.5, 0.999999}
+	rands := []float64{0, 0.25, 0.5, 0.999999}
 
 	for attempt := 1; attempt <= 12; attempt++ {
-		// The undithered ladder value this attempt is drawn from.
 		want := base
 		for i := 1; i < attempt; i++ {
 			want *= 2
@@ -51,7 +47,7 @@ func TestBackoffLadderStaysWithinItsBandAndCaps(t *testing.T) {
 		}
 
 		for _, r := range rands {
-			got := backoffDelay(attempt, base, max, func() float64 { return r })
+			got := Backoff{Base: base, Max: max, Rand: func() float64 { return r }}.Delay(attempt)
 			if got < want/2 {
 				t.Errorf("attempt %d rand %v: %v is below the band [%v,%v)", attempt, r, got, want/2, want)
 			}
@@ -71,33 +67,55 @@ func TestBackoffIsActuallyJittered(t *testing.T) {
 	seen := map[time.Duration]bool{}
 	vals := []float64{0.01, 0.31, 0.62, 0.93}
 	for _, v := range vals {
-		seen[backoffDelay(5, time.Second, time.Minute, func() float64 { return v })] = true
+		seen[Backoff{Base: time.Second, Max: time.Minute, Rand: func() float64 { return v }}.Delay(5)] = true
 	}
 	if len(seen) < len(vals) {
 		t.Fatalf("jitter collapsed %d distinct draws into %d delays", len(vals), len(seen))
 	}
 }
 
+func TestTheZeroBackoffIsTheConsoleDefaultLadder(t *testing.T) {
+	var b Backoff
+	b.Rand = func() float64 { return 0 }
+
+	if got, want := b.Delay(1), DefaultBackoffBase/2; got != want {
+		t.Fatalf("first attempt = %v, want the floor of the %v base ladder (%v)", got, DefaultBackoffBase, want)
+	}
+	for attempt := 1; attempt <= 20; attempt++ {
+		if got := b.Delay(attempt); got > DefaultBackoffMax {
+			t.Fatalf("attempt %d = %v, past the %v cap", attempt, got, DefaultBackoffMax)
+		}
+	}
+	// And it reaches the cap rather than stalling short of it.
+	if got := b.Delay(20); got < DefaultBackoffMax/2 {
+		t.Fatalf("attempt 20 = %v, nowhere near the %v cap", got, DefaultBackoffMax)
+	}
+}
+
 func TestBackoffToleratesAnOutOfRangeGenerator(t *testing.T) {
 	for _, r := range []float64{-5, 1, 42} {
-		got := backoffDelay(3, time.Second, time.Minute, func() float64 { return r })
+		got := Backoff{Base: time.Second, Max: time.Minute, Rand: func() float64 { return r }}.Delay(3)
 		if got <= 0 || got > time.Minute {
-			t.Fatalf("rand()=%v produced %v, which is outside every sane bound", r, got)
+			t.Fatalf("rand()=%v produced %v, outside every sane bound", r, got)
 		}
 	}
 }
 
-// Some Protect URLs embed a path token that is all anyone on the network needs
-// to watch a camera, so nothing past the authority ever reaches a log.
-func TestRedactedURLKeepsOnlySchemeHostAndPort(t *testing.T) {
-	u, err := url.Parse("wss://10.0.0.1:443/proxy/protect/integration/v1/subscribe/events?token=SUPERSECRET#frag")
-	if err != nil {
-		t.Fatal(err)
+func TestBackoffWithNoGeneratorStillJitters(t *testing.T) {
+	b := Backoff{Base: time.Second, Max: time.Minute}
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 50; i++ {
+		seen[b.Delay(5)] = true
 	}
-	got := redactURL(u)
-	const want = "wss://10.0.0.1:443"
-	if got != want {
-		t.Fatalf("redactURL = %q, want %q", got, want)
+	if len(seen) < 2 {
+		t.Fatal("a Backoff with no injected generator produced a single fixed delay; every dropped client returns together")
+	}
+}
+
+func TestAnAttemptBelowOneIsTreatedAsTheFirst(t *testing.T) {
+	b := Backoff{Base: time.Second, Max: time.Minute, Rand: func() float64 { return 0 }}
+	if b.Delay(0) != b.Delay(1) || b.Delay(-7) != b.Delay(1) {
+		t.Fatal("a non-positive attempt must behave as the first attempt, not as an empty ladder")
 	}
 }
 
@@ -111,7 +129,9 @@ func TestRetryAfterIsHonouredOnlyInItsDeltaSecondsForm(t *testing.T) {
 		wantOK bool
 		wantAt time.Duration // the floor, before jitter
 	}{
-		{"delta seconds are honoured", "30", true, 30 * time.Second},
+		{"delta seconds are honoured", "20", true, 20 * time.Second},
+		{"the bound itself is honoured", "30", true, 30 * time.Second},
+		{"one second past the bound is not", "31", false, 0},
 		{"an HTTP-date is ignored rather than trusted", "Wed, 21 Oct 2026 07:28:00 GMT", false, 0},
 		{"an absurd delay is ignored: a watchdog that sleeps for hours is not one", "36000", false, 0},
 		{"zero is ignored", "0", false, 0},
@@ -126,7 +146,7 @@ func TestRetryAfterIsHonouredOnlyInItsDeltaSecondsForm(t *testing.T) {
 			if tc.header != "" {
 				resp.Header.Set("Retry-After", tc.header)
 			}
-			got, ok := retryAfterDelay(resp, func() float64 { return 0.5 })
+			got, ok := RetryAfter(resp, func() float64 { return 0.5 })
 			if ok != tc.wantOK {
 				t.Fatalf("honoured = %v, want %v", ok, tc.wantOK)
 			}
@@ -144,8 +164,8 @@ func TestRetryAfterIsHonouredOnlyInItsDeltaSecondsForm(t *testing.T) {
 
 	// Jitter on top matters: the console advised the same delay to every client
 	// it just dropped, and they must not all come back together.
-	a, _ := retryAfterDelay(header("20"), func() float64 { return 0.1 })
-	b, _ := retryAfterDelay(header("20"), func() float64 { return 0.9 })
+	a, _ := RetryAfter(retryAfterHeader("20"), func() float64 { return 0.1 })
+	b, _ := RetryAfter(retryAfterHeader("20"), func() float64 { return 0.9 })
 	if a == b {
 		t.Fatal("an advised delay was obeyed with no jitter; every dropped client returns in the same instant")
 	}
@@ -154,14 +174,14 @@ func TestRetryAfterIsHonouredOnlyInItsDeltaSecondsForm(t *testing.T) {
 	}
 }
 
-func header(v string) *http.Response {
+func retryAfterHeader(v string) *http.Response {
 	r := &http.Response{Header: http.Header{}}
 	r.Header.Set("Retry-After", v)
 	return r
 }
 
 func TestANilResponseCarriesNoAdvice(t *testing.T) {
-	if _, ok := retryAfterDelay(nil, nil); ok {
+	if _, ok := RetryAfter(nil, nil); ok {
 		t.Fatal("a failed dial with no response must not produce an advised delay")
 	}
 }

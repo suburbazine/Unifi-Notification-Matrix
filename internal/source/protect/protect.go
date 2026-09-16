@@ -35,6 +35,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/unifi"
 )
 
 // SourceName is the identifier that appears in dedup keys and diagnostics.
@@ -116,21 +117,35 @@ type Config struct {
 	// built from Host and APIKey.
 	States StateReader
 
-	// Dialer is the seam for TLS. Console certificates are self-signed, and
-	// verifying them is certificate PINNING rather than skipped verification --
-	// which belongs to the shared console client, not to this source. Leaving
-	// this nil gets ordinary system-root verification, which is right for a
-	// console behind a real certificate and wrong for everything else, so the
-	// caller is expected to supply one.
+	// TLS is the console's certificate policy, and it belongs to the HOST
+	// rather than to this application. Console certificates are self-signed,
+	// so verifying them is certificate PINNING rather than skipped
+	// verification -- and Protect, Access and Network are served the same
+	// certificate by the same reverse proxy, so the pin is configured once per
+	// console in internal/unifi and shared here.
+	//
+	// Nil gets ordinary system-root verification, which is right for a console
+	// behind a real certificate and wrong for everything else.
+	TLS *unifi.TLS
+
+	// Dialer overrides the WebSocket dialer entirely, TLS included. Set by
+	// tests; a caller with a console to talk to sets TLS instead.
 	Dialer *websocket.Dialer
 
-	// HTTPClient is used by the default REST reader only.
+	// HTTPClient is used by the default REST reader only. Left nil it is built
+	// from TLS, so the sweep and the sockets pin the same certificate.
 	HTTPClient *http.Client
 
-	// Pace is the shared per-console rate limiter. ONE pacer per console, not
-	// per client: three independently paced clients against one host multiply
-	// the request rate by three against a single shared budget. Nil means no
-	// pacing, which is only correct in tests.
+	// Pace is the shared per-console rate limiter, and EVERY request to the
+	// console goes through it: the three REST collection reads of a sweep and
+	// both WebSocket dials.
+	//
+	// ONE pacer per console, not per client. Left nil, New takes the shared
+	// pacer for this host from internal/unifi -- which is the point of that
+	// registry: three independently paced clients against one UniFi OS host
+	// multiply the request rate by three against a single server-side budget,
+	// and each of them looks correct on its own. Setting this to a private
+	// pacer is possible and is a decision worth asking about.
 	Pace func(context.Context) error
 
 	PingInterval     time.Duration
@@ -274,6 +289,15 @@ type Source struct {
 	base *url.URL
 	reg  *registry
 
+	// backoff is the shared console ladder: exponential with HALF jitter, so a
+	// retry can never collapse to zero and a console restart does not bring
+	// every dropped client back in the same instant.
+	backoff unifi.Backoff
+
+	// pacer is non-nil only when this source took the SHARED per-console pacer
+	// rather than an injected one. Kept so that the sharing is testable.
+	pacer *unifi.Pacer
+
 	sweepReq chan struct{}
 
 	mu     sync.Mutex
@@ -287,6 +311,10 @@ type Source struct {
 	openSeq  []string
 	dialOnce sync.Once
 	dialer   *websocket.Dialer
+
+	// fatalErr is the one failure this source does not retry. See runSocket.
+	fatalMu  sync.Mutex
+	fatalErr error
 }
 
 type pendingEvent struct {
@@ -324,8 +352,30 @@ func New(cfg Config) (*Source, error) {
 			StreamMuteReported: map[string]bool{},
 		},
 	}
-	if cfg.States == nil {
-		s.cfg.States = newRESTReader(base, cfg.APIKey, cfg.HTTPClient, cfg.Pace)
+	s.backoff = unifi.Backoff{Base: s.cfg.MinBackoff, Max: s.cfg.MaxBackoff, Rand: s.cfg.Rand}
+
+	// The shared path is the default path. A caller that says nothing about
+	// pacing gets the pacer every other client of this console already uses,
+	// because the failure mode of the alternative -- a second pacer, silently,
+	// for the same host -- is invisible in review and doubles the request rate.
+	if s.cfg.Pace == nil {
+		s.pacer = unifi.PacerFor(base.Host)
+		s.cfg.Pace = s.pacer.Wait
+	}
+
+	if s.cfg.States == nil {
+		hc := s.cfg.HTTPClient
+		if hc == nil && s.cfg.TLS != nil {
+			// The sweep and the sockets talk to one console, so they pin one
+			// certificate. Two differently-configured clients for one host is
+			// not redundancy; it is two chances to be wrong.
+			c, err := s.cfg.TLS.HTTPClient(0)
+			if err != nil {
+				return nil, err
+			}
+			hc = c
+		}
+		s.cfg.States = newRESTReader(base, s.cfg.APIKey, hc, s.cfg.Pace)
 	}
 	return s, nil
 }
@@ -405,11 +455,14 @@ var (
 
 // Run ingests until ctx is done.
 //
-// It returns nil on cancellation and a non-nil error only for a configuration
-// that cannot work at all. In particular a REJECTED CREDENTIAL IS NOT AN
-// ERROR HERE: after a console restart the reverse proxy answers 4xx and 5xx
-// for a while as applications re-initialise, so treating 401 as terminal
-// permanently abandons ingest for a key that was correct all along.
+// It returns nil on cancellation and a non-nil error only for something no
+// amount of reconnecting can fix: a configuration that cannot work, or a
+// certificate pin mismatch.
+//
+// In particular a REJECTED CREDENTIAL IS NOT AN ERROR HERE. After a console
+// restart the reverse proxy answers 4xx and 5xx for a while as applications
+// re-initialise, so treating 401 as terminal permanently abandons ingest for a
+// key that was correct all along.
 func (s *Source) Run(ctx context.Context, out event.Sink) error {
 	if s.base == nil {
 		return ErrNoHost
@@ -418,11 +471,26 @@ func (s *Source) Run(ctx context.Context, out event.Sink) error {
 		return ErrNoAPIKey
 	}
 
+	// A private cancel, so that the one terminal failure can stop the sweeper
+	// and the other socket rather than leaving half a source running against a
+	// console we have just decided we cannot identify.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	fail := func(err error) {
+		s.fatalMu.Lock()
+		if s.fatalErr == nil {
+			s.fatalErr = err
+		}
+		s.fatalMu.Unlock()
+		cancel()
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		s.runSweeper(ctx, out)
+		s.runSweeper(runCtx, out)
 	}()
 
 	// A cold start is a reconnect from infinity: we know nothing about current
@@ -433,12 +501,15 @@ func (s *Source) Run(ctx context.Context, out event.Sink) error {
 		wg.Add(1)
 		go func(spec channelSpec) {
 			defer wg.Done()
-			s.runSocket(ctx, spec, out)
+			s.runSocket(runCtx, spec, out, fail)
 		}(spec)
 	}
 
 	wg.Wait()
-	return nil
+
+	s.fatalMu.Lock()
+	defer s.fatalMu.Unlock()
+	return s.fatalErr
 }
 
 func (s *Source) requestSweep() {
@@ -451,18 +522,34 @@ func (s *Source) requestSweep() {
 }
 
 // runSocket keeps one channel connected for the life of ctx.
-func (s *Source) runSocket(ctx context.Context, spec channelSpec, out event.Sink) {
+//
+// Everything is retried except one thing. A 401 is retried because a rejected
+// credential is not a dead connection: the reverse proxy answers 4xx and 5xx
+// while applications re-initialise after a console restart. A 502 is retried
+// for the same reason, and so is a dropped socket.
+//
+// A CERTIFICATE PIN MISMATCH IS TERMINAL. Every other failure here is "the
+// console is not ready yet"; this one is "the thing answering is not the
+// console we pinned", and retrying it means repeatedly presenting an API key
+// to something we have already decided we cannot identify. It is matched on
+// the sentinel, never on the text of a message.
+func (s *Source) runSocket(ctx context.Context, spec channelSpec, out event.Sink, fail func(error)) {
 	attempt := 0
 	for ctx.Err() == nil {
 		lasted, advised, err := s.serve(ctx, spec, out)
 		if ctx.Err() != nil {
 			return
 		}
+		if errors.Is(err, unifi.ErrPinMismatch) {
+			s.cfg.Logf("protect %s: %v; this is not the console we pinned, so ingest stops rather than retrying", spec.name, err)
+			fail(fmt.Errorf("protect %s: %w", spec.name, err))
+			return
+		}
 		if lasted >= s.cfg.StableAfter {
 			attempt = 0
 		}
 		attempt++
-		delay := backoffDelay(attempt, s.cfg.MinBackoff, s.cfg.MaxBackoff, s.cfg.Rand)
+		delay := s.backoff.Delay(attempt)
 		if advised > delay {
 			// The console asked for longer than our ladder wants. It knows
 			// more about its own load than we do; the ladder is a floor, not a
@@ -494,6 +581,22 @@ func (s *Source) serve(ctx context.Context, spec channelSpec, out event.Sink) (l
 	hdr := http.Header{}
 	setAPIKey(hdr, s.cfg.APIKey)
 
+	// The dial goes through the console pacer like every other request.
+	//
+	// It used not to, and that was the defect: a console reboot brings BOTH of
+	// this source's sockets back at the same moment, each reconnect fires a
+	// three-request reconciliation sweep behind it, and Access and Network add
+	// their own dials to the same host. Handshakes are requests to the same
+	// rate-limited front door as everything else, and a limiter tripped here
+	// costs the whole reconnect rather than one read.
+	//
+	// Paced against ctx rather than the handshake deadline: waiting for a slot
+	// is not part of the handshake, and charging it to HandshakeTimeout would
+	// fail dials that never got to start.
+	if err := s.cfg.Pace(ctx); err != nil {
+		return 0, 0, fmt.Errorf("pacing the %s dial: %w", spec.name, err)
+	}
+
 	dialCtx, cancel := context.WithTimeout(ctx, s.cfg.HandshakeTimeout)
 	conn, resp, err := s.dial().DialContext(dialCtx, u.String(), hdr)
 	cancel()
@@ -502,7 +605,7 @@ func (s *Source) serve(ctx context.Context, spec channelSpec, out event.Sink) (l
 		var wait time.Duration
 		if resp != nil {
 			status = resp.StatusCode
-			if d, ok := retryAfterDelay(resp, s.cfg.Rand); ok {
+			if d, ok := unifi.RetryAfter(resp, s.cfg.Rand); ok {
 				wait = d
 			}
 			resp.Body.Close()
@@ -560,10 +663,23 @@ func (s *Source) serve(ctx context.Context, spec channelSpec, out event.Sink) (l
 func (s *Source) dial() *websocket.Dialer {
 	s.dialOnce.Do(func() {
 		s.dialer = s.cfg.Dialer
-		if s.dialer == nil {
-			d := *websocket.DefaultDialer
-			s.dialer = &d
+		if s.dialer != nil {
+			return
 		}
+		d := *websocket.DefaultDialer
+		if s.cfg.TLS != nil {
+			// Ignored deliberately: New already built an HTTP client from the
+			// same TLS settings and returned any error there, so a malformed
+			// pin cannot reach this point.
+			if cfg, err := s.cfg.TLS.Config(); err == nil {
+				d.TLSClientConfig = cfg
+			}
+		}
+		// No Proxy function. The console is on the operator's LAN and an
+		// environment proxy would receive API-key-bearing traffic nobody chose
+		// to send it.
+		d.Proxy = nil
+		s.dialer = &d
 	})
 	return s.dialer
 }
