@@ -49,9 +49,24 @@ type Hook struct {
 	// Manager rule that posts to it.
 	Name string
 
-	// Token is the secret in the URL. It is a CREDENTIAL: anyone who has it
-	// can raise an incident on this system.
+	// Token is the secret in the URL. It selects WHICH hook an arrival belongs
+	// to, and it is a credential in its own right.
 	Token secret.Secret
+
+	// Bearer is the Authorization header the caller must present, and it is
+	// REQUIRED. A hook with no bearer accepts nothing.
+	//
+	// A URL alone is not an authenticator. It travels through the Alarm
+	// Manager form, the console's own configuration backup, browser history,
+	// any proxy access log on the path, and whatever screenshot somebody takes
+	// while setting it up -- all places a header does not go. Requiring both
+	// means learning the URL is not enough to raise a false alarm on somebody
+	// else's security system.
+	//
+	// There is deliberately no way to switch this off. An "allow unauthenticated"
+	// flag is a flag that ends up in a forum post, and the protection is then
+	// one copied line away from being absent.
+	Bearer secret.Secret
 
 	// Product is the UniFi application this hook is for, for diagnostics only.
 	Product string
@@ -87,6 +102,17 @@ type Receipt struct {
 	Count    int64
 	LastAt   time.Time
 	LastFrom string
+
+	// Rejected counts arrivals that reached this hook's URL and were refused.
+	//
+	// THE DIAGNOSTIC THAT MAKES A CLOSED DOOR DEBUGGABLE. A caller gets a bare
+	// 404 whatever went wrong, so an attacker learns nothing -- but an operator
+	// who pasted the URL and forgot the header would otherwise see "nothing has
+	// ever arrived" and have no idea their rule is firing. This is read from
+	// behind the session gate, where saying why costs nothing.
+	Rejected     int64
+	LastRejectAt time.Time
+	LastReject   string
 }
 
 // Receiver is the HTTP endpoint UniFi posts to.
@@ -158,6 +184,16 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// The URL identified the hook; the header has to authenticate it.
+	if why := authorised(req, hook); why != "" {
+		r.reject(hook, why, req)
+		// Still a bare 404. Answering 401 here would confirm that the URL is
+		// live, which is precisely what an attacker holding a leaked URL and no
+		// header wants to know.
+		http.NotFound(w, req)
+		return
+	}
+
 	body, _ := io.ReadAll(io.LimitReader(req.Body, maxBodyBytes))
 	payload := parsePayload(req, body)
 
@@ -203,6 +239,45 @@ func (r *Receiver) match(token string) (Hook, bool) {
 		return Hook{}, false
 	}
 	return found, ok
+}
+
+// authorised reports why a request is not authorised, or "" if it is.
+//
+// Constant-time, and it checks the FULL header value rather than parsing a
+// scheme out of it first -- a comparison whose length is decided by attacker
+// input leaks that length.
+func authorised(req *http.Request, h Hook) string {
+	if h.Bearer.IsZero() {
+		// A hook with no bearer accepts nothing. Failing closed matters more
+		// here than anywhere else in this package: the alternative is a live
+		// endpoint that anybody who learns the URL can feed alarms to, which
+		// is the exact thing the bearer exists to prevent.
+		return "this hook has no bearer token configured, so it cannot accept anything"
+	}
+	got := req.Header.Get("Authorization")
+	if got == "" {
+		return "no Authorization header"
+	}
+	want := "Bearer " + h.Bearer.Reveal()
+	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		return "the Authorization header did not match"
+	}
+	return ""
+}
+
+// reject records a refused arrival against the hook it was aimed at.
+func (r *Receiver) reject(h Hook, why string, req *http.Request) {
+	now := r.now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec := r.receipts[h.Name]
+	if rec == nil {
+		rec = &Receipt{Name: h.Name, Product: h.Product}
+		r.receipts[h.Name] = rec
+	}
+	rec.Rejected++
+	rec.LastRejectAt = now
+	rec.LastReject = why + " (from " + clientIP(req) + ")"
 }
 
 // payload is the little that can be relied on from an inbound body.
@@ -396,6 +471,20 @@ func (r *Receiver) Receipts() []Receipt {
 		}
 	}
 	return out
+}
+
+// HeaderName is the header UniFi Alarm Manager must be told to send.
+const HeaderName = "Authorization"
+
+// HeaderValueFor renders the header value to paste alongside the URL.
+//
+// A credential, like the URL. Both are needed: the URL says which hook, the
+// header says it is really the console.
+func HeaderValueFor(h Hook) string {
+	if h.Bearer.IsZero() {
+		return ""
+	}
+	return "Bearer " + h.Bearer.Reveal()
 }
 
 // URLFor renders the URL an operator must paste into the Alarm Manager rule.

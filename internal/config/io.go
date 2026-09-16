@@ -119,7 +119,7 @@ func (c *Config) applyDefaults() {
 // needsHookTokens reports whether any hook is missing its token.
 func needsHookTokens(cfg *Config) bool {
 	for _, h := range cfg.Hooks {
-		if h.Token.IsZero() {
+		if h.Token.IsZero() || h.Bearer.IsZero() {
 			return true
 		}
 	}
@@ -153,14 +153,20 @@ func Save(dataDir string, cfg *Config) error {
 	// alternative is asking a person to invent a secret, which is how short
 	// secrets happen.
 	for i := range cfg.Hooks {
-		if !cfg.Hooks[i].Token.IsZero() {
-			continue
+		if cfg.Hooks[i].Token.IsZero() {
+			t, err := NewHookToken()
+			if err != nil {
+				return err
+			}
+			cfg.Hooks[i].Token = t
 		}
-		t, err := NewHookToken()
-		if err != nil {
-			return err
+		if cfg.Hooks[i].Bearer.IsZero() {
+			b, err := NewHookToken()
+			if err != nil {
+				return err
+			}
+			cfg.Hooks[i].Bearer = b
 		}
-		cfg.Hooks[i].Token = t
 	}
 
 	if cfg.Web.AckKey.IsZero() {

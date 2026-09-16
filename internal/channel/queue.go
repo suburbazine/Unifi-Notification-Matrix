@@ -236,3 +236,24 @@ func (q *Queue) Close() {
 	q.once.Do(func() { close(q.closed) })
 	q.wg.Wait()
 }
+
+// Test sends the channel's own proof-of-configuration message.
+//
+// Deliberately NOT queued. A test is a person standing in front of the screen
+// waiting for an answer, so it must report what actually happened to THIS
+// attempt -- and a queued test would report "accepted" and then fail silently
+// behind whatever else is in the queue, which is the exact confusion the
+// button exists to remove.
+//
+// It therefore also bypasses the depth limit, which is correct: one deliberate
+// message from an operator is not the burst the limit is protecting against.
+func (q *Queue) Test(ctx context.Context) error {
+	select {
+	case <-q.closed:
+		return errors.New("channel queue is closed")
+	default:
+	}
+	ctx, cancel := context.WithTimeout(ctx, q.timeout)
+	defer cancel()
+	return q.ch.Test(ctx)
+}

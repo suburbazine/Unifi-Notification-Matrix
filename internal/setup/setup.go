@@ -21,6 +21,12 @@ import (
 	"time"
 )
 
+// HeaderName is the header a console must send alongside the hook URL. Mirrors
+// inbound.HeaderName, which this package does not import -- Input is plain
+// data so the CLI and the interface can both fill it without either reaching
+// into the other.
+const HeaderName = "Authorization"
+
 // Status is how far along one step is.
 type Status string
 
@@ -110,8 +116,21 @@ type HookState struct {
 	Name    string
 	Product string
 	URL     string
-	Count   int64
-	LastAt  time.Time
+
+	// Header is the Authorization header the console must also send. A URL is
+	// not an authenticator, so a hook needs both -- and an operator who pastes
+	// only the URL gets silence, which is the case this field exists to make
+	// diagnosable.
+	Header string
+
+	Count  int64
+	LastAt time.Time
+
+	// Rejected counts arrivals that reached the URL and were refused. Almost
+	// always the missing header, and almost always the whole answer to "I made
+	// the rule and nothing happens".
+	Rejected   int64
+	LastReject string
 }
 
 // SourceState is one running source.
@@ -227,9 +246,21 @@ func channelStep(in Input) Step {
 				"to a topic name nobody could guess, and put that topic in the config.",
 			"A guessable topic on the public ntfy.sh server is readable by anyone " +
 				"who guesses it. Treat the topic name as a password.",
-			"Email works too, and needs an SMTP server, a username and a password.",
+			"pushover is the other good phone option. It needs TWO credentials and " +
+				"they are easy to swap: the application token you create at " +
+				"pushover.net/apps/build, and your own user key from the dashboard. " +
+				"Swapped, Pushover says the application token is invalid, which " +
+				"reads as a bad token rather than as the pair being reversed.",
+			"email works too, and needs an SMTP server, a username and a password.",
+			"webhook sends one JSON document per alert to anything you run -- Home " +
+				"Assistant, Node-RED, a script of your own. Set a signing secret " +
+				"unless you want anyone who learns the URL to be able to feed you " +
+				"false alarms.",
 			"Enable at least one. Two is better: a phone that is asleep and a " +
 				"mailbox that is not fail differently.",
+			"Then press \"Send a test\" on each one in the interface. It reports " +
+				"what happened to that attempt, including the service's own error, " +
+				"which usually says exactly what to change.",
 		},
 	}
 	if len(in.ChannelsEnabled) == 0 {
@@ -357,10 +388,20 @@ func hooksStep(in Input) Step {
 		"Create one alarm. Pick the trigger you want -- for example WAN Offline.",
 		"For the action, choose Webhook, and set the method to POST.",
 		"Paste the URL for the matching hook below into the Delivery URL field.",
+		"ADD THE HEADER TOO. Both are listed below. A URL on its own is not a " +
+			"password -- it goes through this form, the console's configuration " +
+			"backup, your browser history and every proxy log on the way. The " +
+			"header does not, so this product requires both and there is no way " +
+			"to turn that off.",
+		"In Alarm Manager's webhook action, add a custom header with the name " +
+			"and value shown below.",
 		"Save the rule, then press Test. This screen will say the alarm arrived.",
 		"A test alarm raises a REAL incident here, on purpose: that is what proves " +
 			"the whole chain works, including the notification on your phone. " +
 			"Acknowledge it and you are done.",
+		"If nothing arrives, look at the line below each URL. \"Refused\" means " +
+			"the console IS reaching us and the header is wrong or missing -- " +
+			"which is a different problem from the rule not firing at all.",
 	}
 	s.How = append(s.How,
 		"The URL for each hook is listed separately below. They are credentials: "+
@@ -373,7 +414,19 @@ func hooksStep(in Input) Step {
 	// PUBLIC checklist endpoint -- the url field was gated and the prose
 	// beside it was not. A test on the raw response body found it.
 
+	// A refusal is a much better clue than silence, so it leads.
+	var refused []string
+	for _, h := range in.Hooks {
+		if h.Count == 0 && h.Rejected > 0 {
+			refused = append(refused, h.Name)
+		}
+	}
+
 	switch {
+	case len(refused) > 0:
+		s.Status = Todo
+		s.State = "the console IS reaching " + strings.Join(refused, ", ") +
+			" and being refused -- the Authorization header is missing or wrong"
 	case len(arrived) == 0:
 		s.Status = Unverified
 		s.State = "configured, but nothing has ever arrived at " +
@@ -494,19 +547,31 @@ func renderHookURLs(w io.StringWriter, in Input) {
 	if len(in.Hooks) == 0 {
 		return
 	}
-	_, _ = w.WriteString("\n        URLs to paste (treat each one as a password):\n")
+	_, _ = w.WriteString("\n        To paste into each Alarm Manager rule. BOTH are needed,\n" +
+		"        and both are passwords:\n")
 	for _, h := range in.Hooks {
 		line := "          " + h.Name
 		if h.Product != "" {
 			line += " (" + h.Product + ")"
 		}
-		_, _ = w.WriteString(line + "\n            " + h.URL + "\n")
-		if h.Count > 0 {
+		_, _ = w.WriteString(line + "\n            URL:    " + h.URL + "\n")
+		if h.Header != "" {
+			_, _ = w.WriteString("            Header: " + HeaderName + ": " + h.Header + "\n")
+		}
+		switch {
+		case h.Count > 0:
 			_, _ = w.WriteString(fmt.Sprintf("            %d alarm(s) received, last at %s\n",
 				h.Count, h.LastAt.Format(time.RFC3339)))
-			continue
+		case h.Rejected > 0:
+			// The most useful line on this screen when it applies: the rule
+			// exists, the network path works, and the header is the problem.
+			// Without it an operator sees "nothing arrived" and goes looking
+			// at the console, which is the wrong end entirely.
+			_, _ = w.WriteString(fmt.Sprintf("            REFUSED %d time(s) -- %s\n",
+				h.Rejected, h.LastReject))
+		default:
+			_, _ = w.WriteString("            nothing has ever arrived here\n")
 		}
-		_, _ = w.WriteString("            nothing has ever arrived here\n")
 	}
 }
 

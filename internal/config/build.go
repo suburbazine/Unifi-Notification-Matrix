@@ -13,6 +13,8 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/email"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/ntfy"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/pushover"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/webhook"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 )
 
@@ -63,6 +65,34 @@ func BuildDelivery(c *Config, onResult func(channel.Result)) (*Delivery, error) 
 		d.queues["email"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
 	}
 
+	if o := c.Channels.Pushover; o != nil && o.Enabled {
+		ch, err := pushover.New(pushover.Config{
+			Token:  o.Token,
+			User:   o.User,
+			Device: o.Device,
+			Sound:  o.Sound,
+		}, nil)
+		if err != nil {
+			d.Close()
+			return nil, fmt.Errorf("channel pushover: %w", err)
+		}
+		d.queues["pushover"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
+	}
+
+	if h := c.Channels.Webhook; h != nil && h.Enabled {
+		ch, err := webhook.New(webhook.Config{
+			URL:                h.URL,
+			Secret:             h.Secret,
+			Headers:            h.Headers,
+			InsecureSkipVerify: h.InsecureSkipVerify,
+		}, nil)
+		if err != nil {
+			d.Close()
+			return nil, fmt.Errorf("channel webhook: %w", err)
+		}
+		d.queues["webhook"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
+	}
+
 	return d, nil
 }
 
@@ -82,6 +112,20 @@ func emailTLSMode(s string) email.TLSMode {
 	default:
 		return email.TLSAuto
 	}
+}
+
+// Test sends one channel's proof-of-configuration message and reports what
+// actually happened to THIS attempt.
+//
+// Named channels only. "Test everything" would fire every channel at once,
+// which on a site with email is a way to get rate-limited by your own provider
+// while checking a typo.
+func (d *Delivery) Test(ctx context.Context, name string) error {
+	q, ok := d.queues[name]
+	if !ok {
+		return fmt.Errorf("channel %q is not enabled", name)
+	}
+	return q.Test(ctx)
 }
 
 // Names lists the live channels.

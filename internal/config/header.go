@@ -68,8 +68,14 @@ const fileHeader = `# notifymatrix configuration
 #     condition: wan-down        # what an alarm at this URL means
 #     severity: critical
 #
-# A hook's URL contains its token. Anyone who has that URL can raise an alarm
-# on this system, so treat it like a password.
+# Each hook gets TWO generated credentials: a token in its URL, and a bearer
+# token the console must send as an Authorization header. You paste both into
+# the Alarm Manager rule. Both are required and there is no way to turn the
+# header off -- a URL is not a password, because it travels through the console
+# backup, your browser history and every proxy log on the path, and a header
+# does not.
+#
+# Treat both as passwords. "notifymatrix setup" prints them.
 #
 # ---------------------------------------------------------------------------
 # channels: how you get told
@@ -88,8 +94,27 @@ const fileHeader = `# notifymatrix configuration
 #     from: you@example.com
 #     to: [you@example.com]
 #
+#   pushover:
+#     enabled: true
+#     token: <application token>    # pushover.net/apps/build -- create one
+#     user: <user or group key>     # your Pushover dashboard
+#   webhook:
+#     enabled: true
+#     url: http://homeassistant.local:8123/api/webhook/notifymatrix
+#     secret: <any long random string>
+#
 # An ntfy topic on the public server is readable by anyone who guesses the
 # name. Treat the topic name as a password, or run your own ntfy server.
+#
+# Pushover needs TWO different credentials and they are easy to swap: "token"
+# is the APPLICATION token you create once, "user" is your own account key.
+# Swapped, the console says the application token is invalid, which reads as a
+# bad token rather than as the pair being the wrong way round.
+#
+# The webhook channel POSTs one JSON document per alert to anything you run --
+# Home Assistant, Node-RED, a script of your own. Set "secret" and each request
+# is signed, so your receiver can prove it came from here and reject a replay.
+# Without it, anyone who learns the URL can feed you false alarms.
 #
 # ---------------------------------------------------------------------------
 # web: the local interface and the acknowledgement links

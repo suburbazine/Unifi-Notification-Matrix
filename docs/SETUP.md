@@ -109,11 +109,56 @@ channels:
 
 Email works too, and needs an SMTP server, a username and a password.
 
+**Pushover** is the other good phone option, and it needs **two** credentials
+that are easy to mix up:
+
+```yaml
+channels:
+  pushover:
+    enabled: true
+    token: <application token>   # created at pushover.net/apps/build
+    user: <user or group key>    # shown on your own dashboard
+```
+
+Swap them and Pushover reports an invalid *application token*, which reads as a
+bad token rather than as the pair being the wrong way round.
+
+> Pushover has an "emergency" priority that re-alerts until you acknowledge it
+> **in Pushover**. This product deliberately never uses it. That would be a
+> second escalation with a second acknowledgement it cannot see — you would
+> silence your phone while the incident kept escalating everywhere else.
+
+**A webhook** sends one JSON document per alert to anything you run — Home
+Assistant, Node-RED, a script of your own:
+
+```yaml
+channels:
+  webhook:
+    enabled: true
+    url: http://homeassistant.local:8123/api/webhook/notifymatrix
+    secret: <any long random string>
+```
+
+With `secret` set, each request carries `X-NotifyMatrix-Signature` and
+`X-NotifyMatrix-Timestamp`. Your receiver should compute
+`HMAC-SHA256(secret, timestamp + "." + body)` and compare. Without it, anyone
+who learns the URL can feed you false alarms.
+
+The payload carries a `version` field and will not change shape under you.
+
 **Enable at least one.** With no channel, incidents are tracked and nobody is
 ever told — which is the one failure this product exists to prevent.
 
 Two is better than one. A phone that is asleep and a mailbox that is not fail
 in different ways.
+
+### Check it before you rely on it
+
+Open the interface, go to **Settings**, and press **Send a test** on each
+channel you enabled. It reports what happened to that attempt — including the
+service's own error, which usually says exactly what is wrong.
+
+It tests the **saved** settings, so save first if you have just typed something.
 
 ---
 
@@ -292,10 +337,26 @@ hooks:
     entity: Head office WAN
 ```
 
-Restart, then run `notifymatrix setup`. It prints a URL for each hook.
+Restart, then run `notifymatrix setup`. It prints **two** things for each hook:
 
-> **Those URLs are credentials.** Anyone who has one can raise an alarm on this
-> system. Do not paste them into a chat or a ticket.
+```
+  wan-offline (network)
+    URL:    http://192.168.1.50:8322/hook/A63JH-b4lF06a48LbzCjEhUWoIxnW4sxYrA
+    Header: Authorization: Bearer xK2n-Qp7ZmR4vT8cLd0aYhJ3wEuNfGsB1iOkX5tPqM
+    nothing has ever arrived here
+```
+
+**You need both.** The URL says which hook an alarm belongs to; the header says
+the caller is really your console.
+
+> **Why not just the URL?** Because a URL is not a password. It travels through
+> the Alarm Manager form, the console's own configuration backup, your browser
+> history, any proxy log on the path, and whatever screenshot you take while
+> setting it up. A header goes through none of those. So this product requires
+> both, and there is no setting to turn that off — an "allow unauthenticated"
+> option is one that ends up in a forum post.
+>
+> Both are credentials. Do not paste either into a chat or a ticket.
 
 Then, in the UniFi console:
 
@@ -305,7 +366,8 @@ Then, in the UniFi console:
 3. Create an alarm and pick the trigger — for example **WAN Offline**.
 4. For the action choose **Webhook**, method **POST**.
 5. Paste the URL into the **Delivery URL** field.
-6. Save, then press **Test**.
+6. Add a **custom header**: name `Authorization`, value `Bearer <the rest>`.
+7. Save, then press **Test**.
 
 Run `notifymatrix setup` again. It will say whether the alarm arrived.
 
@@ -316,6 +378,20 @@ Run `notifymatrix setup` again. It will say whether the alarm arrived.
 > Until an alarm has actually arrived, the checklist reports the hook as
 > **unverified** rather than done. A hook that looks right is not evidence that
 > anybody made the rule.
+
+### If the test does nothing
+
+Run `notifymatrix setup` and read the line under the hook:
+
+| It says | What that means |
+|---|---|
+| `nothing has ever arrived here` | The console is not reaching us at all. Check the rule exists, is enabled, and that the URL points at an address the console can reach. |
+| `REFUSED n times -- no Authorization header` | **The rule works.** The console is reaching us and being turned away. You pasted the URL and not the header. |
+| `REFUSED n times -- the Authorization header did not match` | The header is there but wrong. Copy the whole value including the word `Bearer`. |
+
+A refused request gets a bare `404` and no explanation, deliberately — somebody
+who found your URL learns nothing from probing it. The explanation is on this
+side, where it costs nothing to say.
 
 ---
 

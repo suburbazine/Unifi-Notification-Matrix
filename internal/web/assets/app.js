@@ -402,6 +402,16 @@ function renderSettings(body, s) {
 
   body.appendChild(el("h3", null, "Channels"));
   var ch = draft.channels || (draft.channels = {});
+  // Every channel card is rendered whether or not the config already has one,
+  // so a channel can be ADDED here rather than only edited. Before this, a
+  // channel absent from the file was invisible in the interface and the only
+  // way to add one was to hand-edit YAML -- which is exactly the person this
+  // interface exists for.
+  ch.ntfy = ch.ntfy || { enabled: false };
+  ch.email = ch.email || { enabled: false, recipients: [] };
+  ch.pushover = ch.pushover || { enabled: false };
+  ch.webhook = ch.webhook || { enabled: false };
+
   if (ch.ntfy) {
     var nc = el("div", "card");
     nc.appendChild(el("div", "title", "ntfy"));
@@ -411,6 +421,7 @@ function renderSettings(body, s) {
     nf.appendChild(labelled("Topic", bind(ch.ntfy, "topic")));
     nc.appendChild(nf);
     secretRow(nc, ch.ntfy.token_set, "token", ch.ntfy, "token_new");
+    testRow(nc, "ntfy");
     body.appendChild(nc);
   }
   if (ch.email) {
@@ -426,10 +437,50 @@ function renderSettings(body, s) {
     ef.appendChild(labelled("Recipients (comma separated)", bindList(ch.email, "recipients")));
     ec.appendChild(ef);
     secretRow(ec, ch.email.password_set, "password", ch.email, "password_new");
+    testRow(ec, "email");
     body.appendChild(ec);
   }
-  if (!ch.ntfy && !ch.email) {
-    body.appendChild(el("div", "empty", "No channels configured. An alarm has nowhere to go."));
+  if (ch.pushover) {
+    var pc = el("div", "card");
+    pc.appendChild(el("div", "title", "Pushover"));
+    var pf = el("div", "fields");
+    pf.appendChild(labelled("Enabled", check(ch.pushover, "enabled")));
+    pf.appendChild(labelled("Device (blank = all)", bind(ch.pushover, "device")));
+    pf.appendChild(labelled("Sound (blank = account default)", bind(ch.pushover, "sound")));
+    pc.appendChild(pf);
+    secretRow(pc, ch.pushover.token_set, "application token", ch.pushover, "token_new");
+    secretRow(pc, ch.pushover.user_set, "user or group key", ch.pushover, "user_new");
+    pc.appendChild(el("div", "note",
+      "Two different credentials. The application token is the one you create at " +
+      "pushover.net/apps/build; the user key is on your own dashboard. Swapped, " +
+      "Pushover reports an invalid application token, which reads as a bad token " +
+      "rather than as the pair being the wrong way round."));
+    testRow(pc, "pushover");
+    body.appendChild(pc);
+  }
+  if (ch.webhook) {
+    var hc = el("div", "card");
+    hc.appendChild(el("div", "title", "Webhook"));
+    var hf = el("div", "fields");
+    hf.appendChild(labelled("Enabled", check(ch.webhook, "enabled")));
+    hf.appendChild(labelled("URL", bind(ch.webhook, "url")));
+    hf.appendChild(labelled("Skip certificate check", check(ch.webhook, "insecure_skip_verify")));
+    hc.appendChild(hf);
+    secretRow(hc, ch.webhook.secret_set, "signing secret", ch.webhook, "secret_new");
+    hc.appendChild(el("div", "note",
+      "One JSON POST per alert, to anything you run. With a signing secret set, " +
+      "each request carries an HMAC your receiver can check -- without one, " +
+      "anybody who learns the URL can feed it false alarms."));
+    testRow(hc, "webhook");
+    body.appendChild(hc);
+  }
+
+  var anyEnabled = ["ntfy", "email", "pushover", "webhook"].some(function (k) {
+    return ch[k] && ch[k].enabled;
+  });
+  if (!anyEnabled) {
+    body.appendChild(el("div", "empty",
+      "No channel is enabled. Incidents will still be tracked, and nobody will be told."));
   }
 
   body.appendChild(el("h3", null, "Quiet hours"));
@@ -563,6 +614,42 @@ function refreshAudit() {
       if (extra.length) c.appendChild(el("div", "muted small", extra.join("  ·  ")));
     });
     body.appendChild(wrap(t));
+  });
+}
+
+// testRow adds a "send a test" button to a channel card.
+//
+// It reports what happened to THIS attempt, including the channel's own error
+// text. "535 authentication failed" tells somebody exactly what to change;
+// "could not send" tells them to open a support ticket.
+//
+// The button sends against the SAVED configuration, not the form in front of
+// it -- so it says so, because testing a token you have typed but not saved
+// and being told it failed is a confusing half-hour.
+function testRow(card, name) {
+  var row = el("div", "row");
+  var btn = el("button", "act", "Send a test");
+  var out = el("span", "muted small");
+  row.appendChild(btn);
+  row.appendChild(out);
+  card.appendChild(row);
+  card.appendChild(el("div", "note",
+    "Tests the SAVED settings. Save first if you have just changed something."));
+
+  btn.addEventListener("click", function () {
+    btn.disabled = true;
+    out.className = "muted small";
+    out.textContent = "sending...";
+    api("POST", "/api/channels/" + encodeURIComponent(name) + "/test").then(function (r) {
+      btn.disabled = false;
+      if (r.ok && r.data && r.data.ok) {
+        out.className = "ok small";
+        out.textContent = r.data.detail || "sent";
+        return;
+      }
+      out.className = "err small";
+      out.textContent = (r.data && r.data.error) || "failed";
+    });
   });
 }
 

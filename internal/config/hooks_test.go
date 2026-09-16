@@ -12,19 +12,34 @@ func hookConfig(h ...Hook) *Config {
 	return &c
 }
 
-// A token IS the authentication on an endpoint that can raise an alarm. A hook
-// without one has no URL to give anybody, so serving it would mean an endpoint
-// that anybody could hit by guessing nothing at all.
-func TestAHookWithNoTokenIsNotServed(t *testing.T) {
+// A hook needs BOTH credentials or it is not served at all.
+//
+// The token in the URL says which hook; the bearer header says the caller is
+// really the console. Either one missing means an endpoint that is either
+// unreachable or unauthenticated, and an unauthenticated one is a URL anybody
+// who learns it can feed false alarms to.
+func TestAHookNeedsBothCredentialsToBeServed(t *testing.T) {
+	const tok = "a-perfectly-long-token-value"
+	const bearer = "a-perfectly-long-bearer-value"
+
 	got := BuildHooks(hookConfig(
-		Hook{Name: "wan", Token: "a-perfectly-long-token-value"},
-		Hook{Name: "threat"}, // no token
+		Hook{Name: "wan", Token: tok, Bearer: bearer},
+		Hook{Name: "no-token", Bearer: bearer},
+		Hook{Name: "no-bearer", Token: tok},
+		Hook{Name: "neither"},
 	))
 	if len(got) != 1 {
-		t.Fatalf("built %d hook(s), want only the one with a token", len(got))
+		names := []string{}
+		for _, h := range got {
+			names = append(names, h.Name)
+		}
+		t.Fatalf("built %v, want only the fully-credentialled hook", names)
 	}
 	if got[0].Name != "wan" {
 		t.Errorf("built %q", got[0].Name)
+	}
+	if got[0].Bearer.Reveal() != bearer {
+		t.Error("the bearer did not reach the receiver, so the hook would refuse everything")
 	}
 }
 
@@ -58,6 +73,13 @@ func TestSavingGeneratesAMissingHookToken(t *testing.T) {
 	}
 	if c.Hooks[0].Token.IsZero() {
 		t.Fatal("no token was generated, so the hook has no URL and will never receive anything")
+	}
+	if c.Hooks[0].Bearer.IsZero() {
+		t.Fatal("no bearer was generated, so the hook would refuse everything the console sends")
+	}
+	if c.Hooks[0].Token.Reveal() == c.Hooks[0].Bearer.Reveal() {
+		t.Error("the URL token and the bearer are the same value; two credentials " +
+			"that are one credential is one credential")
 	}
 	if n := len(c.Hooks[0].Token.Reveal()); n < 32 {
 		t.Errorf("token is %d characters; it is the only thing protecting this endpoint", n)
@@ -102,9 +124,9 @@ web:
 	if len(back.Hooks) != 1 {
 		t.Fatalf("hooks = %d", len(back.Hooks))
 	}
-	if back.Hooks[0].Token.IsZero() {
-		t.Fatal("a hand-added hook was left without a token, so it has no URL " +
-			"and silently receives nothing")
+	if back.Hooks[0].Token.IsZero() || back.Hooks[0].Bearer.IsZero() {
+		t.Fatalf("a hand-added hook was left without both credentials, so it "+
+			"silently receives nothing: %+v", back.Hooks[0])
 	}
 	if len(BuildHooks(back)) != 1 {
 		t.Error("the hook still is not served")

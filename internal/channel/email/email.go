@@ -267,3 +267,12 @@ func (c *Channel) dialAndSend(ctx context.Context, m *mail.Msg) error {
 	}
 	return nil
 }
+
+// String renders the channel without its credentials. See the identical method
+// on the ntfy channel for why this is necessary: secret.Secret redaction does
+// not survive being reached through an unexported struct field, so without
+// this, %v on a *Channel prints the SMTP password in cleartext.
+func (c Channel) String() string {
+	return fmt.Sprintf("email{host:%s port:%d tls:%v from:%q recipients:%d password:<redacted>}",
+		c.cfg.Host, c.cfg.Port, c.cfg.TLS, c.cfg.From, len(c.cfg.To))
+}

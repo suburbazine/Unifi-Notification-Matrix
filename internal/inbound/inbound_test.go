@@ -31,14 +31,29 @@ func (s *sink) all() []event.Event {
 	return append([]event.Event(nil), s.ev...)
 }
 
+const (
+	wanBearer    = "bearer-wan-abcdefghijklmnop"
+	threatBearer = "bearer-threat-qrstuvwxyz0123"
+)
+
 func testHooks() []Hook {
 	return []Hook{
-		{Name: "wan", Token: "tok-wan-1234567890", Product: "network",
+		{Name: "wan", Token: "tok-wan-1234567890", Bearer: wanBearer, Product: "network",
 			Condition: event.ConditionWANDown, Severity: incident.SeverityCritical,
 			EntityName: "Head office WAN"},
-		{Name: "threat", Token: "tok-threat-098765", Product: "network",
+		{Name: "threat", Token: "tok-threat-098765", Bearer: threatBearer, Product: "network",
 			Condition: event.ConditionThreat, Severity: incident.SeverityHigh},
 	}
+}
+
+// bearerFor returns the header a console must send for a hook, by name.
+func bearerFor(name string) string {
+	for _, h := range testHooks() {
+		if h.Name == name {
+			return HeaderValueFor(h)
+		}
+	}
+	return ""
 }
 
 func newTestReceiver(t *testing.T) (*Receiver, *sink) {
@@ -47,10 +62,29 @@ func newTestReceiver(t *testing.T) (*Receiver, *sink) {
 	return New(testHooks(), Options{Emit: s.emit, Now: func() time.Time { return t0 }}), s
 }
 
+// post sends an authorised request, which is what an Alarm Manager rule that
+// was configured correctly does.
 func post(t *testing.T, r *Receiver, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return postAs(t, r, path, body, bearerOfPath(path))
+}
+
+// bearerOfPath picks the right bearer for whichever hook the path names, so a
+// test that means "authorised" does not have to restate it.
+func bearerOfPath(path string) string {
+	if strings.Contains(path, "tok-threat") {
+		return bearerFor("threat")
+	}
+	return bearerFor("wan")
+}
+
+func postAs(t *testing.T, r *Receiver, path, body, authz string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	if authz != "" {
+		req.Header.Set("Authorization", authz)
+	}
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
@@ -123,6 +157,7 @@ func TestAGETWithQueryParametersIsAccepted(t *testing.T) {
 	r, s := newTestReceiver(t)
 	req := httptest.NewRequest(http.MethodGet,
 		PathPrefix+"tok-wan-1234567890?message=WAN1+is+down", nil)
+	req.Header.Set("Authorization", bearerFor("wan"))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -168,7 +203,7 @@ func TestAnUnknownTokenIsRefusedWithoutSayingWhy(t *testing.T) {
 // An empty token must never match an empty configured token.
 func TestAnEmptyTokenMatchesNothing(t *testing.T) {
 	s := &sink{}
-	r := New([]Hook{{Name: "broken", Token: "", Condition: "x"}},
+	r := New([]Hook{{Name: "broken", Token: "", Bearer: wanBearer, Condition: "x"}},
 		Options{Emit: s.emit, Now: func() time.Time { return t0 }})
 
 	if w := post(t, r, PathPrefix, `{}`); w.Code != http.StatusNotFound {
@@ -268,6 +303,7 @@ func TestAnOversizedBodyIsNotReadIntoMemoryWholesale(t *testing.T) {
 	r, s := newTestReceiver(t)
 	req := httptest.NewRequest(http.MethodPost, PathPrefix+"tok-wan-1234567890",
 		strings.NewReader(strings.Repeat("a", 4<<20)))
+	req.Header.Set("Authorization", bearerFor("wan"))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
@@ -281,6 +317,7 @@ func TestAnOversizedBodyIsNotReadIntoMemoryWholesale(t *testing.T) {
 func TestAnUnsupportedMethodIsRefused(t *testing.T) {
 	r, _ := newTestReceiver(t)
 	req := httptest.NewRequest(http.MethodDelete, PathPrefix+"tok-wan-1234567890", nil)
+	req.Header.Set("Authorization", bearerFor("wan"))
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
@@ -300,5 +337,106 @@ func TestURLForBuildsThePasteableURL(t *testing.T) {
 	if !strings.Contains(URLFor("", h), "<this-machine>") {
 		t.Error("with no base URL configured, the placeholder must be obviously " +
 			"a placeholder rather than something that looks pasteable")
+	}
+}
+
+// THE POINT OF THE BEARER. A URL is not an authenticator: it travels through
+// the Alarm Manager form, the console's configuration backup, browser history
+// and every proxy log on the path. Knowing it must not be enough to raise a
+// false alarm on somebody's security system.
+func TestTheRightURLWithNoHeaderIsRefused(t *testing.T) {
+	r, s := newTestReceiver(t)
+
+	w := postAs(t, r, PathPrefix+"tok-wan-1234567890", `{"message":"fake"}`, "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+	if n := len(s.all()); n != 0 {
+		t.Fatalf("%d alarm(s) were raised by a request with no Authorization header", n)
+	}
+}
+
+func TestTheRightURLWithTheWrongHeaderIsRefused(t *testing.T) {
+	r, s := newTestReceiver(t)
+
+	for _, authz := range []string{
+		"Bearer wrong",
+		"Bearer " + threatBearer,    // another hook's bearer
+		wanBearer,                   // the value without the scheme
+		"bearer " + wanBearer,       // wrong case on the scheme
+		"Bearer " + wanBearer + "x", // one character too long
+		"Bearer " + wanBearer[:len(wanBearer)-1],
+	} {
+		w := postAs(t, r, PathPrefix+"tok-wan-1234567890", `{"message":"fake"}`, authz)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("%q: status = %d, want 404", authz, w.Code)
+		}
+	}
+	if n := len(s.all()); n != 0 {
+		t.Errorf("%d alarm(s) were raised by a wrong header", n)
+	}
+}
+
+// A 404 whatever went wrong, so a leaked URL discloses nothing -- but an
+// operator who pasted the URL and forgot the header must be able to find out
+// why nothing works. The diagnosis lives behind the session gate.
+func TestARefusedArrivalIsCountedAgainstItsHookWithAReason(t *testing.T) {
+	r, _ := newTestReceiver(t)
+
+	postAs(t, r, PathPrefix+"tok-wan-1234567890", `{}`, "")
+	postAs(t, r, PathPrefix+"tok-wan-1234567890", `{}`, "Bearer nope")
+
+	var wan Receipt
+	for _, rec := range r.Receipts() {
+		if rec.Name == "wan" {
+			wan = rec
+		}
+	}
+	if wan.Rejected != 2 {
+		t.Fatalf("rejected = %d, want 2 -- an operator who forgot the header "+
+			"would otherwise see only \"nothing has ever arrived\"", wan.Rejected)
+	}
+	if wan.Count != 0 {
+		t.Errorf("a refused arrival was counted as a real one")
+	}
+	if !strings.Contains(wan.LastReject, "Authorization") {
+		t.Errorf("last reject = %q, want it to name what was wrong", wan.LastReject)
+	}
+	if wan.LastRejectAt.IsZero() {
+		t.Error("the refusal was not timestamped")
+	}
+}
+
+// Fail closed. A hook with no bearer is not an open endpoint, it is a dead
+// one -- the alternative is a live URL anybody who learns it can feed alarms
+// to, which is exactly what the bearer exists to prevent.
+func TestAHookWithNoBearerAcceptsNothing(t *testing.T) {
+	s := &sink{}
+	r := New([]Hook{{Name: "broken", Token: "tok-broken-12345678", Condition: "x"}},
+		Options{Emit: s.emit, Now: func() time.Time { return t0 }})
+
+	for _, authz := range []string{"", "Bearer ", "Bearer anything"} {
+		w := postAs(t, r, PathPrefix+"tok-broken-12345678", `{}`, authz)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("%q: status = %d, want 404", authz, w.Code)
+		}
+	}
+	if n := len(s.all()); n != 0 {
+		t.Errorf("a hook with no bearer raised %d alarm(s)", n)
+	}
+}
+
+// The operator has to be given something to paste, in the form the console
+// wants it.
+func TestHeaderValueForRendersThePasteableHeader(t *testing.T) {
+	h := testHooks()[0]
+	if got := HeaderValueFor(h); got != "Bearer "+wanBearer {
+		t.Errorf("HeaderValueFor = %q", got)
+	}
+	if HeaderName != "Authorization" {
+		t.Errorf("HeaderName = %q, want the header Alarm Manager sends", HeaderName)
+	}
+	if got := HeaderValueFor(Hook{Name: "x"}); got != "" {
+		t.Errorf("a hook with no bearer offered %q to paste", got)
 	}
 }

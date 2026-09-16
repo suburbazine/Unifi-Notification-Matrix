@@ -658,14 +658,59 @@ Ported from proven code, with their recorded field knowledge intact:
 | Channel | Rules it must keep ([DESIGN-RULES.md](DESIGN-RULES.md) §5) |
 |---|---|
 | ntfy | text fields as **query params, not headers** — headers cannot carry newlines and need RFC 2047 for non-ASCII; bounded 429 retry honouring `Retry-After` |
-| Pushover | severity→priority map |
-| JSON webhook | stable `event` discriminator, with a transitional legacy field whenever it changes |
+| Pushover | severity→priority map; **priority 2 is never emitted** — see below |
+| JSON webhook | a **versioned envelope**, pinned by a golden test; HMAC signing bound to a timestamp |
 | Email | **plain text is always the base part**, HTML added as an alternative — a security alert must survive HTML-stripping gateways; inline CID logo |
 | Voice | new; Twilio first, see below |
 
 Email is the one real build cost: Go's stdlib `net/smtp` is frozen and
 minimal. `github.com/wneessen/go-mail` (cgo-free) handles implicit TLS on 465
 and multipart/alternative with inline CID parts.
+
+### Pushover: the emergency priority is refused, on purpose — *built*
+
+Pushover's priority 2 is exactly the feature this product provides: the service
+itself re-alerts on its own timer until somebody acknowledges. Using it would
+be the obvious move and it is the wrong one.
+
+**It is a second escalation ladder with a second acknowledgement that this
+product cannot see.** Acknowledging in Pushover would silence the phone while
+the incident kept escalating on every other channel; acknowledging the incident
+would not stop Pushover. Two acknowledgement systems that do not know about
+each other is strictly worse than one, and the interface contract already says
+so in general terms: a channel must not retry beyond its own bounded policy,
+because the ladder above it provides persistence.
+
+So critical and high map to priority 1, medium to 0, low and info to -1, and a
+test asserts no request can carry priority 2 for any severity.
+
+### The generic webhook: the payload is a published contract — *built*
+
+The moment somebody writes an automation against it, changing the shape breaks
+them silently. So it carries a `version` field and is pinned by a **golden
+test** whose comment says that failing it is a decision to make deliberately
+rather than a test to update.
+
+Signing binds a timestamp INTO the signed material — `timestamp + "." + body`,
+returned as `X-NotifyMatrix-Signature: sha256=<hex>` alongside
+`X-NotifyMatrix-Timestamp`. A signature over the body alone is replayable
+forever, because a captured pair stays valid; binding the timestamp is what
+makes a replay detectable by a receiver that checks it.
+
+Three refusals fall out of that:
+
+- **Redirects are not followed.** A redirect would resend the signed body, with
+  its valid signature, to a host the operator never configured.
+- **Static headers cannot override the signature, timestamp or content type.**
+  An operator who set the signature header by hand would break every receiver's
+  verification, in the direction where the receiver rejects real alarms.
+  Refused at construction and again in configuration validation.
+- **The snapshot is not included.** Base64 in every request would multiply the
+  size of an ordinary alert for a field most receivers ignore.
+
+The URL itself is treated as a credential, because for most receivers it is
+one — Home Assistant, Slack and n8n all put an unguessable token in the path or
+query — so it never appears whole in an error string.
 
 ### Voice — the top rung, and it does not require exposing an endpoint
 

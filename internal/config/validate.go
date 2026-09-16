@@ -182,7 +182,68 @@ func (c Config) validateChannels() Problems {
 			p = append(p, "channel email: a username is set with no password")
 		}
 	}
+	p = append(p, c.validatePushover()...)
+	p = append(p, c.validateWebhook()...)
 	return p
+}
+
+func (c Config) validatePushover() Problems {
+	var p Problems
+	o := c.Channels.Pushover
+	if o == nil || !o.Enabled {
+		return nil
+	}
+	// Named separately rather than as "credentials missing", because these are
+	// two different things from two different places and an operator who has
+	// one has usually not realised there is another.
+	if o.Token.IsZero() {
+		p = append(p, "channel pushover: needs an application token "+
+			"(create one at pushover.net/apps/build -- it is not your user key)")
+	}
+	if o.User.IsZero() {
+		p = append(p, "channel pushover: needs a user or group key "+
+			"(it is on your Pushover dashboard -- it is not the application token)")
+	}
+	return p
+}
+
+func (c Config) validateWebhook() Problems {
+	var p Problems
+	w := c.Channels.Webhook
+	if w == nil || !w.Enabled {
+		return nil
+	}
+	u, err := url.Parse(strings.TrimSpace(w.URL))
+	switch {
+	case strings.TrimSpace(w.URL) == "":
+		p = append(p, "channel webhook: needs a url")
+	case err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https"):
+		p = append(p, fmt.Sprintf("channel webhook: url %q is not an http(s) URL", w.URL))
+	}
+	for k := range w.Headers {
+		if reservedWebhookHeader(k) {
+			// Set by hand, this silently breaks every receiver's signature
+			// check -- and it breaks it in the direction where the receiver
+			// rejects real alarms.
+			p = append(p, fmt.Sprintf("channel webhook: header %q is set by the "+
+				"channel itself and cannot be overridden", k))
+		}
+	}
+	return p
+}
+
+// reservedWebhookHeader names the headers the channel owns.
+//
+// Kept here as well as in the channel so a bad configuration is refused at
+// startup, with a message, rather than at the first alarm.
+func reservedWebhookHeader(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "content-type",
+		"x-notifymatrix-signature",
+		"x-notifymatrix-timestamp":
+		return true
+	}
+	return false
 }
 
 func (c Config) validateWeb() Problems {
@@ -231,10 +292,7 @@ func (c Config) validateWeb() Problems {
 	return p
 }
 
-func (c Config) anyChannelEnabled() bool {
-	return (c.Channels.Ntfy != nil && c.Channels.Ntfy.Enabled) ||
-		(c.Channels.Email != nil && c.Channels.Email.Enabled)
-}
+func (c Config) anyChannelEnabled() bool { return len(c.EnabledChannelNames()) > 0 }
 
 // EnabledChannelNames lists the channels this config would construct.
 func (c Config) EnabledChannelNames() []string {
@@ -244,6 +302,12 @@ func (c Config) EnabledChannelNames() []string {
 	}
 	if c.Channels.Email != nil && c.Channels.Email.Enabled {
 		out = append(out, "email")
+	}
+	if c.Channels.Pushover != nil && c.Channels.Pushover.Enabled {
+		out = append(out, "pushover")
+	}
+	if c.Channels.Webhook != nil && c.Channels.Webhook.Enabled {
+		out = append(out, "webhook")
 	}
 	sort.Strings(out)
 	return out

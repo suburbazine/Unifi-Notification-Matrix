@@ -41,9 +41,18 @@ func (s *Server) handleChecklist(w http.ResponseWriter, r *http.Request) {
 		row := map[string]any{
 			"name": h.Name, "product": h.Product,
 			"count": h.Count, "last_at": h.LastAt,
+			// Counts and reasons carry no credential, and they are the answer
+			// to "I made the rule and nothing happens" -- so they are readable
+			// without a session, like everything else on the status surface.
+			"rejected": h.Rejected, "last_reject": h.LastReject,
 		}
 		if authed {
+			// The URL and the header are BOTH credentials. Either one alone is
+			// not enough to raise an alarm here, which is the point of having
+			// two -- but neither is anybody else's business.
 			row["url"] = h.URL
+			row["header_name"] = setup.HeaderName
+			row["header_value"] = h.Header
 		}
 		hooks = append(hooks, row)
 	}

@@ -24,12 +24,22 @@ type Hook struct {
 	// that posts to it, so the two are findable from each other at 3am.
 	Name string `json:"name"`
 
-	// Token is the secret in the URL, and it IS the authentication: anyone who
-	// has this URL can raise an incident here.
+	// Token is the secret in the URL. It says WHICH hook an arrival is for.
 	//
 	// Generated automatically when a hook is added without one, because an
 	// operator inventing their own is an operator inventing a short one.
 	Token secret.Secret `json:"token,omitempty"`
+
+	// Bearer is the Authorization header the console must send, and it is
+	// required -- a hook without one accepts nothing.
+	//
+	// Also generated automatically. A URL is not an authenticator: it goes
+	// through the Alarm Manager form, the console's configuration backup,
+	// browser history, and every proxy log on the path. A header does not.
+	// UniFi's Alarm Manager webhook action supports custom headers, so this
+	// costs the operator one extra paste and closes the case where somebody
+	// who merely LEARNS the URL can raise false alarms here.
+	Bearer secret.Secret `json:"bearer,omitempty"`
 
 	// Product is which UniFi application this rule lives in, for the setup
 	// instructions and for diagnostics: "network", "protect" or "access".
@@ -86,9 +96,11 @@ var KnownConditions = []string{
 func BuildHooks(c *Config) []inbound.Hook {
 	out := make([]inbound.Hook, 0, len(c.Hooks))
 	for _, h := range c.Hooks {
-		if h.Token.IsZero() {
-			// Without a token there is no URL to post to. Skipped rather than
-			// given a blank one, which would be an endpoint anybody could hit.
+		if h.Token.IsZero() || h.Bearer.IsZero() {
+			// Without a token there is no URL to post to; without a bearer
+			// there is nothing authenticating what arrives. Either way the
+			// hook is not served -- a blank credential would be an endpoint
+			// anybody could hit, which is the whole failure being avoided.
 			continue
 		}
 		cond := strings.TrimSpace(h.Condition)
@@ -100,7 +112,7 @@ func BuildHooks(c *Config) []inbound.Hook {
 			sev = incident.SeverityHigh
 		}
 		out = append(out, inbound.Hook{
-			Name: h.Name, Token: h.Token, Product: h.Product,
+			Name: h.Name, Token: h.Token, Bearer: h.Bearer, Product: h.Product,
 			Condition: cond, Severity: sev, EntityName: h.Entity,
 		})
 	}
@@ -126,8 +138,11 @@ func (c Config) validateHooks() Problems {
 		seen[h.Name] = true
 
 		if !h.Token.IsZero() && len(h.Token.Reveal()) < 16 {
-			p = append(p, where+": the token is too short to be the only thing "+
-				"protecting an endpoint that can raise an alarm; clear it and "+
+			p = append(p, where+": the token is too short for an endpoint that "+
+				"can raise an alarm; clear it and one will be generated")
+		}
+		if !h.Bearer.IsZero() && len(h.Bearer.Reveal()) < 16 {
+			p = append(p, where+": the bearer token is too short; clear it and "+
 				"one will be generated")
 		}
 		if cond := strings.TrimSpace(h.Condition); cond != "" && !knownCondition(cond) {

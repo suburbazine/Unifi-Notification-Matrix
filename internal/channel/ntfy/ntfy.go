@@ -602,3 +602,28 @@ func collapseDashes(s string) string {
 	}
 	return s
 }
+
+// String renders the channel without its credentials.
+//
+// Config.Token is a secret.Secret exactly so that %v cannot print it, and that
+// protection is DEFEATED the moment the Config is reached through Channel's
+// unexported cfg field: fmt calls String() only on a value it may hand to an
+// interface, and a value read out of an unexported field is not one, so
+// Secret.String() is skipped and the raw token is printed.
+//
+// Measured, not assumed. Without this method, %v on a *Channel printed
+// &{{https://ntfy.sh topic TOKEN...}} while %v on the same Config correctly
+// printed {https://ntfy.sh topic <redacted>}.
+//
+// Nothing formats a *Channel today. This exists because the next diagnostic
+// that dumps the configured channels, or an error that interpolates the
+// channel rather than its Name(), is an entirely ordinary line to write -- and
+// it must not be the line that puts an access token in a log file that
+// outlives the incident.
+//
+// Value receiver, so a stray copy is covered as well as the pointer everything
+// actually holds. %#v is NOT covered and cannot be from here: it consults
+// GoStringer rather than Stringer, and leaks through a bare Config too.
+func (c Channel) String() string {
+	return fmt.Sprintf("ntfy{server:%s topic:%q token:<redacted>}", c.base, c.cfg.Topic)
+}

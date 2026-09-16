@@ -108,8 +108,10 @@ type Console struct {
 // entry with Enabled false is configured and switched off, which the UI shows
 // differently and diagnostics report differently.
 type Channels struct {
-	Ntfy  *Ntfy  `json:"ntfy,omitempty"`
-	Email *Email `json:"email,omitempty"`
+	Ntfy     *Ntfy     `json:"ntfy,omitempty"`
+	Email    *Email    `json:"email,omitempty"`
+	Pushover *Pushover `json:"pushover,omitempty"`
+	Webhook  *Webhook  `json:"webhook,omitempty"`
 }
 
 // Ntfy configures the ntfy channel.
@@ -148,6 +150,53 @@ type Email struct {
 
 	// LogoPath is an optional image attached inline to the HTML part.
 	LogoPath string `json:"logo_path,omitempty"`
+}
+
+// Pushover configures the Pushover channel.
+type Pushover struct {
+	Enabled bool `json:"enabled"`
+
+	// Token is the APPLICATION token, created once at pushover.net/apps/build.
+	// User is the user or group key, shown on the Pushover dashboard.
+	//
+	// Two different credentials that both look like a random string, which is
+	// the mistake people make: swapping them produces "application token is
+	// invalid", which reads as a bad token rather than as the pair being the
+	// wrong way round.
+	Token secret.Secret `json:"token,omitempty"`
+	User  secret.Secret `json:"user,omitempty"`
+
+	// Device restricts delivery to one of the account's devices. Empty means
+	// all of them, which is what an alarm wants.
+	Device string `json:"device,omitempty"`
+
+	// Sound overrides the account default.
+	Sound string `json:"sound,omitempty"`
+}
+
+// Webhook configures the generic webhook channel: one JSON POST per alert, to
+// whatever the operator runs -- Home Assistant, Node-RED, a bridge of their
+// own.
+type Webhook struct {
+	Enabled bool `json:"enabled"`
+
+	URL string `json:"url"`
+
+	// Secret signs each request so a receiver can prove it came from here and
+	// reject a replay. Optional, and worth setting: an unauthenticated webhook
+	// endpoint is one anybody who learns the URL can feed false alarms to.
+	Secret secret.Secret `json:"secret,omitempty"`
+
+	// Headers are static headers added to every request -- an API key for the
+	// receiving service, a tenant id. The signature and timestamp headers
+	// cannot be overridden here; validation refuses that rather than letting
+	// an operator silently break every receiver's verification.
+	Headers map[string]string `json:"headers,omitempty"`
+
+	// InsecureSkipVerify turns off certificate verification, for a LAN
+	// receiver with a self-signed certificate. It is a real setting with a
+	// real cost, so it is named for what it does.
+	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
 }
 
 // Policy overrides one severity's escalation ladder.

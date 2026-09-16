@@ -34,8 +34,10 @@ escalating until a human closes it.**
 - **Notices its own sources dying.** Every source declares how long its silence
   may last, and silence past that becomes an incident — because a dead source
   and a quiet site look identical from outside.
-- Fans out to **ntfy** and **email** today; Pushover, generic JSON webhooks and
-  voice are planned.
+- Fans out to **ntfy**, **email**, **Pushover** and a **generic JSON webhook**
+  — so it slots into whatever you already run. Voice is planned.
+- Every channel has a **"send a test" button** that reports what actually
+  happened to that attempt, including the service's own error text.
 - A **local web UI**: status is visible to anyone on the LAN so it works as a
   wall display, and every change requires a password.
 - An **append-only audit record** in plain JSONL — including the events a rule

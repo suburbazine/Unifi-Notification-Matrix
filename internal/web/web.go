@@ -35,6 +35,7 @@
 package web
 
 import (
+	"context"
 	"embed"
 	"errors"
 	"html/template"
@@ -80,6 +81,11 @@ type Deps struct {
 
 	// SetPasswordHash persists a new hash.
 	SetPasswordHash func(string) error
+
+	// TestChannel sends one channel's proof-of-configuration message and
+	// reports what happened. Optional: a build that does not supply it simply
+	// has no test button.
+	TestChannel func(ctx context.Context, name string) error
 
 	// Checklist reports what is still needed to make this installation work.
 	//
@@ -253,6 +259,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/settings", s.requireAuth(http.HandlerFunc(s.handleSaveSettings)))
 	mux.Handle("GET /api/audit", s.requireAuth(http.HandlerFunc(s.handleAudit)))
 	mux.Handle("POST /api/password", s.requireAuth(http.HandlerFunc(s.handleChangePassword)))
+	mux.Handle("POST /api/channels/{name}/test", s.requireAuth(http.HandlerFunc(s.handleTestChannel)))
 	mux.Handle("POST /api/incidents/{id}/ack", s.requireAuth(http.HandlerFunc(s.handleAck)))
 	mux.Handle("POST /api/incidents/{id}/close", s.requireAuth(http.HandlerFunc(s.handleClose)))
 

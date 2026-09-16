@@ -199,7 +199,8 @@ Flags:
 
 Run "notifymatrix probe -h" for its own flags.
 
-Sources: protect, access. The Network source is not implemented yet.
+Sources: protect, access, network.
+Channels: ntfy, email, pushover, webhook.
 `, version, service.DefaultDataDir(), "notifymatrix")
 }
 
@@ -567,6 +568,9 @@ func runDaemon(ctx context.Context, dataDir string) error {
 				cfgMu.Unlock()
 				return nil
 			},
+			TestChannel: func(ctx context.Context, name string) error {
+				return delivery.Test(ctx, name)
+			},
 			Checklist: func() setup.Input {
 				cfgMu.RLock()
 				c := current
@@ -588,6 +592,8 @@ func runDaemon(ctx context.Context, dataDir string) error {
 						if in.Hooks[i].Name == rec.Name {
 							in.Hooks[i].Count = rec.Count
 							in.Hooks[i].LastAt = rec.LastAt
+							in.Hooks[i].Rejected = rec.Rejected
+							in.Hooks[i].LastReject = rec.LastReject
 						}
 					}
 				}

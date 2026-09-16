@@ -60,8 +60,30 @@ type consoleView struct {
 }
 
 type channelsView struct {
-	Ntfy  *ntfyView  `json:"ntfy,omitempty"`
-	Email *emailView `json:"email,omitempty"`
+	Ntfy     *ntfyView     `json:"ntfy,omitempty"`
+	Email    *emailView    `json:"email,omitempty"`
+	Pushover *pushoverView `json:"pushover,omitempty"`
+	Webhook  *webhookView  `json:"webhook,omitempty"`
+}
+
+// Every credential here is reported as a BOOLEAN, never as a value. The
+// settings response is the one place a secret could plausibly be echoed back
+// -- a form wants to show what is stored -- and it is the one place it must
+// not be.
+type pushoverView struct {
+	Enabled  bool   `json:"enabled"`
+	TokenSet bool   `json:"token_set"`
+	UserSet  bool   `json:"user_set"`
+	Device   string `json:"device,omitempty"`
+	Sound    string `json:"sound,omitempty"`
+}
+
+type webhookView struct {
+	Enabled            bool              `json:"enabled"`
+	URL                string            `json:"url"`
+	SecretSet          bool              `json:"secret_set"`
+	Headers            map[string]string `json:"headers,omitempty"`
+	InsecureSkipVerify bool              `json:"insecure_skip_verify"`
 }
 
 type ntfyView struct {
@@ -114,8 +136,26 @@ type consoleUpdate struct {
 }
 
 type channelsUpdate struct {
-	Ntfy  *ntfyUpdate  `json:"ntfy"`
-	Email *emailUpdate `json:"email"`
+	Ntfy     *ntfyUpdate     `json:"ntfy"`
+	Email    *emailUpdate    `json:"email"`
+	Pushover *pushoverUpdate `json:"pushover"`
+	Webhook  *webhookUpdate  `json:"webhook"`
+}
+
+type pushoverUpdate struct {
+	Enabled  bool   `json:"enabled"`
+	TokenNew string `json:"token_new"`
+	UserNew  string `json:"user_new"`
+	Device   string `json:"device"`
+	Sound    string `json:"sound"`
+}
+
+type webhookUpdate struct {
+	Enabled            bool              `json:"enabled"`
+	URL                string            `json:"url"`
+	SecretNew          string            `json:"secret_new"`
+	Headers            map[string]string `json:"headers"`
+	InsecureSkipVerify bool              `json:"insecure_skip_verify"`
 }
 
 type ntfyUpdate struct {
@@ -181,6 +221,29 @@ func viewSettings(c *config.Config) settingsView {
 			ServerURL: n.ServerURL,
 			Topic:     n.Topic,
 			TokenSet:  !n.Token.IsZero(),
+		}
+	}
+	if o := c.Channels.Pushover; o != nil {
+		v.Channels.Pushover = &pushoverView{
+			Enabled:  o.Enabled,
+			TokenSet: !o.Token.IsZero(),
+			UserSet:  !o.User.IsZero(),
+			Device:   o.Device,
+			Sound:    o.Sound,
+		}
+	}
+	if h := c.Channels.Webhook; h != nil {
+		v.Channels.Webhook = &webhookView{
+			Enabled: h.Enabled,
+			// The URL may itself carry a token in its query string, which is
+			// how a good many receivers authenticate. It is shown because the
+			// operator has to be able to see and edit what they typed -- and
+			// this response is already behind the session gate for exactly
+			// that reason.
+			URL:                h.URL,
+			SecretSet:          !h.Secret.IsZero(),
+			Headers:            h.Headers,
+			InsecureSkipVerify: h.InsecureSkipVerify,
 		}
 	}
 	if e := c.Channels.Email; e != nil {
@@ -333,6 +396,43 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 			touched = append(touched, "email password")
 		}
 		next.Channels.Email = &e
+	}
+	if in := upd.Channels.Pushover; in != nil {
+		o := config.Pushover{
+			Enabled: in.Enabled,
+			Device:  strings.TrimSpace(in.Device),
+			Sound:   strings.TrimSpace(in.Sound),
+		}
+		// Carried forward unless replaced. The form cannot echo the stored
+		// value back, so "unchanged" has to be expressible as "sent nothing".
+		if cur.Channels.Pushover != nil {
+			o.Token, o.User = cur.Channels.Pushover.Token, cur.Channels.Pushover.User
+		}
+		if in.TokenNew != "" {
+			o.Token = secret.Secret(in.TokenNew)
+			touched = append(touched, "pushover token")
+		}
+		if in.UserNew != "" {
+			o.User = secret.Secret(in.UserNew)
+			touched = append(touched, "pushover user key")
+		}
+		next.Channels.Pushover = &o
+	}
+	if in := upd.Channels.Webhook; in != nil {
+		h := config.Webhook{
+			Enabled:            in.Enabled,
+			URL:                strings.TrimSpace(in.URL),
+			Headers:            in.Headers,
+			InsecureSkipVerify: in.InsecureSkipVerify,
+		}
+		if cur.Channels.Webhook != nil {
+			h.Secret = cur.Channels.Webhook.Secret
+		}
+		if in.SecretNew != "" {
+			h.Secret = secret.Secret(in.SecretNew)
+			touched = append(touched, "webhook signing secret")
+		}
+		next.Channels.Webhook = &h
 	}
 
 	next.Rules = upd.Rules

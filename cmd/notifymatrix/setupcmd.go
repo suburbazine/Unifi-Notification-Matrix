@@ -88,12 +88,10 @@ func fromConfig(in setup.Input, cfg *config.Config) setup.Input {
 		}
 	}
 
-	if n := cfg.Channels.Ntfy; n != nil && n.Enabled {
-		in.ChannelsEnabled = append(in.ChannelsEnabled, "ntfy")
-	}
-	if e := cfg.Channels.Email; e != nil && e.Enabled {
-		in.ChannelsEnabled = append(in.ChannelsEnabled, "email")
-	}
+	// One list, built in one place: a second hand-maintained copy would drift
+	// and the checklist would disagree with the validator about whether
+	// anything can be delivered.
+	in.ChannelsEnabled = cfg.EnabledChannelNames()
 
 	in.AckBaseURL = cfg.Web.AckBaseURL
 	in.AckListen = strings.TrimSpace(cfg.Web.AckListen)
@@ -114,7 +112,9 @@ func fromConfig(in setup.Input, cfg *config.Config) setup.Input {
 	}
 	for _, h := range config.BuildHooks(cfg) {
 		in.Hooks = append(in.Hooks, setup.HookState{
-			Name: h.Name, Product: h.Product, URL: inbound.URLFor(base, h),
+			Name: h.Name, Product: h.Product,
+			URL:    inbound.URLFor(base, h),
+			Header: inbound.HeaderValueFor(h),
 		})
 	}
 	return in
@@ -123,9 +123,11 @@ func fromConfig(in setup.Input, cfg *config.Config) setup.Input {
 // daemonSetup is the shape the running daemon reports.
 type daemonSetup struct {
 	Hooks []struct {
-		Name   string    `json:"name"`
-		Count  int64     `json:"count"`
-		LastAt time.Time `json:"last_at"`
+		Name       string    `json:"name"`
+		Count      int64     `json:"count"`
+		LastAt     time.Time `json:"last_at"`
+		Rejected   int64     `json:"rejected"`
+		LastReject string    `json:"last_reject"`
 	} `json:"hooks"`
 	Sources []struct {
 		Name   string `json:"name"`
@@ -155,6 +157,8 @@ func enrichFromDaemon(in *setup.Input) {
 			if in.Hooks[i].Name == h.Name {
 				in.Hooks[i].Count = h.Count
 				in.Hooks[i].LastAt = h.LastAt
+				in.Hooks[i].Rejected = h.Rejected
+				in.Hooks[i].LastReject = h.LastReject
 			}
 		}
 	}
