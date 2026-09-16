@@ -109,6 +109,21 @@ func main() {
 	os.Exit(code)
 }
 
+// executableName is filepath.Base for a path that is always a WINDOWS path,
+// whatever the machine deciding what a separator is.
+//
+// filepath.Base on Linux does not treat a backslash as a separator, so
+// `C:\Users\x\Downloads\nm.exe` comes back whole and the suggested command
+// becomes `.\C:\Users\x\Downloads\nm.exe setup` -- which is not a command.
+// This only ever runs on Windows, but its test runs everywhere, and that is
+// what noticed.
+func executableName(argv0 string) string {
+	if i := strings.LastIndexAny(argv0, `/\`); i >= 0 {
+		return argv0[i+1:]
+	}
+	return argv0
+}
+
 // holdTheWindowOpen keeps a double-clicked console window on screen.
 //
 // Double-clicking this in Explorer ran it, printed the status, and closed the
@@ -123,7 +138,7 @@ func holdTheWindowOpen(out io.Writer, in io.Reader, alone bool, argv0 string) {
 	if !alone {
 		return
 	}
-	exe := filepath.Base(argv0)
+	exe := executableName(argv0)
 	fmt.Fprintf(out, `
 ---
 

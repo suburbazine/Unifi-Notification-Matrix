@@ -179,3 +179,22 @@ func TestAClosedStdinDeclinesRatherThanConsenting(t *testing.T) {
 		t.Fatal("consented to installing a service on behalf of a session with no human in it")
 	}
 }
+
+// The path in os.Args[0] is always a Windows path here -- this code only runs
+// on Windows -- but the machine deciding what a separator is may not be.
+// filepath.Base on Linux leaves `C:\Users\x\nm.exe` whole, and the suggested
+// command becomes `.\C:\Users\x\nm.exe setup`, which is not a command.
+func TestTheSuggestedCommandNamesTheFileOnEverySeparator(t *testing.T) {
+	for _, tc := range []struct{ argv0, want string }{
+		{`C:\Users\x\Downloads\notifymatrix-windows-amd64.exe`, "notifymatrix-windows-amd64.exe"},
+		{`C:/Users/x/Downloads/notifymatrix.exe`, "notifymatrix.exe"},
+		{`\server\share\notifymatrix.exe`, "notifymatrix.exe"},
+		{"/usr/local/bin/notifymatrix", "notifymatrix"},
+		{"notifymatrix.exe", "notifymatrix.exe"},
+		{"", ""},
+	} {
+		if got := executableName(tc.argv0); got != tc.want {
+			t.Errorf("executableName(%q) = %q, want %q", tc.argv0, got, tc.want)
+		}
+	}
+}
