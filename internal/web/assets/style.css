@@ -105,6 +105,12 @@ input,select,textarea{
 input:focus,select:focus,textarea:focus{outline:1px solid var(--accent);border-color:var(--accent)}
 textarea{min-height:7rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:0 14px}
+/* A checkbox and its label are one thing and read left to right. Stacking
+   them turned every row of toggles into a row of headings with stray boxes
+   underneath. */
+.checkrow{display:flex;align-items:center;gap:6px;margin:4px 14px 4px 0}
+.checkrow label{margin:0;white-space:nowrap}
+.checkrow input[type=checkbox]{margin:0}
 .note{font-size:12px;color:var(--muted);margin-top:4px}
 .formbar{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
 .signin{max-width:24rem}

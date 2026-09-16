@@ -344,6 +344,19 @@ func peerOf(r *http.Request) string {
 // ---------------------------------------------------------------------------
 
 func (s *Server) authenticated(r *http.Request) bool {
+	// A demo is open, and it is open because of the SAME field that puts the
+	// warning banner on every screen. That is the whole design of this switch:
+	// there is no way to have the open surface without the notice, and no
+	// second flag anyone could set to get one without the other.
+	//
+	// Nothing here is worth gating. Every incident is fabricated, no
+	// credentials exist, the configuration is held in memory and never
+	// written, and the settings screens are half of what somebody started a
+	// demo to look at -- behind a password nobody has been given, they would
+	// show a sign-in box instead.
+	if s.deps.Demo != "" {
+		return true
+	}
 	c, err := r.Cookie(sessionCookie)
 	if err != nil {
 		return false

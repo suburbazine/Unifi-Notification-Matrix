@@ -379,6 +379,7 @@ function refreshStatus() {
       sess.appendChild(el("span", "muted small",
         state.setupRequired ? "setup required" : "signed out"));
     }
+    renderDemoBanner(d.demo);
     renderHealth(d.health);
     if (wasAuthed !== state.authed) refreshTab();
   });
@@ -388,6 +389,16 @@ function refreshStatus() {
 
 function labelled(text, input) {
   var d = document.createElement("div");
+  // A checkbox reads as "[x] thing", not as a caption with a box under it.
+  // Stacking them made a row of toggles look like a row of headings with
+  // stray boxes, which is most of what the escalation editor is.
+  if (input && input.type === "checkbox") {
+    d.className = "checkrow";
+    var lab = el("label", null, text);
+    d.appendChild(input);
+    d.appendChild(lab);
+    return d;
+  }
   d.appendChild(el("label", null, text));
   d.appendChild(input);
   return d;
@@ -896,13 +907,30 @@ function refreshTab() {
 }
 function refreshAll() { refreshStatus(); refreshTab(); }
 
+var TAB_NAMES = ["incidents", "setup", "health", "settings", "audit"];
+
+// tabFromHash reads #health and friends, so a tab can be linked to.
+//
+// An operator telling somebody else to "look at Health" should be able to send
+// them there, rather than describing which tab to click. An unknown or absent
+// fragment falls back to the board, which is the page worth landing on.
+function tabFromHash() {
+  var h = (location.hash || "").replace(/^#/, "").toLowerCase();
+  return TAB_NAMES.indexOf(h) >= 0 ? h : "incidents";
+}
+
 function selectTab(name) {
   state.tab = name;
+  if (location.hash.replace(/^#/, "") !== name) {
+    // replaceState rather than a hash assignment: this must not add an entry
+    // to the history for every tab click, or Back becomes useless.
+    try { history.replaceState(null, "", "#" + name); } catch (e) { /* file:// */ }
+  }
   var tabs = document.querySelectorAll("nav.tabs button");
   for (var i = 0; i < tabs.length; i++) {
     tabs[i].setAttribute("aria-selected", tabs[i].getAttribute("data-tab") === name ? "true" : "false");
   }
-  ["incidents", "setup", "health", "settings", "audit"].forEach(function (t) {
+  TAB_NAMES.forEach(function (t) {
     byId("tab-" + t).hidden = (t !== name);
   });
   refreshTab();
@@ -915,6 +943,8 @@ document.addEventListener("DOMContentLoaded", function () {
       b.addEventListener("click", function () { selectTab(b.getAttribute("data-tab")); });
     })(tabs[i]);
   }
+  selectTab(tabFromHash());
+  window.addEventListener("hashchange", function () { selectTab(tabFromHash()); });
   refreshAll();
   // A wall display is left on this page for months. Polling is what keeps it
   // honest, and the interval is short because the board IS the product.
@@ -1480,4 +1510,25 @@ function pick(obj, key, choices, emptyLabel) {
   }
   sel.addEventListener("change", function () { obj[key] = sel.value; });
   return sel;
+}
+
+// renderDemoBanner marks a demo instance on every screen.
+//
+// Served by the API rather than baked into the page, so it is the DAEMON that
+// decides -- a page cannot claim to be real by being reloaded, and a
+// screenshot is not the only thing carrying the warning.
+function renderDemoBanner(text) {
+  var existing = byId("demo-banner");
+  if (!text) {
+    if (existing) existing.parentNode.removeChild(existing);
+    return;
+  }
+  if (existing) { existing.textContent = text; return; }
+  var b = el("div", "delivery-error", text);
+  b.id = "demo-banner";
+  b.style.margin = "0";
+  b.style.borderRadius = "0";
+  b.style.textAlign = "center";
+  b.style.fontWeight = "600";
+  document.body.insertBefore(b, document.body.firstChild);
 }

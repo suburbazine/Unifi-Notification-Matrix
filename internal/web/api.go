@@ -209,6 +209,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":             s.deps.Version,
+		"demo":                s.deps.Demo,
 		"now":                 s.now(),
 		"authenticated":       s.authenticated(r),
 		"setup_required":      s.deps.PasswordHash() == "",

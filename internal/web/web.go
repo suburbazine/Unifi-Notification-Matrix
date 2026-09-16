@@ -112,6 +112,14 @@ type Deps struct {
 	CheckUpdate func(context.Context) (UpdateState, error)
 	ApplyUpdate func(ctx context.Context, version string) error
 
+	// Demo, when set, is shown on every screen as a banner.
+	//
+	// A demo serves fabricated security alarms. Somebody arriving at a tab
+	// somebody else left open has to be able to tell, without reading anything
+	// else, that what they are looking at did not happen -- and the API says
+	// so too, so a screenshot is not the only thing carrying the warning.
+	Demo string
+
 	// Version is shown in the header. Optional.
 	Version string
 }

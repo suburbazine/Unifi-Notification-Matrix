@@ -42,6 +42,25 @@ camera that went dark an hour before a break-in, it is the whole failure.
 **This turns a one-shot UniFi event into a tracked incident that keeps
 escalating until a human closes it.**
 
+![The incident board: two critical alarms still escalating, one acknowledged but not cleared, and a delivery that is failing](docs/images/incidents.png)
+
+The board is the product. Note the third row: **acknowledged, and still open.**
+A notification is gone once it has been seen; an incident is not finished until
+the condition clears, and the difference is the reason this exists.
+
+### Look at it before you install it
+
+```
+notifymatrix demo
+```
+
+Opens the real interface over a fabricated site — no console, no API key, no
+camera, nothing pointed at your doors. Every screenshot on this page is that
+demo. It refuses to run against a real installation, never constructs a
+channel, and marks every screen and every incident as fabricated, because an
+alarm you cannot distinguish from a real one is how real ones stop being
+believed.
+
 - Ingests from UniFi **Protect**, **Access** and **Network** — the API where
   one exists, and an inbound webhook for the alarms that exist nowhere else.
 - **Tells you what is left to configure**, checked against your real setup:
@@ -135,6 +154,37 @@ never fire is worse than no rule.
 
 
 ---
+
+## What the interface actually shows
+
+**Setup tells you what is left**, checked against the running system rather
+than against the config file — so "configured" and "actually working" are
+different answers.
+
+![The setup checklist, showing a console configured and an Alarm Manager rule whose header is wrong](docs/images/setup.png)
+
+The webhook URLs are hidden here because this viewer is signed out. They carry
+their token, so anyone holding one can raise an alarm on your system.
+
+**Health answers "why is nothing happening"** — per source, per channel, and
+whether the service will come back on its own.
+
+![Health: three sources reporting, three channels, and one channel whose last delivery failed](docs/images/health.png)
+
+A channel that has started failing is on the screen, not buried in a log. So is
+the difference between "starts at boot" and "restarts after a crash", which are
+different mechanisms and only one is on by default.
+
+**Escalation is edited, not written.** Who gets told, how often it keeps
+asking, when it gives up — with the full ladder behind an Advanced tick for
+anyone who wants "ntfy now, ntfy and email in fifteen minutes".
+
+![The escalation editor, per severity, with a simple view and an advanced one](docs/images/escalation.png)
+
+**Inbound hooks are managed here too** — one endpoint per Alarm Manager rule,
+because that is the only way UniFi Network alarms exist at all.
+
+![The inbound hook editor](docs/images/hooks.png)
 
 ## The capability probe
 

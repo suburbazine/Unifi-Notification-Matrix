@@ -1344,3 +1344,50 @@ func channelsAsUpdate(c *config.Config) channelsUpdate {
 	}
 	return u
 }
+
+// The demo banner and the open settings surface are the SAME field, and this
+// is the test that keeps them that way.
+//
+// A demo is open because there is nothing to gate: every incident is
+// fabricated, no credentials exist, and the settings screens are most of what
+// somebody started a demo to look at. That is only acceptable while it is
+// impossible to have the open surface WITHOUT the notice on every screen.
+func TestOnlyADemoIsOpenAndADemoAlwaysSaysSo(t *testing.T) {
+	// A normal server: signed-out callers get nothing.
+	h := newHarness(t)
+	h.setPassword(testPassword)
+	for _, path := range []string{"/api/settings", "/api/audit"} {
+		res, _ := h.do("GET", path, nil)
+		if res.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("%s returned %d to a signed-out caller on a REAL server, want 401",
+				path, res.StatusCode)
+		}
+	}
+
+	// The same server with a demo banner: open, and saying so.
+	d := newHarness(t)
+	d.srv.deps.Demo = "DEMO — fabricated"
+	for _, path := range []string{"/api/settings", "/api/audit"} {
+		res, _ := d.do("GET", path, nil)
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("%s returned %d on a demo, want 200", path, res.StatusCode)
+		}
+	}
+	_, body := d.do("GET", "/api/status", nil)
+	if !strings.Contains(string(body), "DEMO") {
+		t.Fatalf("a demo did not announce itself in /api/status:\n%s", body)
+	}
+}
+
+// And the invariant stated the other way round: an empty banner must never
+// produce an open surface, whatever else is set.
+func TestAnEmptyBannerLeavesEverythingGated(t *testing.T) {
+	h := newHarness(t)
+	h.setPassword(testPassword)
+	h.srv.deps.Demo = ""
+
+	res, _ := h.do("POST", "/api/settings", map[string]any{})
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a write returned %d with no banner set, want 401", res.StatusCode)
+	}
+}

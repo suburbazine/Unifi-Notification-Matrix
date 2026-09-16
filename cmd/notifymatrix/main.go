@@ -53,6 +53,9 @@ import (
 // version is injected at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
+// dataDirWasGiven records whether --data-dir was passed, rather than defaulted.
+var dataDirWasGiven bool
+
 // splitCommand separates the verb from the flags, wherever the verb appears.
 //
 // Go's flag package stops parsing at the first non-flag argument, so
@@ -253,6 +256,9 @@ func run(alone bool) int {
 	}
 
 	dir := *dataDir
+	// Whether it was ASKED for matters to `demo`, which must not land on the
+	// real data directory by default.
+	dataDirWasGiven = dir != ""
 	if dir == "" {
 		dir = service.DefaultDataDir()
 	}
@@ -303,6 +309,9 @@ func dispatch(cmd, dataDir, user string, showLinks, showAll, interactive, portab
 		// in usage because it is not something to type.
 		return restartServiceHelper()
 
+	case "demo":
+		return demoCmd(dataDir, dataDirWasGiven)
+
 	case "set-password":
 		return setPassword(dataDir, interactive)
 
@@ -345,6 +354,7 @@ Either rename it to notifymatrix.exe, or read every command below as:
   notifymatrix status       report service state
   notifymatrix incidents    list open incidents (--links for ack URLs)
   notifymatrix set-password set the settings password (works with the service installed)
+  notifymatrix demo         look around a fabricated site, no console needed
   notifymatrix setup        what is left to do, step by step (--all for everything)
   notifymatrix selfcheck    report what this machine can do
   notifymatrix probe        ask a console what it exposes (local networks only)
@@ -1194,7 +1204,22 @@ It needs administrator rights, so Windows will ask you to confirm.`)
 		if interactive && askYesNo(os.Stdout, in, "Install and start it now?") {
 			return serviceCmd("install", dataDir, "", false)
 		}
-		fmt.Println("\nTo do it later, from a terminal:  " + typedCommand("install"))
+
+		// Offered HERE, to somebody who has just declined to install a
+		// security tool they have never seen working. "No" at this point is
+		// usually "not yet", and the honest next step is to let them look at
+		// it -- without a console, without an API key, and without pointing
+		// anything at their doors first.
+		fmt.Println(`
+Not ready to install it? You can look around a fabricated site instead --
+a board mid-incident, the settings, the setup checklist. Nothing is watched
+and nothing is delivered.`)
+		if interactive && askYesNo(os.Stdout, in, "Open the demo instead?") {
+			return demoCmd(dataDir, false)
+		}
+		fmt.Println("\nTo do either later, from a terminal:")
+		fmt.Println("    " + typedCommand("install") + "   install it properly")
+		fmt.Println("    " + typedCommand("demo") + "      look around first")
 
 	case st.State == service.StateRunning && !st.RecoversFromCrash:
 		// Loud, because this configuration looks completely healthy and will
