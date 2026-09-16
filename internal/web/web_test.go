@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -1242,4 +1243,104 @@ func TestTheRestartIsRecordedBeforeItHappens(t *testing.T) {
 	if !failed {
 		t.Error("nothing recorded that it failed; the operator sees an error and the record does not")
 	}
+}
+
+// Saving ANY setting from the interface must not disturb the password that
+// guards it.
+//
+// It did. applyUpdate built a fresh config.Web from three fields, which zeroed
+// PasswordHash, so saving a setting logged the operator out of their own
+// installation -- and on a service install the setup token that would let them
+// back in is printed to a stdout a service does not have. It was a lockout,
+// and it happened in the field before it was found here.
+func TestSavingSettingsDoesNotWipeThePasswordThatGuardsThem(t *testing.T) {
+	cur := testConfig()
+	cur.Web.PasswordHash = "pbkdf2-sha256$600000$abc$def"
+	cur.Web.AckListen = "0.0.0.0:51234"
+
+	next, _ := applyUpdate(cur, settingsUpdate{Web: webUpdate{Listen: "127.0.0.1:8322"}})
+
+	if next.Web.PasswordHash != cur.Web.PasswordHash {
+		t.Errorf("the settings password was wiped by saving settings: %q -> %q",
+			cur.Web.PasswordHash, next.Web.PasswordHash)
+	}
+	// The ack-only listener is what keeps a port forward from publishing the
+	// status page. Losing it silently re-widens an exposure the operator
+	// deliberately narrowed -- and the update above never mentions it, which
+	// is exactly the case a plain string field would have got wrong.
+	if next.Web.AckListen != cur.Web.AckListen {
+		t.Errorf("the ack-only listener was wiped by saving settings: %q -> %q",
+			cur.Web.AckListen, next.Web.AckListen)
+	}
+}
+
+// The structural version of the bug above: whole-struct assignment makes every
+// field this function does not name silently droppable, and the next field
+// anyone adds would go the same way. This asserts on the config as a whole
+// rather than on the two fields that happened to be lost.
+func TestNothingOutsideTheFormIsLostBySavingIt(t *testing.T) {
+	cur := testConfig()
+	cur.Web.PasswordHash = "pbkdf2-sha256$600000$abc$def"
+	cur.Web.AckListen = "0.0.0.0:51234"
+	cur.Web.AckKey = "ack-key-not-editable-here"
+
+	// A save that changes nothing: whatever comes back must equal what went in.
+	before := viewSettings(cur)
+	upd := settingsUpdate{
+		Consoles:   consolesAsUpdate(cur),
+		Channels:   channelsAsUpdate(cur),
+		Rules:      cur.Rules,
+		QuietHours: cur.QuietHours,
+		Web: webUpdate{
+			Listen:     cur.Web.Listen,
+			AckBaseURL: cur.Web.AckBaseURL,
+			AckListen:  &cur.Web.AckListen,
+		},
+	}
+	next, _ := applyUpdate(cur, upd)
+
+	if next.Web != cur.Web {
+		t.Errorf("a no-op save changed the web section:\n  before %+v\n  after  %+v",
+			cur.Web, next.Web)
+	}
+	if got := viewSettings(next); !reflect.DeepEqual(before, got) {
+		t.Errorf("a no-op save changed the settings:\n  before %+v\n  after  %+v", before, got)
+	}
+}
+
+// consolesAsUpdate and channelsAsUpdate round-trip the current config into the
+// shape the browser posts back, which is what a save with no edits looks like.
+func consolesAsUpdate(c *config.Config) []consoleUpdate {
+	out := make([]consoleUpdate, 0, len(c.Consoles))
+	for _, con := range c.Consoles {
+		out = append(out, consoleUpdate{
+			Name: con.Name, Host: con.Host, Fingerprint: con.Fingerprint,
+			InsecureSkipVerify: con.InsecureSkipVerify, Sources: con.Sources,
+			APIKeyCredential: con.APIKeyCredential,
+		})
+	}
+	return out
+}
+
+func channelsAsUpdate(c *config.Config) channelsUpdate {
+	var u channelsUpdate
+	if n := c.Channels.Ntfy; n != nil {
+		u.Ntfy = &ntfyUpdate{Enabled: n.Enabled, ServerURL: n.ServerURL, Topic: n.Topic}
+	}
+	if e := c.Channels.Email; e != nil {
+		u.Email = &emailUpdate{
+			Enabled: e.Enabled, Host: e.Host, Port: e.Port, Username: e.Username,
+			TLS: e.TLS, From: e.From, Recipients: e.Recipients,
+		}
+	}
+	if p := c.Channels.Pushover; p != nil {
+		u.Pushover = &pushoverUpdate{Enabled: p.Enabled, Device: p.Device, Sound: p.Sound}
+	}
+	if h := c.Channels.Webhook; h != nil {
+		u.Webhook = &webhookUpdate{
+			Enabled: h.Enabled, URL: h.URL, Headers: h.Headers,
+			InsecureSkipVerify: h.InsecureSkipVerify,
+		}
+	}
+	return u
 }

@@ -108,6 +108,7 @@ type emailView struct {
 type webView struct {
 	Listen     string `json:"listen"`
 	AckBaseURL string `json:"ack_base_url,omitempty"`
+	AckListen  string `json:"ack_listen,omitempty"`
 	AckKeySet  bool   `json:"ack_key_set"`
 }
 
@@ -180,6 +181,12 @@ type emailUpdate struct {
 type webUpdate struct {
 	Listen     string `json:"listen"`
 	AckBaseURL string `json:"ack_base_url"`
+	// A pointer, so "the client did not mention it" is distinguishable from
+	// "the client cleared it". AckListen is what stops a port forward from
+	// publishing the status page alongside the acknowledgement routes, and a
+	// plain string would let any client that omits the field silently re-widen
+	// an exposure the operator deliberately narrowed.
+	AckListen *string `json:"ack_listen"`
 }
 
 // viewSettings projects a config into the secret-free outbound shape.
@@ -194,6 +201,7 @@ func viewSettings(c *config.Config) settingsView {
 		Web: webView{
 			Listen:     c.Web.Listen,
 			AckBaseURL: c.Web.AckBaseURL,
+			AckListen:  c.Web.AckListen,
 			AckKeySet:  !c.Web.AckKey.IsZero(),
 		},
 	}
@@ -442,11 +450,25 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 	// acknowledgement link already sent, which for alerts still repeating means
 	// the only way left to acknowledge them is this UI -- a real cost, and not
 	// one to incur as a side effect of saving a form.
-	next.Web = config.Web{
-		Listen:     strings.TrimSpace(upd.Web.Listen),
-		AckKey:     cur.Web.AckKey,
-		AckBaseURL: strings.TrimSpace(upd.Web.AckBaseURL),
+	// Assigned field by field onto the COPY rather than built fresh.
+	//
+	// Building a fresh config.Web here zeroed every field this function does
+	// not name -- which silently wiped PasswordHash on every save. Saving any
+	// setting logged the operator out of their own installation, and on a
+	// service install the setup token that would let them back in is printed
+	// to a stdout that does not exist, so it was a lockout. AckListen went the
+	// same way, taking the scoping that keeps a port forward from publishing
+	// the status page with it.
+	//
+	// Whole-struct assignment is what made a new field silently droppable, so
+	// it does not happen here any more.
+	next.Web.Listen = strings.TrimSpace(upd.Web.Listen)
+	next.Web.AckBaseURL = strings.TrimSpace(upd.Web.AckBaseURL)
+	if upd.Web.AckListen != nil {
+		next.Web.AckListen = strings.TrimSpace(*upd.Web.AckListen)
 	}
+	next.Web.AckKey = cur.Web.AckKey
+	next.Web.PasswordHash = cur.Web.PasswordHash
 	if next.Web.Listen == "" {
 		next.Web.Listen = cur.Web.Listen
 	}
