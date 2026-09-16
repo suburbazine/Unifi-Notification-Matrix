@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UniFi Notification Matrix</title>
+<!--
+  Everything this page needs is served by this binary. No CDN, no framework,
+  no webfont: the LAN it runs on may have no route to the internet at all, and
+  an operator page that must fetch something before it works is a page that
+  fails exactly when the network is the problem.
+
+  The script is a separate file rather than inline because the
+  Content-Security-Policy on every response forbids inline script.
+-->
+<link rel="stylesheet" href="static/style.css">
+<script src="static/app.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <div class="brand">UniFi Notification Matrix <span class="ver">{{.Version}}</span></div>
+  <div class="right">
+    <span id="headline" class="badge">connecting</span>
+    <span id="session" class="muted"></span>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" data-tab="incidents" aria-selected="true">Incidents</button>
+  <button role="tab" data-tab="health" aria-selected="false">Health</button>
+  <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+  <button role="tab" data-tab="audit" aria-selected="false">Audit</button>
+</nav>
+
+<main>
+  <section id="tab-incidents">
+    <h3>Open incidents</h3>
+    <div id="open-incidents"></div>
+    <h3>Recently closed</h3>
+    <div id="recent-incidents"></div>
+  </section>
+
+  <section id="tab-health" hidden>
+    <h3>Sources</h3>
+    <div id="health-sources"></div>
+    <h3>Channels</h3>
+    <div id="health-channels"></div>
+    <h3>Service</h3>
+    <div id="health-service"></div>
+  </section>
+
+  <section id="tab-settings" hidden>
+    <div id="settings-body"></div>
+  </section>
+
+  <section id="tab-audit" hidden>
+    <h3>Recent activity</h3>
+    <div id="audit-body"></div>
+  </section>
+</main>
+</body>
+</html>

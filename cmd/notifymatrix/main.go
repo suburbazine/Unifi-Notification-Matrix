@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ack"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
@@ -193,6 +194,20 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		return err
 	}
 
+	// Opened early: the crash report below is one of the entries that matters
+	// most, and it happens before anything else is up.
+	auditLog, err := audit.Open(dataDir, audit.WithErrorHandler(func(err error) {
+		fmt.Fprintln(os.Stderr, "audit:", err)
+	}))
+	if err != nil {
+		return err
+	}
+	defer auditLog.Close()
+	_ = auditLog.Append(ctx, audit.Entry{
+		Kind: audit.KindService, Actor: "system",
+		Summary: fmt.Sprintf("started, version %s", version),
+	})
+
 	cfg, err := config.LoadOrCreate(dataDir)
 	if err != nil {
 		return err
@@ -219,6 +234,16 @@ func runDaemon(ctx context.Context, dataDir string) error {
 	// failing is itself something the operator needs to know, not only a field
 	// on an incident nobody is looking at.
 	delivery, err := config.BuildDelivery(cfg, func(r channel.Result) {
+		kind, summary := audit.KindAlertSent, "delivered via "+r.Channel
+		fields := map[string]string{"channel": r.Channel}
+		if r.Err != nil {
+			kind, summary = audit.KindAlertFailed, "delivery failed via "+r.Channel
+			fields["error"] = r.Err.Error()
+		}
+		_ = auditLog.Append(context.Background(), audit.Entry{
+			Kind: kind, Actor: "system", IncidentID: r.IncidentID,
+			Summary: summary, Fields: fields,
+		})
 		if r.Err != nil {
 			fmt.Fprintf(os.Stderr, "delivery failed on %s for incident %s: %v\n",
 				r.Channel, r.IncidentID, r.Err)
@@ -250,7 +275,32 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		fmt.Fprintf(os.Stderr, "      edit %s\n", config.Path(dataDir))
 	}
 
-	engine, err := rule.New(db, cfg.Rules)
+	engine, err := rule.New(db, cfg.Rules,
+		rule.WithAuditHook(func(res rule.Result, ev event.Event) {
+			kind := map[rule.Outcome]audit.Kind{
+				rule.OutcomeOpened:   audit.KindIncidentOpened,
+				rule.OutcomeUpdated:  audit.KindIncidentUpdated,
+				rule.OutcomeRecurred: audit.KindIncidentRecurred,
+				rule.OutcomeIgnored:  audit.KindIncidentIgnored,
+				rule.OutcomeResolved: audit.KindResolved,
+			}[res.Outcome]
+			if kind == "" {
+				return // a no-op clear is not worth a line
+			}
+			e := audit.Entry{
+				Kind: kind, Actor: ev.Source, DedupKey: ev.DedupKey(),
+				Severity: string(res.Decision.Severity),
+				Summary:  string(res.Outcome) + ": " + ev.Condition,
+				Fields:   map[string]string{"entity": ev.Entity.Name, "event": ev.Kind},
+			}
+			if res.Incident != nil {
+				e.IncidentID = res.Incident.ID
+			}
+			if len(res.Decision.MatchedBy) > 0 {
+				e.Fields["rules"] = strings.Join(res.Decision.MatchedBy, ", ")
+			}
+			_ = auditLog.Append(context.Background(), e)
+		}))
 	if err != nil {
 		return err
 	}
@@ -265,6 +315,11 @@ func runDaemon(ctx context.Context, dataDir string) error {
 	// reporting its own failure.
 	if prev != nil {
 		fmt.Fprintln(os.Stderr, "WARNING: "+service.CrashDetail(prev))
+		_ = auditLog.Append(ctx, audit.Entry{
+			Kind: audit.KindService, Actor: "system",
+			Summary: "the previous run did not shut down cleanly",
+			Fields:  map[string]string{"detail": service.CrashDetail(prev)},
+		})
 		if _, err := engine.RaiseInternal(ctx, event.ConditionUncleanShutdown,
 			incident.SeverityHigh,
 			"NotifyMatrix did not shut down cleanly",
@@ -292,6 +347,12 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		}
 		ackHandler, err := ack.New(db, signer,
 			ack.WithAuditHook(func(inc *incident.Incident, via string) {
+				_ = auditLog.Append(context.Background(), audit.Entry{
+					Kind: audit.KindAcknowledged, Actor: via,
+					IncidentID: inc.ID, DedupKey: inc.DedupKey,
+					Severity: string(inc.Severity),
+					Summary:  "acknowledged: " + inc.Title,
+				})
 				where := via
 				if where == "" {
 					where = "an unnamed channel"
@@ -377,6 +438,9 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		if err := marker.Finish(); err != nil {
 			fmt.Fprintln(os.Stderr, "warning: could not clear the run marker:", err)
 		}
+		_ = auditLog.Append(context.Background(), audit.Entry{
+			Kind: audit.KindService, Actor: "system", Summary: "stopped cleanly",
+		})
 		fmt.Println("stopped cleanly")
 	}
 	return runErr

@@ -1,0 +1,112 @@
+/* The operator's house style. These custom properties are theirs and are
+   matched exactly so this page reads as part of the same family. */
+:root{
+  --bg:#14161a; --card:#1c1f25; --line:#2c313a;
+  --fg:#e6e8ec; --muted:#949bab; --accent:#4a9eff;
+  --warn:#f0b429; --err:#ff6b6b; --ok:#3ddc84;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,sans-serif;
+}
+a{color:var(--accent)}
+
+/* Slim header: product on the left, state on the right. */
+header.bar{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:9px 16px;background:var(--card);border-bottom:1px solid var(--line);
+  position:sticky;top:0;z-index:5;
+}
+header.bar .brand{font-weight:600;letter-spacing:.01em}
+header.bar .brand .ver{color:var(--muted);font-weight:400;font-size:12px;margin-left:6px}
+header.bar .right{display:flex;align-items:center;gap:10px;font-size:13px}
+
+nav.tabs{display:flex;gap:4px;padding:10px 16px 0;flex-wrap:wrap}
+nav.tabs button{
+  font:inherit;font-size:13px;color:var(--muted);background:transparent;
+  border:1px solid transparent;border-radius:6px;padding:5px 10px;cursor:pointer;
+}
+nav.tabs button:hover{color:var(--fg)}
+nav.tabs button[aria-selected="true"]{
+  color:var(--fg);background:var(--card);border-color:var(--line);
+}
+
+main{padding:12px 16px 40px;max-width:70rem;margin:0 auto}
+section[hidden]{display:none}
+
+h3{
+  margin:18px 0 8px;font-size:11px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--muted);
+}
+h3:first-child{margin-top:4px}
+
+.card{
+  background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:12px 14px;margin:0 0 10px;
+}
+.card.acked{border-left:3px solid var(--warn)}
+.card.crit{border-left:3px solid var(--err)}
+.card.done{opacity:.62}
+.row{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.grow{flex:1 1 auto;min-width:0}
+.title{font-weight:600}
+.muted{color:var(--muted)}
+.small{font-size:12.5px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+.detail{
+  white-space:pre-wrap;margin-top:6px;color:var(--muted);font-size:13px;
+}
+.err{color:var(--err)}
+.ok{color:var(--ok)}
+.warn{color:var(--warn)}
+
+/* The delivery error is the thing an operator must not miss. */
+.delivery-error{
+  margin-top:8px;padding:7px 9px;border:1px solid var(--err);border-radius:6px;
+  color:var(--err);font-size:13px;word-break:break-word;
+}
+
+.badge{
+  display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;
+  letter-spacing:.06em;text-transform:uppercase;border:1px solid var(--line);
+  color:var(--muted);white-space:nowrap;
+}
+.badge.sev-critical{color:var(--err);border-color:var(--err)}
+.badge.sev-high{color:var(--warn);border-color:var(--warn)}
+.badge.sev-medium{color:var(--accent);border-color:var(--accent)}
+.badge.sev-low,.badge.sev-info{color:var(--muted)}
+.badge.st-open,.badge.st-alerting{color:var(--err);border-color:var(--err)}
+.badge.st-acknowledged{color:var(--warn);border-color:var(--warn)}
+.badge.st-resolved{color:var(--accent);border-color:var(--accent)}
+.badge.st-closed{color:var(--muted)}
+.badge.on{color:var(--ok);border-color:var(--ok)}
+.badge.off{color:var(--err);border-color:var(--err)}
+
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:5px 10px 5px 0;vertical-align:top}
+th{color:var(--muted);font-weight:500;font-size:11px;letter-spacing:.07em;text-transform:uppercase}
+tr+tr td{border-top:1px solid var(--line)}
+
+button.act{
+  font:inherit;font-size:13px;color:var(--fg);background:transparent;
+  border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer;
+}
+button.act:hover{border-color:var(--accent);color:var(--accent)}
+button.act.primary{border-color:var(--accent);color:var(--accent)}
+button.act[disabled]{opacity:.5;cursor:default}
+
+label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
+input,select,textarea{
+  font:inherit;font-size:13px;color:var(--fg);background:var(--bg);
+  border:1px solid var(--line);border-radius:6px;padding:6px 8px;width:100%;
+}
+input:focus,select:focus,textarea:focus{outline:1px solid var(--accent);border-color:var(--accent)}
+textarea{min-height:7rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:0 14px}
+.note{font-size:12px;color:var(--muted);margin-top:4px}
+.formbar{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
+.signin{max-width:24rem}
+.msg{font-size:13px;margin-top:8px}
+.empty{color:var(--muted);font-size:13px;padding:2px 0 10px}

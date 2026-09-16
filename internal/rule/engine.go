@@ -58,6 +58,9 @@ type Engine struct {
 
 	mu    sync.RWMutex
 	rules Set
+
+	// onDecision records what the engine concluded. Set via WithAuditHook.
+	onDecision func(Result, event.Event)
 }
 
 // Option configures an Engine.
@@ -68,6 +71,15 @@ type Option func(*Engine)
 // Must be safe for concurrent use: several sources emit at once and Handle
 // does not serialise them.
 func WithClock(f func() time.Time) Option { return func(e *Engine) { e.now = f } }
+
+// WithAuditHook records every decision, including the ones that silenced an
+// event.
+//
+// Ignores are audited as deliberately as alerts. "Why was I not paged" is the
+// harder question and it is unanswerable unless the silences are written down.
+func WithAuditHook(f func(Result, event.Event)) Option {
+	return func(e *Engine) { e.onDecision = f }
+}
 
 // WithIDs injects the incident id generator.
 //
@@ -120,6 +132,14 @@ const createAttempts = 3
 
 // Handle applies the rules to an event and updates the store.
 func (e *Engine) Handle(ctx context.Context, ev event.Event) (Result, error) {
+	res, err := e.handle(ctx, ev)
+	if err == nil && e.onDecision != nil {
+		e.onDecision(res, ev)
+	}
+	return res, err
+}
+
+func (e *Engine) handle(ctx context.Context, ev event.Event) (Result, error) {
 	d := e.ruleSet().Decide(ev)
 	if d.Ignore {
 		return Result{Outcome: OutcomeIgnored, Decision: d}, nil

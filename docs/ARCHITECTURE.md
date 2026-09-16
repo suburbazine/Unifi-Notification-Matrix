@@ -759,6 +759,71 @@ download, and the one-time Azure setup — is [RELEASING.md](RELEASING.md).
 
 ---
 
+## 10a. Capability probe and community submissions — *planned*
+
+The problem this solves is already recorded in [SOURCES.md](SOURCES.md) and it
+is not going away: **the surfaces this product reads are version-gated and
+under-observed.** Protect's event vocabulary went from 16 types at spec v6.2.83
+to 39 at v7.3.53. Only **two** Access notification message shapes have ever
+been captured, both from one hub model on one day. Network's Alarm Manager
+payload is undocumented and its message field has been spelled four different
+ways across firmware.
+
+No amount of reading documentation fixes that. The only thing that does is
+observing real consoles, which means the operators who run them.
+
+**The shape:** `notifymatrix probe` enumerates what a console actually exposes
+— which endpoints answer, which event types arrive on each socket, which
+fields are present — and writes a JSONL capability report. Diffed against what
+this build knows, it produces two useful things locally (what this console has
+that we do not handle, and what we expect that this console does not) and one
+useful thing collectively: a file the operator may choose to contribute.
+
+### There is prior art, and it is most of the way there
+
+Earlier in-house work already built a field probe of exactly this shape, and
+its instincts are right: read-only by default, the one state-changing call
+gated behind an explicit opt-in flag, a hard refusal to ever call the
+irreversible endpoint, credentials taken from the environment or prompted
+without echo and never written to the report, and credential-bearing stream
+URLs redacted out of the output. Start from that, not from scratch.
+
+**What it does NOT do is the part this needs.** Its reports redact
+*credentials* but keep *identity* — real camera names and device ids sit in
+the field-data files. For a local diagnostic pasted into a support thread with
+a known party, that is a reasonable line. For a submission published to a
+public repository it is not, because a camera name is a room name and a door
+name is a door name.
+
+So the probe is inherited; the **pseudonymisation layer is new**, and it is the
+only genuinely new engineering here.
+
+### The constraint that decides the design
+
+**A raw probe of a UniFi console is a map of somebody's building.** Camera
+names are room names. Door names are door names. MACs, site topology, user
+counts, and — on the wrong endpoint — credential-bearing URLs. A submission
+pipeline that published that would be a serious breach dressed as a community
+feature, and it would be entirely our fault.
+
+So the pipeline is **capture → redact → SHOW THE OPERATOR → submit**, and
+never fewer steps than that:
+
+- **Redaction is not optional and not a flag.** Names, MACs, IPs, serials and
+  ids are replaced with stable pseudonyms at capture time. What a schema
+  contribution needs is *shapes and vocabulary* — field names, enum values,
+  types, which endpoints exist at which firmware version — and none of that
+  requires a real camera name.
+- **The operator reads the exact bytes before anything leaves.** Not a summary
+  of them. The submission file is written to disk, the CLI prints it, and
+  contributing is a separate deliberate act.
+- **Submission is never automatic and there is no phone-home.** ARCHITECTURE §1
+  says nothing phones home; a probe that uploaded on its own would make that
+  false.
+- **Firmware version and model are the payload.** A report that cannot say
+  which console produced a shape is not worth having, so those are kept — and
+  they are also the only identifying facts that genuinely need to be.
+
 ## 11. Open items
 
 Items 1–4 of the original list are **closed** by the September 2026 research —
