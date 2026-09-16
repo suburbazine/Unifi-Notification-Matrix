@@ -89,9 +89,10 @@ nothing about channels, and a channel knows nothing about UniFi.
   ✓ unifi/              shared per-console pacing, backoff, TLS + cert pinning
     source/
   ✓   protect/          Protect ingest: two WebSockets + reconciliation sweep
-  ·   access/           Access ingest: notifications socket + system-log tail
+  ✓   access/           Access ingest: socket + system-log tail + door polling
   ·   network/          Network ingest: poll + Alarm Manager webhook
   ·   inbound/          generic webhook receiver (Alarm Manager, other apps)
+  ✓ ingest/             runs the sources; the deadman that notices a dead one
   ✓ event/              Event, Entity, the shared condition vocabulary
   ✓ rule/               matching, severity mapping, event → incident
   ✓ incident/           lifecycle (state derived, not stored) + Store interface
@@ -414,26 +415,73 @@ relitigated every time someone notices how convenient it looks.
 
 Both captured message shapes carry lock state and `remain_unlock` and **nothing
 else** — no door position, no tamper, no offline, no battery, no emergency
-state. System logs are therefore the **engine of record** for every Access
-alarm class, with the socket as an accelerator on top.
+state. So the Access source has **three inputs, not one**, and that is forced
+by the surface rather than chosen:
+
+1. the notifications **socket**, for fast lock state,
+2. the **system log**, which is the engine of record for denials,
+3. a **door-position poll**, because held-open does not exist anywhere.
 
 - **Poll floor is ~3 minutes**, set by measured log *indexing lag* (up to ~3.5
   min), not by the 220 ms pacer. Polling faster buys nothing and spends budget
   the Protect reconciliation sweeps need.
-- **Overlap windows and dedupe on `LogEntry.ID`.** `since`/`until` are seconds
+- **Overlap windows and dedupe on the row id.** `since`/`until` are seconds
   while `event.published` is milliseconds, and boundary semantics have never
   been measured. The row id can be trusted for correctness; the time boundary
-  cannot.
-- **A connected-but-silent socket must drive an automatic fallback to
-  polling.** On unfamiliar hub hardware the socket connects and then says
-  nothing, which in this product is silent total failure of the Access source.
-  Counting unrecognised messages is what makes that visible; acting on the
-  count is what makes it survivable.
+  cannot. **The watermark advances only when every topic succeeded** — a
+  partial window looks exactly like a complete one, and on a log with no cursor
+  a row skipped is a row gone.
+- **A connected-but-silent socket is reported as a fault.** On unfamiliar hub
+  hardware the socket connects and then says nothing, which is silent total
+  failure of the fast half of this source. Both known shapes came from one hub
+  model on one day, so this is the likely failure, not a remote one.
 - **Three rules are not offered, because the features do not exist**:
-  anti-passback (an unshipped roadmap item since 2022), held-open-past-threshold
-  (an open feature request — derived by polling `door_position_status` instead),
-  and battery-low (the Access line is entirely PoE). Offering a rule that can
-  never fire is worse than omitting it.
+  anti-passback (an unshipped roadmap item since 2022), tamper (no confirmed
+  representation on any surface), and battery-low (the Access line is entirely
+  PoE). Offering a rule that can never fire is worse than omitting it.
+
+#### The two alarms an access-control system owes you, and neither exists
+
+**Door forced** and **door held** are the reason somebody buys door control,
+and UniFi Access reports neither in a machine-readable way. Access computes
+"Unauthorized Opening" internally and does not expose it; held-open is an open
+feature request. So both are **derived here**, and the derivation is the
+interesting part.
+
+**Held open** is the easy one: a door position that has read open for longer
+than a threshold.
+
+**Forced** is not, because the obvious rule is wrong. "Locked and open" is the
+state a forced entry ends in — and it is *also* the state an ordinary entry
+ends in on any lock that relocks while the door is still swinging. A rule on
+the current pair raises a critical alarm every time somebody walks through.
+
+The transition is what separates them:
+
+```
+  normal entry:  unlock  ->  open  ->  relock   (open happened while unlocked)
+  forced entry:  locked  ->  open             (open happened while locked)
+```
+
+So forced is decided at the moment the door *becomes* open, never afterwards.
+Polling alone cannot see that ordering either — a lock that opens and relocks
+between two reads looks like it was never unlocked — so the test is not "is it
+locked now" but **"was it unlocked recently"**, with the socket supplying the
+timestamps and a grace window (45s) as the bound. That is what the socket is
+for, and it is why the socket being mute is a reported fault rather than a
+tolerable degradation.
+
+Two honest limits:
+
+- **On a cold start the classification is skipped.** A door already open when
+  the daemon first looks has no knowable ordering. It is still reported, as
+  held-open, which is what it observably is rather than a guess about how it
+  got that way.
+- **`door_position_status` is `"none"` on most doors.** A measurement across 28
+  doors on one console found 26 with no sensor fitted. `"none"` is not
+  `"close"`, and treating it as shut would show 26 reassuring green rows for
+  doors the product cannot see at all — so Health reports how many doors can
+  actually be watched, and it is usually a small number.
 
 ### Network — no event surface in the API at all
 
@@ -447,6 +495,48 @@ Its payload is undocumented, field-inconsistent across firmware (the message
 field has been `message`, `msg`, `text` and `description`), and carries **no
 controller timestamp** — unlike Protect's, which does. Stamp on arrival and say
 so in the incident.
+
+### Running them: the supervisor, and the deadman
+
+A source that is constructed does nothing. That is not a truism here — it was
+the actual state of this daemon for several milestones: the Protect source was
+complete, tested and never instantiated, so `notifymatrix run` started, served
+the interface, ran the escalation scheduler and **ingested nothing at all**,
+while every health surface it had reported green.
+
+`internal/ingest` runs them, and it has a second job that is easy to leave out:
+
+**A source that dies quietly is indistinguishable from a quiet site**, and on
+an alarm product those are opposite situations. One means nothing is happening;
+the other means nothing would be reported if it did. So every source declares
+a liveness window, and silence past it becomes an incident that escalates like
+any other — raised through the internal path, so an operator ignore rule aimed
+at a noisy camera cannot silence the product reporting that it has stopped
+working. It resolves when the source speaks again: a deadman that raises and
+never clears teaches people to ignore the one message that means the product
+itself is broken.
+
+Three rules about failure, all of them the same rule:
+
+- **A source that cannot run stops, and says so.** Sources return an error only
+  for something reconnecting cannot fix. Looping on that would spin against a
+  configuration that cannot work — but a stopped source is invisible, so it
+  raises an incident first.
+- **One broken source does not stop the others.** A site whose Access key is
+  wrong still wants its cameras watched. Refusing to start anything removes
+  working coverage to punish a typo.
+- **Nothing configured is said out loud.** A daemon with no sources will never
+  raise anything from a console, which is the single most important thing its
+  operator could be told.
+
+The same reasoning changed what the configuration *refuses*. Everything
+`Validate` reports prevents startup, and two things had ended up there that
+should not have: a console with `insecure_skip_verify` and no pin yet — which
+is an ordinary UniFi console on day one — and a console listing the
+unimplemented `network` source. Both are now **warnings**: said at startup and
+shown in the interface, but not a reason to leave a site unmonitored. An
+unpinned daemon that is watching beats a pinned one that is not running, and an
+operator locked out at setup never reaches the step that fixes it.
 
 ### One operational consequence of pinning
 

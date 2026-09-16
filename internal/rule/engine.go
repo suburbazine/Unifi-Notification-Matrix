@@ -264,10 +264,28 @@ func (e *Engine) resolve(ctx context.Context, key string, d Decision, now time.T
 // at a noisy camera must not be able to silence the product reporting its own
 // failure.
 func (e *Engine) RaiseInternal(ctx context.Context, condition string, sev incident.Severity, title, detail string) (Result, error) {
+	return e.RaiseInternalFor(ctx, selfEntity(), condition, sev, title, detail)
+}
+
+// selfEntity is the product itself, for internal incidents about the whole
+// service rather than about one part of it.
+func selfEntity() event.Entity {
+	return event.Entity{ID: "notifymatrix", Name: "NotifyMatrix", Kind: "service"}
+}
+
+// RaiseInternalFor opens an internal incident against a named part of the
+// product.
+//
+// The entity matters because internal faults are not all the same fault. A
+// deadman firing for the Protect source and one firing for Access are two
+// problems with two fixes, and collapsing them into one incident -- which is
+// what a fixed entity does, through the dedup key -- means the second one is
+// absorbed as an update to the first and nobody is ever told about it.
+func (e *Engine) RaiseInternalFor(ctx context.Context, ent event.Entity, condition string, sev incident.Severity, title, detail string) (Result, error) {
 	ev := event.Event{
 		Source:     "internal",
 		Kind:       condition,
-		Entity:     event.Entity{ID: "notifymatrix", Name: "NotifyMatrix", Kind: "service"},
+		Entity:     ent,
 		Condition:  condition,
 		Severity:   sev,
 		Title:      title,
@@ -284,6 +302,18 @@ func (e *Engine) RaiseInternal(ctx context.Context, condition string, sev incide
 		return Result{}, err
 	}
 	return e.open(ctx, key, ev, d, e.now())
+}
+
+// ResolveInternalFor closes an internal incident when the fault it described
+// has stopped.
+//
+// Symmetric with RaiseInternalFor and not optional: a deadman that can raise
+// but never resolve leaves a source that recovered nagging forever, and the
+// operator learns to ignore the one message that means the product itself is
+// broken.
+func (e *Engine) ResolveInternalFor(ctx context.Context, ent event.Entity, condition string) (Result, error) {
+	key := incident.Key("internal", ent.ID, condition)
+	return e.resolve(ctx, key, Decision{MatchedBy: []string{"internal"}}, e.now())
 }
 
 // render builds the alert text.

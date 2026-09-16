@@ -62,6 +62,45 @@ const (
 	ConditionRelaySwitched  = "relay-switched"
 	ConditionCredentialScan = "credential-scan"
 
+	// Access. Doors, not cameras, and the failure modes do not overlap.
+	//
+	// Three alarm classes that a reader might expect here are deliberately
+	// absent, because UniFi Access does not represent them and inventing a
+	// condition for something no surface reports would put a permanently
+	// silent entry on the board:
+	//
+	//   - TAMPER has no confirmed representation on any Access surface.
+	//   - BATTERY-LOW does not apply: the line is PoE end to end, and the only
+	//     battery is an external backup on the Enterprise hub.
+	//   - ANTI-PASSBACK is not a shipping feature. It has been requested since
+	//     2022 and acknowledged three times by Ubiquiti staff without ever
+	//     appearing. An earlier research pass reported it as real; that was
+	//     wrong (SOURCES.md §2). Do not add a rule for it.
+	ConditionDoorForced   = "door-forced-open"
+	ConditionDoorHeld     = "door-held-open"
+	ConditionAccessDenied = "access-denied"
+
+	// ConditionDoorUnlocked is a door in Access's "remain unlocked" state.
+	//
+	// Emitted at a low severity on purpose. Nothing on any Access surface
+	// distinguishes a SCHEDULED unlock from one somebody set by hand -- unlock
+	// schedule events never reach the log API at all -- so a site with an
+	// ordinary business-hours schedule would be paged every morning. It goes
+	// on the board, and a site that has no schedules can raise it with a rule,
+	// which is a decision they get to make knowingly.
+	ConditionDoorUnlocked = "door-remain-unlocked"
+
+	// ConditionAccessCritical relays a row from Access's own `critical` log
+	// topic.
+	//
+	// ONE condition for the whole topic rather than one per log key. The key
+	// vocabulary has never been enumerated from hardware, and a condition
+	// minted from an unrecognised key would put an unbounded, unreviewable set
+	// of strings into stored dedup keys -- which is the one thing in this
+	// vocabulary that cannot be undone cheaply. The key travels in the event's
+	// Kind and Detail instead, where it is readable without being load-bearing.
+	ConditionAccessCritical = "access-critical"
+
 	// ConditionStreamMute is a source reporting on ITSELF: a stream that
 	// connected and whose traffic has never been understood. See
 	// DESIGN-RULES.md §2 — a live-but-mute stream is a fault, not a success,

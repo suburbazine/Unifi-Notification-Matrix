@@ -1,12 +1,13 @@
 # UniFi Notification Matrix
 
-> **Status: usable against UniFi Protect; not yet against Access or Network.**
+> **Status: watching UniFi Protect and Access; Network is not written.**
 > Built and tested: the incident lifecycle, the durable store, the escalation
 > scheduler, the rule engine, acknowledgement, the secret store, configuration,
-> the Protect source, the ntfy and email channels, the audit record, the local
-> web UI, the capability probe, and Windows-service / systemd integration.
-> **The Access and Network sources are not written**, so two of the three
-> products in the name do not ingest yet.
+> the **Protect and Access sources**, the ingest supervisor and its deadman,
+> the ntfy and email channels, the audit record, the local web UI, the
+> capability probe, and Windows-service / systemd integration.
+> **The Network source is not written**, so a console's Network application is
+> not watched.
 
 UniFi tells you a thing happened. Once.
 
@@ -18,11 +19,17 @@ camera that went dark an hour before a break-in, it is the whole failure.
 **This turns a one-shot UniFi event into a tracked incident that keeps
 escalating until a human closes it.**
 
-- Ingests from UniFi **Protect** today; **Access** and **Network** are
-  designed and researched but not yet written.
+- Ingests from UniFi **Protect** and **Access**. Network is designed and
+  researched but not yet written.
+- **Derives the two door alarms UniFi Access does not report at all**: a door
+  forced open, and a door held open past a threshold. Neither exists as a
+  readable value on any Access surface.
 - Escalates on a policy ladder that widens over time: push, then email, then
   (later) an automated phone call.
 - **Acknowledgement works from a phone with one tap**, no login and no VPN.
+- **Notices its own sources dying.** Every source declares how long its silence
+  may last, and silence past that becomes an incident — because a dead source
+  and a quiet site look identical from outside.
 - Fans out to **ntfy** and **email** today; Pushover, generic JSON webhooks and
   voice are planned.
 - A **local web UI**: status is visible to anyone on the LAN so it works as a
@@ -40,6 +47,36 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design,
 [docs/SOURCES.md](docs/SOURCES.md) for what each UniFi application actually
 exposes, and [docs/DESIGN-RULES.md](docs/DESIGN-RULES.md) for the rules the
 code follows and why.
+
+---
+
+## What it can and cannot see on UniFi Access
+
+Access is the product with the largest gap between what you would expect and
+what it reports, so it is worth being explicit.
+
+**Derived here, because Access reports neither:**
+
+| Alarm | How |
+|---|---|
+| Door forced open | The door became open *while locked*, with no unlock shortly before it. Decided on the transition, not the current state — "locked and open" is also where an ordinary entry ends up on a fast-relocking lock. |
+| Door held open | The door position has read open for longer than the threshold (60s by default). |
+
+**Read from the system log:** denied credentials, and the console's own
+`critical` topic. The log lags by up to ~3.5 minutes, so the poll floor is
+three minutes and rows are de-duplicated by row id rather than by time.
+
+**Not offered, because the feature does not exist in Access:**
+anti-passback (an unshipped roadmap item since 2022), tamper (no representation
+on any surface), and battery-low (the line is entirely PoE). A rule that can
+never fire is worse than no rule.
+
+> **Most doors cannot be watched this way.** Forced and held both need a door
+> position sensor, and `door_position_status` reads `"none"` on any door
+> without one — a measurement across 28 doors on one console found 26 of them.
+> The status page reports how many of your doors actually have a sensor, so
+> this is visible rather than assumed.
+
 
 ---
 

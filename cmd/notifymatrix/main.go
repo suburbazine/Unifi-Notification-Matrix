@@ -3,11 +3,15 @@
 //
 // The incident lifecycle, the durable store, the escalation scheduler, the
 // rule engine, the acknowledgement surface, the secret store, configuration,
-// the Protect source, the ntfy and email channels, the audit record, the web
-// UI, the capability probe and the service integration are real and tested.
-// The Access and Network sources are not, so two of the three products in the
-// name do not ingest yet -- `notifymatrix probe` is how a console's Access and
-// Network surfaces get described before they do.
+// the Protect and Access sources, the ingest supervisor and its deadman, the
+// ntfy and email channels, the audit record, the web UI, the capability probe
+// and the service integration are real and tested.
+//
+// The NETWORK source is not written, so a console's Network application is not
+// watched -- `notifymatrix probe` is how its surfaces get described before it
+// is. Anything that lists `network` under a console's sources is reported at
+// startup rather than accepted quietly, because a config that is waved through
+// reads as a WAN that is being watched.
 package main
 
 import (
@@ -33,6 +37,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ingest"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/rule"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/service"
@@ -187,7 +192,7 @@ Flags:
 
 Run "notifymatrix probe -h" for its own flags.
 
-Not yet implemented: the Access and Network sources.
+Sources: protect, access. The Network source is not implemented yet.
 `, version, service.DefaultDataDir(), "notifymatrix")
 }
 
@@ -225,6 +230,17 @@ func runDaemon(ctx context.Context, dataDir string) error {
 	cfg, err := config.LoadOrCreate(dataDir)
 	if err != nil {
 		return err
+	}
+	// Usable, but worth saying out loud. These do NOT refuse the start: an
+	// unpinned daemon that is watching beats a pinned one that is not running,
+	// and one unimplemented source must not cost a console its other coverage.
+	for _, w := range cfg.Warnings() {
+		fmt.Fprintln(os.Stderr, "WARNING:", w)
+		_ = auditLog.Append(ctx, audit.Entry{
+			Kind: audit.KindService, Actor: "system",
+			Summary: "configuration warning",
+			Fields:  map[string]string{"detail": w},
+		})
 	}
 	// A credential pasted into the file by hand is accepted on purpose, but a
 	// key that sat readable on disk should be treated as exposed -- so say so,
@@ -348,6 +364,51 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		return err
 	}
 
+	// INGEST. Everything above this decides what to do with events; nothing
+	// above it produces any. A daemon that skipped this would start, serve the
+	// interface, run the escalation scheduler, and watch nothing at all.
+	sources, problems := config.BuildSources(cfg)
+	for _, p := range problems {
+		// Reported, not fatal. One misconfigured console must not take away
+		// coverage that works -- but it must never be silent either, because a
+		// source that failed to build looks exactly like a source that is
+		// quiet.
+		fmt.Fprintln(os.Stderr, "WARNING:", p)
+		_ = auditLog.Append(ctx, audit.Entry{
+			Kind: audit.KindService, Actor: "system",
+			Summary: "a source could not be built",
+			Fields:  map[string]string{"detail": p.Error()},
+		})
+	}
+	if len(sources) == 0 {
+		fmt.Fprintln(os.Stderr, "WARNING: no sources are running, so no incident "+
+			"will ever be raised from a console")
+		fmt.Fprintf(os.Stderr, "         add a console with a `sources:` list in %s\n",
+			config.Path(dataDir))
+	}
+
+	supervisor, err := ingest.New(sources, ingest.Deps{
+		Handle: func(ctx context.Context, ev event.Event) error {
+			_, err := engine.Handle(ctx, ev)
+			return err
+		},
+		Raise: func(ctx context.Context, ent event.Entity, condition string,
+			sev incident.Severity, title, detail string) error {
+			_, err := engine.RaiseInternalFor(ctx, ent, condition, sev, title, detail)
+			return err
+		},
+		Resolve: func(ctx context.Context, ent event.Entity, condition string) error {
+			_, err := engine.ResolveInternalFor(ctx, ent, condition)
+			return err
+		},
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, format+"\n", args...)
+		},
+	})
+	if err != nil {
+		return err
+	}
+
 	// Serve the acknowledgement endpoint.
 	//
 	// The full web UI is not built yet, but the ack surface cannot wait for
@@ -424,18 +485,29 @@ func runDaemon(ctx context.Context, dataDir string) error {
 						InFlight: st.InFlight,
 					})
 				}
-				for _, con := range c.Consoles {
-					for _, src := range con.Sources {
-						// TODO(source-health): real last-seen comes from the
-						// sources, which report it to nothing yet. Reported as
-						// configured-but-unobserved rather than invented, so
-						// the page never claims a source is fine when nobody
-						// has asked it.
-						h.Sources = append(h.Sources, web.SourceHealth{
-							Name:   con.Name + "/" + src,
-							Detail: "not yet reporting liveness",
-						})
+				_ = c
+				for _, st := range supervisor.Statuses() {
+					sh := web.SourceHealth{
+						Name:           st.Name,
+						LastSeen:       st.LastEventAt,
+						ExpectedWithin: st.Expected,
+						Silent:         st.Silent,
 					}
+					switch {
+					case st.Fatal != "":
+						// Distinct from silent on purpose: a source that
+						// cannot run will never recover on its own, and
+						// telling an operator it is merely "quiet" sends them
+						// looking at the console instead of at the config.
+						sh.Detail = "cannot run: " + st.Fatal
+						sh.Silent = true
+					case st.Restarts > 0:
+						sh.Detail = fmt.Sprintf("%d event(s); restarted %d time(s)",
+							st.Events, st.Restarts)
+					default:
+						sh.Detail = fmt.Sprintf("%d event(s)", st.Events)
+					}
+					h.Sources = append(h.Sources, sh)
 				}
 				if st, err := service.New().Status(); err == nil {
 					h.Service = web.ServiceHealth{
@@ -548,7 +620,23 @@ It works once, and a new one is printed each time this starts.
 		}
 	}()
 
+	// The supervisor and the scheduler run together and stop together: a
+	// product that kept escalating while ingesting nothing, or ingested while
+	// nothing escalated, would be halfway broken in a way neither half could
+	// report.
+	ingestCtx, stopIngest := context.WithCancel(ctx)
+	var ingestDone sync.WaitGroup
+	ingestDone.Add(1)
+	go func() {
+		defer ingestDone.Done()
+		if err := supervisor.Run(ingestCtx); err != nil {
+			fmt.Fprintln(os.Stderr, "ingest stopped:", err)
+		}
+	}()
+
 	runErr := sched.Run(ctx)
+	stopIngest()
+	ingestDone.Wait()
 
 	// Finish ONLY on an orderly exit. Doing it from a deferred cleanup that
 	// also runs on a panic would turn every crash into a clean shutdown and

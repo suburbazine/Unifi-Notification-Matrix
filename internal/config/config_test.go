@@ -338,13 +338,48 @@ func TestBadDurationsAreReportedHelpfully(t *testing.T) {
 	}
 }
 
-func TestInsecureWithNoPinIsCalledOut(t *testing.T) {
+// A WARNING, not a refusal -- and the distinction is the whole point.
+//
+// This must be said: nothing authenticates the console. But it must not stop
+// the daemon, because a UniFi console with a self-signed certificate and no
+// pin learned yet is the ordinary state of affairs on day one. Refusing to
+// start locks the operator out before they can reach the step that fixes it,
+// and an unpinned daemon that is watching beats a pinned one that is not
+// running.
+func TestInsecureWithNoPinIsWarnedAboutButStillStarts(t *testing.T) {
 	c := workable()
 	c.Consoles[0].Fingerprint = ""
 	c.Consoles[0].InsecureSkipVerify = true
-	err := c.Validate()
-	if err == nil || !strings.Contains(err.Error(), "nothing authenticates") {
-		t.Fatalf("verification off with no pin was accepted silently: %v", err)
+
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a console with no pin was refused outright: %v", err)
+	}
+	w := strings.Join(c.Warnings(), "\n")
+	if !strings.Contains(w, "nothing authenticates") {
+		t.Fatalf("verification off with no pin was accepted silently: %v", c.Warnings())
+	}
+}
+
+// Likewise: said out loud, but it does not take away the Protect and Access
+// coverage on the same console.
+func TestAnUnimplementedSourceWarnsWithoutRefusingTheConsole(t *testing.T) {
+	c := workable()
+	c.Consoles[0].Sources = []string{"protect", "network"}
+
+	if err := c.Validate(); err != nil {
+		t.Fatalf("one unimplemented source refused the whole config: %v", err)
+	}
+	w := strings.Join(c.Warnings(), "\n")
+	if !strings.Contains(w, "network") {
+		t.Errorf("an unimplemented source was accepted silently, which reads as "+
+			"a WAN that is being watched: %v", c.Warnings())
+	}
+
+	// But a name that is not a source at all is still a refusal: it is a typo,
+	// and a typo silently watching nothing is the failure this guards.
+	c.Consoles[0].Sources = []string{"protekt"}
+	if err := c.Validate(); err == nil {
+		t.Error("a misspelled source name was accepted")
 	}
 }
 

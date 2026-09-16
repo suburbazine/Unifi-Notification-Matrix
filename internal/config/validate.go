@@ -30,6 +30,53 @@ var ErrInvalid = errors.New("invalid configuration")
 
 func (p Problems) Is(target error) bool { return target == ErrInvalid }
 
+// consoleLabel names a console in a message, falling back to its position.
+func consoleLabel(con Console, i int) string {
+	if con.Name != "" {
+		return fmt.Sprintf("console %q", con.Name)
+	}
+	return fmt.Sprintf("console %d", i)
+}
+
+// Warnings returns configurations that are usable but worth saying out loud.
+//
+// SEPARATE FROM Problems, because everything in Problems refuses the start.
+// That distinction was missing and two things had ended up on the wrong side
+// of it:
+//
+//   - `insecure_skip_verify` with no pinned fingerprint. Its own comment said
+//     "not fatal", but it was appended to Problems like everything else, so a
+//     console with a self-signed certificate and no pin learned yet -- which
+//     is the ordinary UniFi console, on day one -- could not start the daemon
+//     at all. Refusing to run is a far worse outcome than running unpinned:
+//     an operator locked out at setup does not get to the pinning step.
+//   - a console listing the `network` source. It must be SAID, because silence
+//     reads as a WAN that is being watched, but refusing to start takes away
+//     the Protect and Access coverage on that same console to punish one
+//     unimplemented entry.
+//
+// A warning is printed at startup and shown in the interface. It is not a
+// reason to leave a site unmonitored.
+func (c Config) Warnings() []string {
+	var w []string
+	for i, con := range c.Consoles {
+		where := consoleLabel(con, i)
+		if con.Fingerprint == "" && con.InsecureSkipVerify {
+			w = append(w, where+": insecure_skip_verify is set with no fingerprint, "+
+				"so nothing authenticates the console; pin a certificate "+
+				"(notifymatrix will show you its fingerprint) or turn verification back on")
+		}
+		for _, src := range con.Sources {
+			if strings.EqualFold(strings.TrimSpace(src), "network") {
+				w = append(w, where+": lists source \"network\", which this build does "+
+					"not implement yet -- nothing on this console's Network application "+
+					"will be reported")
+			}
+		}
+	}
+	return w
+}
+
 // Validate refuses a configuration that would fail silently later.
 //
 // The bar is deliberately high, because every check here is a failure that
@@ -71,10 +118,7 @@ func (c Config) validateConsoles() Problems {
 	var p Problems
 	seen := map[string]bool{}
 	for i, con := range c.Consoles {
-		where := fmt.Sprintf("console %d", i)
-		if con.Name != "" {
-			where = fmt.Sprintf("console %q", con.Name)
-		}
+		where := consoleLabel(con, i)
 		if con.Name == "" {
 			p = append(p, where+": needs a name")
 		} else if seen[con.Name] {
@@ -96,19 +140,19 @@ func (c Config) validateConsoles() Problems {
 			p = append(p, where+": enables no sources; it would be polled for nothing")
 		}
 		for _, s := range con.Sources {
-			switch s {
-			case "protect", "access", "network":
+			switch strings.ToLower(strings.TrimSpace(s)) {
+			case "protect", "access":
+			case "network":
+				// Usable, and reported by Warnings rather than refused here:
+				// taking away a console's working Protect and Access coverage
+				// because one entry is unimplemented helps nobody.
+			case "":
 			default:
-				p = append(p, fmt.Sprintf("%s: unknown source %q (want protect, access or network)", where, s))
+				p = append(p, fmt.Sprintf("%s: unknown source %q (want protect or access)", where, s))
 			}
 		}
-		if con.Fingerprint == "" && con.InsecureSkipVerify {
-			// Not fatal, but it is the configuration with no transport
-			// security at all, and it should never be arrived at silently.
-			p = append(p, where+": insecure_skip_verify is set with no fingerprint, "+
-				"so nothing authenticates the console; pin a certificate "+
-				"(notifymatrix will show you its fingerprint) or turn verification back on")
-		}
+		// insecure_skip_verify with no pin is a WARNING, not a refusal. See
+		// Config.Warnings.
 	}
 	return p
 }
