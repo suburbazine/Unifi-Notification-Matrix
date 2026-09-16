@@ -276,6 +276,11 @@ func dispatch(cmd, dataDir, user string, showLinks, showAll, interactive bool) i
 	case "incidents":
 		return listIncidents(dataDir, showLinks)
 
+	case restartServiceVerb:
+		// Hidden: the detached child of a daemon restarting itself. Not listed
+		// in usage because it is not something to type.
+		return restartServiceHelper()
+
 	case "set-password":
 		return setPassword(dataDir, interactive)
 
@@ -723,6 +728,28 @@ func runDaemon(ctx context.Context, dataDir string) error {
 						name, typedCommand("stop")+" && "+typedCommand("start"))
 				}
 				return err
+			},
+			// Restarting is the action this page most needed and least had.
+			// Channels, policies and rules are built once, at start, so every
+			// saved change needs one -- and the only way to do it was a
+			// terminal, told to somebody whose reason for being on this page
+			// is that they would rather not open one.
+			//
+			// A restart takes THIS process down, so it cannot be "stop, then
+			// start": nothing would be left running to do the start. The
+			// service manager is asked to restart us, and on Windows that is
+			// the SCM doing it, not us.
+			ControlService: func(a web.ServiceAction) error {
+				m := service.New()
+				switch a {
+				case web.ServiceStop:
+					return m.Stop()
+				case web.ServiceStart:
+					return m.Start()
+				case web.ServiceRestart:
+					return restartSelf(m)
+				}
+				return fmt.Errorf("unknown service action %q", a)
 			},
 			Checklist: func() setup.Input {
 				cfgMu.RLock()

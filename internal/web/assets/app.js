@@ -210,6 +210,43 @@ function renderHealth(h) {
     card.appendChild(el("div", "delivery-error",
       "The last exit was unclean — a crash, or a power cut."));
   }
+
+  // Channels, policies and rules are all built once, at start. Until this
+  // button existed, applying a saved change meant opening a terminal -- told
+  // to somebody whose reason for being on this page is that they would rather
+  // not. Worse, nothing said so, so a channel could read as enabled
+  // everywhere a human looks and still not be told anything at 3am.
+  if (state.authed && s.state && s.state !== "not installed") {
+    var bar = el("div", "formbar");
+    var msg = el("div", "msg");
+    ["restart", "stop", "start"].forEach(function (action) {
+      if (action === "start" && s.state === "running") return;
+      if (action === "stop" && s.state !== "running") return;
+      var b = el("button", action === "restart" ? "act primary" : "act",
+        action.charAt(0).toUpperCase() + action.slice(1) + " the service");
+      b.addEventListener("click", function () {
+        msg.className = "msg";
+        msg.textContent = "asking the service manager to " + action + "…";
+        api("POST", "api/service", { action: action }).then(function (res) {
+          if (!res.ok) {
+            msg.className = "msg err";
+            msg.textContent = (res.data && res.data.error) || (action + " failed");
+            return;
+          }
+          // A restart or a stop takes THIS page's server down with it, so
+          // there is no success response worth waiting for -- saying
+          // "reconnecting" is the honest description of what happens next.
+          msg.textContent = action === "start"
+            ? "started."
+            : "asked. This page will go quiet for a few seconds while it restarts.";
+          setTimeout(refreshAll, 6000);
+        });
+      });
+      bar.appendChild(b);
+    });
+    card.appendChild(bar);
+    card.appendChild(msg);
+  }
   svc.appendChild(card);
 }
 
@@ -351,6 +388,22 @@ function bindList(obj, key) {
   });
   return i;
 }
+// inList is a checkbox over membership of a string array, for settings that
+// are a set rather than a value -- a console's sources, above all.
+function inList(obj, key, value) {
+  var i = el("input");
+  i.type = "checkbox";
+  i.style.width = "auto";
+  var has = function () { return (obj[key] || []).indexOf(value) >= 0; };
+  i.checked = has();
+  i.addEventListener("change", function () {
+    var cur = obj[key] || (obj[key] = []);
+    var at = cur.indexOf(value);
+    if (i.checked && at < 0) cur.push(value);
+    if (!i.checked && at >= 0) cur.splice(at, 1);
+  });
+  return i;
+}
 function check(obj, key) {
   var i = el("input");
   i.type = "checkbox";
@@ -376,29 +429,67 @@ function renderSettings(body, s) {
   var draft = JSON.parse(JSON.stringify(s));
 
   body.appendChild(el("h3", null, "Consoles"));
-  (draft.consoles || []).forEach(function (c) {
+  var consoles = draft.consoles || (draft.consoles = []);
+  consoles.forEach(function (c, idx) {
     var card = el("div", "card");
     var f = el("div", "fields");
     f.appendChild(labelled("Name", bind(c, "name")));
-    f.appendChild(labelled("Host", bind(c, "host")));
-    f.appendChild(labelled("Certificate fingerprint (SHA-256)", bind(c, "fingerprint")));
+    f.appendChild(labelled("Host or IP address", bind(c, "host")));
+    f.appendChild(labelled("Certificate fingerprint (SHA-256, optional)", bind(c, "fingerprint")));
     card.appendChild(f);
-    var r = el("div", "row");
+
+    // Sources were displayed as a comma-joined string and could only be
+    // changed by editing YAML -- on the setting that decides whether anything
+    // is watched at all. A console with no source is polled for nothing and
+    // looks entirely healthy doing it.
+    card.appendChild(el("div", "label", "Watch these applications"));
+    var sr = el("div", "row");
+    ["protect", "access", "network"].forEach(function (name) {
+      sr.appendChild(labelled(name, inList(c, "sources", name)));
+    });
+    card.appendChild(sr);
+
+    var ir = el("div", "row");
+    ir.appendChild(labelled("Skip certificate check", check(c, "insecure_skip_verify")));
+    card.appendChild(ir);
+    card.appendChild(el("div", "note",
+      "Leave the certificate check on. A UniFi console's certificate is " +
+      "self-signed, so the usual answer is to paste its SHA-256 fingerprint " +
+      "above -- that pins this one console. Skipping the check instead accepts " +
+      "ANY certificate, which is the state an attacker on your network needs."));
+
     if (c.api_key_credential) {
-      r.appendChild(el("span", "muted small",
+      var cr = el("div", "row");
+      cr.appendChild(el("span", "muted small",
         "service credential " + c.api_key_credential + " overrides the key in the file"));
+      card.appendChild(cr);
     }
-    if (c.insecure_skip_verify) r.appendChild(badge("chain validation off", ""));
-    r.appendChild(el("span", "muted small", "sources: " + (c.sources || []).join(", ")));
-    card.appendChild(r);
     secretRow(card, c.api_key_set, "API key", c, "api_key_new");
     card.appendChild(el("div", "note",
-      "The stored key is never sent to this page, only whether one exists."));
+      "The stored key is never sent to this page, only whether one exists. " +
+      "Protect, Access and Network each issue their OWN key -- one key does " +
+      "not cover the others."));
+
+    var rm = el("button", "act", "Remove this console");
+    rm.addEventListener("click", function () {
+      consoles.splice(idx, 1);
+      renderSettings(body, draft);
+    });
+    var rb = el("div", "formbar"); rb.appendChild(rm);
+    card.appendChild(rb);
     body.appendChild(card);
   });
-  if (!(draft.consoles || []).length) {
-    body.appendChild(el("div", "empty", "No consoles configured."));
+  if (!consoles.length) {
+    body.appendChild(el("div", "empty",
+      "No consoles configured. Nothing is being watched."));
   }
+  var addCon = el("button", "act primary", "Add a console");
+  addCon.addEventListener("click", function () {
+    consoles.push({ name: "", host: "", sources: ["protect"], api_key_set: false });
+    renderSettings(body, draft);
+  });
+  var addBar = el("div", "formbar"); addBar.appendChild(addCon);
+  body.appendChild(addBar);
 
   body.appendChild(el("h3", null, "Channels"));
   var ch = draft.channels || (draft.channels = {});

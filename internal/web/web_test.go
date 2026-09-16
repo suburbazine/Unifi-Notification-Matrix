@@ -186,6 +186,10 @@ type harness struct {
 	saveErr error
 	hashErr error
 	saved   int
+
+	// serviceActions records what the operator asked the service manager for.
+	serviceActions []ServiceAction
+	serviceErr     error
 }
 
 // testConfig is valid, exercises every secret-bearing field, and plants the
@@ -254,6 +258,12 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 		},
 		PasswordHash:    func() string { h.mu.Lock(); defer h.mu.Unlock(); return h.hash },
 		SetPasswordHash: h.setHash,
+		ControlService: func(a ServiceAction) error {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.serviceActions = append(h.serviceActions, a)
+			return h.serviceErr
+		},
 		Checklist: func() setup.Input {
 			return setup.Input{
 				ConfigPath: "/tmp/config.yaml", Listen: "127.0.0.1:8322",
@@ -1138,5 +1148,98 @@ func TestAFailedSetupGivesTheTokenBack(t *testing.T) {
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("retry after a transient failure = %d, want 200: %s", resp.StatusCode, body)
+	}
+}
+
+// Channels, policies and rules are all built once at daemon start, so every
+// saved configuration change needs a restart -- and the only way to do one was
+// a terminal, told to somebody whose reason for being on this page is that
+// they would rather not open one. A channel could read as enabled everywhere a
+// human looks and still not be told anything at 3am.
+func TestTheServiceCanBeRestartedFromTheInterface(t *testing.T) {
+	h := newHarness(t)
+	h.setPassword(testPassword)
+	h.signIn()
+
+	res, _ := h.do("POST", "/api/service", map[string]any{"action": "restart"})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("restart returned %d, want 200", res.StatusCode)
+	}
+	h.mu.Lock()
+	got := append([]ServiceAction(nil), h.serviceActions...)
+	h.mu.Unlock()
+	if len(got) != 1 || got[0] != ServiceRestart {
+		t.Fatalf("service actions = %v, want one restart", got)
+	}
+}
+
+// Stopping the daemon stops every alarm this product exists to raise, so it is
+// not something a passer-by on the status page gets to do. Status is public by
+// design -- that is what makes a wall display useful -- and this must not ride
+// along with it.
+func TestServiceControlIsRefusedWithoutSigningIn(t *testing.T) {
+	h := newHarness(t)
+
+	for _, action := range []string{"restart", "stop", "start"} {
+		res, _ := h.do("POST", "/api/service", map[string]any{"action": action})
+		if res.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s returned %d to a signed-out caller, want 401", action, res.StatusCode)
+		}
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.serviceActions) != 0 {
+		t.Fatalf("a signed-out caller reached the service manager: %v", h.serviceActions)
+	}
+}
+
+func TestAnUnknownServiceActionIsRefused(t *testing.T) {
+	h := newHarness(t)
+	h.setPassword(testPassword)
+	h.signIn()
+
+	for _, action := range []string{"", "uninstall", "delete", "RESTART; rm -rf /"} {
+		res, _ := h.do("POST", "/api/service", map[string]any{"action": action})
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("action %q returned %d, want 400", action, res.StatusCode)
+		}
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.serviceActions) != 0 {
+		t.Fatalf("an unrecognised action reached the service manager: %v", h.serviceActions)
+	}
+}
+
+// A restart takes this process down with it, so an audit entry written after
+// the action is an entry that never gets written -- and "the daemon stopped
+// and nothing says why" is the gap the audit record exists to close.
+func TestTheRestartIsRecordedBeforeItHappens(t *testing.T) {
+	h := newHarness(t)
+	h.setPassword(testPassword)
+	h.signIn()
+	h.mu.Lock()
+	h.serviceErr = errors.New("the service manager said no")
+	h.mu.Unlock()
+
+	res, _ := h.do("POST", "/api/service", map[string]any{"action": "restart"})
+	if res.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("a failed restart returned %d, want 500", res.StatusCode)
+	}
+
+	var requested, failed bool
+	for _, sum := range h.log.summaries() {
+		if strings.Contains(sum, "restart requested") {
+			requested = true
+		}
+		if strings.Contains(sum, "restart failed") {
+			failed = true
+		}
+	}
+	if !requested {
+		t.Error("nothing recorded that a restart was asked for")
+	}
+	if !failed {
+		t.Error("nothing recorded that it failed; the operator sees an error and the record does not")
 	}
 }

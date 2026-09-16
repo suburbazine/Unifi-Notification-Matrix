@@ -95,6 +95,15 @@ type Deps struct {
 	// rather than in the configuration file.
 	Checklist func() setup.Input
 
+	// ControlService starts, stops or restarts the supervised service.
+	//
+	// Optional: a build without it has no restart button and says so rather
+	// than offering one that cannot work. It matters because channels,
+	// policies and rules are built once at start, so every configuration
+	// change needs a restart -- and until now the only way to do it was a
+	// terminal, which is the thing this page exists to avoid.
+	ControlService func(ServiceAction) error
+
 	// Version is shown in the header. Optional.
 	Version string
 }
@@ -262,6 +271,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/channels/{name}/test", s.requireAuth(http.HandlerFunc(s.handleTestChannel)))
 	mux.Handle("POST /api/incidents/{id}/ack", s.requireAuth(http.HandlerFunc(s.handleAck)))
 	mux.Handle("POST /api/incidents/{id}/close", s.requireAuth(http.HandlerFunc(s.handleClose)))
+	mux.Handle("POST /api/service", s.requireAuth(http.HandlerFunc(s.handleServiceAction)))
 
 	return secureHeaders(mux)
 }
