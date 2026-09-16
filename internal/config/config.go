@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/webhook"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/rule"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
@@ -111,7 +112,21 @@ type Channels struct {
 	Ntfy     *Ntfy     `json:"ntfy,omitempty"`
 	Email    *Email    `json:"email,omitempty"`
 	Pushover *Pushover `json:"pushover,omitempty"`
-	Webhook  *Webhook  `json:"webhook,omitempty"`
+
+	// Webhook is the ORIGINAL single outbound endpoint, kept so existing
+	// configurations keep working. It is folded into Webhooks on load and
+	// written back as part of that list, so it disappears from the file the
+	// first time anything is saved.
+	Webhook *Webhook `json:"webhook,omitempty"`
+
+	// Webhooks are outbound endpoints, each addressable by name from an
+	// escalation rung.
+	//
+	// A list rather than one, because pushing to a home-automation box and to
+	// an on-call service are different jobs wanted at different severities,
+	// and a single endpoint forces a site to pick one or to fan out somewhere
+	// else. The name is what a policy stage refers to.
+	Webhooks []Webhook `json:"webhooks,omitempty"`
 }
 
 // Ntfy configures the ntfy channel.
@@ -178,6 +193,12 @@ type Pushover struct {
 // whatever the operator runs -- Home Assistant, Node-RED, a bridge of their
 // own.
 type Webhook struct {
+	// Name is how an escalation rung refers to this endpoint.
+	//
+	// Empty means "webhook", which is what the single original endpoint was
+	// called and what any policy written before this list existed still says.
+	Name string `json:"name,omitempty"`
+
 	Enabled bool `json:"enabled"`
 
 	URL string `json:"url"`
@@ -205,6 +226,29 @@ type Policy struct {
 	RepeatEvery       string  `json:"repeat_every,omitempty"`
 	GiveUpAfter       string  `json:"give_up_after,omitempty"`
 	RespectQuietHours bool    `json:"respect_quiet_hours,omitempty"`
+}
+
+// WebhookEndpoints is every configured outbound webhook, including one still
+// written in the original singular form.
+//
+// Reading through this rather than the fields directly means nothing has to
+// remember which shape a particular config file is in.
+func (c Config) WebhookEndpoints() []Webhook {
+	out := make([]Webhook, 0, len(c.Channels.Webhooks)+1)
+	if c.Channels.Webhook != nil {
+		out = append(out, *c.Channels.Webhook)
+	}
+	out = append(out, c.Channels.Webhooks...)
+	return out
+}
+
+// webhookName is the channel name for an endpoint, defaulting to the name the
+// single original endpoint has always had.
+func webhookName(h Webhook) string {
+	if n := strings.TrimSpace(h.Name); n != "" {
+		return n
+	}
+	return webhook.DefaultName
 }
 
 // Stage is one rung. After is a Go duration string ("2m", "10m").
@@ -350,7 +394,17 @@ func (c Config) BuildPolicies(enabled []string) (map[string]escalate.Policy, err
 		}
 		if filtered, ok := filterToEnabled(p, have); ok {
 			out[string(sev)] = filtered
+			continue
 		}
+		// The shipped ladder names ntfy and email, so a site whose only
+		// channel is something else -- a Pushover account, a webhook called
+		// "home-assistant" -- filtered every default away to nothing and was
+		// told, five times over, that no severity had anywhere to go.
+		//
+		// A DEFAULT means "tell me on whatever exists". It is only the
+		// operator's own policy that means "these channels and no others", and
+		// that one is still honoured exactly, including when it empties.
+		out[string(sev)] = everyChannelLadder(p, enabled)
 	}
 	for sev, p := range c.Policies {
 		built, err := p.build(sev)
@@ -393,6 +447,18 @@ func (c Config) BuildPolicies(enabled []string) (map[string]escalate.Policy, err
 		}
 	}
 	return out, nil
+}
+
+// everyChannelLadder is the fallback for a shipped default that named nothing
+// this installation has: one rung, immediately, to everything configured.
+//
+// The timing fields are kept, because they are the part of a default ladder
+// that is about severity rather than about which services happen to be set up:
+// critical still repeats every five minutes and still never gives up.
+func everyChannelLadder(p escalate.Policy, enabled []string) escalate.Policy {
+	out := p
+	out.Stages = []escalate.Stage{{After: 0, Channels: append([]string(nil), enabled...)}}
+	return out
 }
 
 // filterToEnabled drops channels that do not exist, then stages left empty.

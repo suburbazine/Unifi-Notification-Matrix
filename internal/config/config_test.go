@@ -238,13 +238,34 @@ func TestAckBaseURLPointingAtLoopbackIsRefused(t *testing.T) {
 	}
 }
 
-func TestAnEnabledChannelWithNoAckURLIsRefused(t *testing.T) {
+// An alerting channel with no acknowledgement URL is a WARNING, not a refusal.
+//
+// It used to be fatal, and that made it a trap: the problem only existed once
+// a channel was enabled, so the act of adding a first channel introduced it,
+// and an operator could not add one until they had set an address nothing had
+// asked them for yet. First-run configuration has a natural order and a rule
+// that forbids it needs to be preventing something worse than it causes.
+//
+// It is not. Alerts still go out and can still be acknowledged, from the web
+// UI -- which is worse, not impossible. The pressure stays where it belongs:
+// a TODO on the setup checklist, and a warning at every start.
+func TestAnEnabledChannelWithNoAckURLIsWarnedAboutRatherThanRefused(t *testing.T) {
 	c := workable()
 	c.Web.AckBaseURL = ""
-	err := c.Validate()
-	if err == nil {
-		t.Fatal("a config with alerting channels and no ack URL was accepted; " +
-			"nothing could stop an alert repeating except the web UI")
+
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a first channel could not be added without an ack URL: %v", err)
+	}
+
+	var said bool
+	for _, w := range c.Warnings() {
+		if strings.Contains(w, "ack_base_url") {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("nothing warned that alerts will carry no acknowledgement link: %v",
+			c.Warnings())
 	}
 }
 
@@ -646,9 +667,13 @@ func TestNtfyWithNoServerURLIsValidAndMeansThePublicInstance(t *testing.T) {
 	c.Channels.Ntfy = &Ntfy{Enabled: true, Topic: "something-nobody-could-guess"}
 	c.Consoles = nil
 
-	for _, prob := range c.Validate().(Problems) {
-		if strings.Contains(prob, "server_url") {
-			t.Fatalf("a blank ntfy server_url was refused: %s", prob)
+	if err := c.Validate(); err != nil {
+		if probs, ok := err.(Problems); ok {
+			for _, prob := range probs {
+				if strings.Contains(prob, "server_url") {
+					t.Fatalf("a blank ntfy server_url was refused: %s", prob)
+				}
+			}
 		}
 	}
 }

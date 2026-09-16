@@ -294,24 +294,46 @@ func (c Config) validatePushover() Problems {
 
 func (c Config) validateWebhook() Problems {
 	var p Problems
-	w := c.Channels.Webhook
-	if w == nil || !w.Enabled {
-		return nil
-	}
-	u, err := url.Parse(strings.TrimSpace(w.URL))
-	switch {
-	case strings.TrimSpace(w.URL) == "":
-		p = append(p, "channel webhook: needs a url")
-	case err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https"):
-		p = append(p, fmt.Sprintf("channel webhook: url %q is not an http(s) URL", w.URL))
-	}
-	for k := range w.Headers {
-		if reservedWebhookHeader(k) {
-			// Set by hand, this silently breaks every receiver's signature
-			// check -- and it breaks it in the direction where the receiver
-			// rejects real alarms.
-			p = append(p, fmt.Sprintf("channel webhook: header %q is set by the "+
-				"channel itself and cannot be overridden", k))
+
+	// Names have to be unique and must not collide with the built-in channels,
+	// because a policy rung names a channel and there is no way to say which
+	// of two "alerts" it meant. A collision with "ntfy" is worse: the rung
+	// would silently address whichever the map happened to keep.
+	reserved := map[string]bool{"ntfy": true, "email": true, "pushover": true}
+	seen := map[string]bool{}
+
+	for _, w := range c.WebhookEndpoints() {
+		name := webhookName(w)
+		where := "channel " + name
+
+		if lower := strings.ToLower(name); reserved[lower] {
+			p = append(p, fmt.Sprintf("webhook %q uses the name of a built-in "+
+				"channel; give it a different one", name))
+		}
+		if seen[strings.ToLower(name)] {
+			p = append(p, fmt.Sprintf("two webhooks are both called %q, so an "+
+				"escalation rung naming it cannot say which", name))
+		}
+		seen[strings.ToLower(name)] = true
+
+		if !w.Enabled {
+			continue
+		}
+		u, err := url.Parse(strings.TrimSpace(w.URL))
+		switch {
+		case strings.TrimSpace(w.URL) == "":
+			p = append(p, where+": needs a url")
+		case err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https"):
+			p = append(p, fmt.Sprintf("%s: url %q is not an http(s) URL", where, w.URL))
+		}
+		for k := range w.Headers {
+			if reservedWebhookHeader(k) {
+				// Set by hand, this silently breaks every receiver's signature
+				// check -- and it breaks it in the direction where the
+				// receiver rejects real alarms.
+				p = append(p, fmt.Sprintf("%s: header %q is set by the "+
+					"channel itself and cannot be overridden", where, k))
+			}
 		}
 	}
 	return p
@@ -349,11 +371,19 @@ func (c Config) validateWeb() Problems {
 	}
 
 	if c.Web.AckBaseURL == "" {
-		if c.anyChannelEnabled() {
-			p = append(p, "web.ack_base_url is not set, so alerts would carry no "+
-				"acknowledgement link and nothing could stop them repeating "+
-				"except the web UI")
-		}
+		// A WARNING, not a refusal, and the reason is in the sentence itself:
+		// alerts still go out and can still be acknowledged, from the web UI.
+		// That is worse, not impossible.
+		//
+		// As a refusal it was also a trap, because it only fired once a
+		// channel was enabled -- so the act of adding a first channel
+		// introduced it, and an operator could not add one until they had set
+		// an address they had not been asked for yet. First-run configuration
+		// has an order, and a rule that forbids the natural one has to be very
+		// sure it is preventing something worse than it causes.
+		//
+		// The pressure is kept where it belongs: it is a TODO on the setup
+		// checklist and a warning at every start.
 		return p
 	}
 
@@ -391,8 +421,10 @@ func (c Config) EnabledChannelNames() []string {
 	if c.Channels.Pushover != nil && c.Channels.Pushover.Enabled {
 		out = append(out, "pushover")
 	}
-	if c.Channels.Webhook != nil && c.Channels.Webhook.Enabled {
-		out = append(out, "webhook")
+	for _, h := range c.WebhookEndpoints() {
+		if h.Enabled {
+			out = append(out, webhookName(h))
+		}
 	}
 	sort.Strings(out)
 	return out

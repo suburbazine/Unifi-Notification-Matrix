@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ack"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/webhook"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"sigs.k8s.io/yaml"
 )
@@ -98,6 +100,35 @@ func (c *Config) applyDefaults() {
 	if c.Web.Listen == "" {
 		c.Web.Listen = "127.0.0.1:8322"
 	}
+	// Fold the original single webhook into the list.
+	//
+	// One-way and on load, so a configuration written before outbound webhooks
+	// were a list keeps working and quietly becomes one. It keeps the name
+	// "webhook", because that is what every policy and rule already written
+	// refers to, and renaming it here would silently detach those rungs from
+	// the endpoint they name.
+	if c.Channels.Webhook != nil {
+		w := *c.Channels.Webhook
+		if strings.TrimSpace(w.Name) == "" {
+			w.Name = webhook.DefaultName
+		}
+		var already bool
+		for _, existing := range c.Channels.Webhooks {
+			if strings.EqualFold(strings.TrimSpace(existing.Name), w.Name) {
+				already = true
+			}
+		}
+		if !already {
+			c.Channels.Webhooks = append([]Webhook{w}, c.Channels.Webhooks...)
+		}
+		c.Channels.Webhook = nil
+	}
+	for i := range c.Channels.Webhooks {
+		if strings.TrimSpace(c.Channels.Webhooks[i].Name) == "" {
+			c.Channels.Webhooks[i].Name = webhook.DefaultName
+		}
+	}
+
 	if c.Channels.Ntfy != nil && c.Channels.Ntfy.ServerURL == "" {
 		c.Channels.Ntfy.ServerURL = "https://ntfy.sh"
 	}

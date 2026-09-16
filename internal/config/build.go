@@ -113,8 +113,13 @@ func BuildDelivery(c *Config, onResult func(channel.Result)) (*Delivery, error) 
 		}
 	}
 
-	if h := c.Channels.Webhook; h != nil && h.Enabled {
+	for _, h := range c.WebhookEndpoints() {
+		if !h.Enabled {
+			continue
+		}
+		name := webhookName(h)
 		ch, err := webhook.New(webhook.Config{
+			ChannelName:        name,
 			URL:                h.URL,
 			Secret:             h.Secret,
 			Headers:            h.Headers,
@@ -122,9 +127,9 @@ func BuildDelivery(c *Config, onResult func(channel.Result)) (*Delivery, error) 
 		}, nil)
 		if err != nil {
 			// Recorded and skipped, never fatal: see Delivery.broken.
-			d.broken["webhook"] = err
+			d.broken[name] = err
 		} else {
-			d.queues["webhook"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
+			d.queues[name] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
 		}
 	}
 

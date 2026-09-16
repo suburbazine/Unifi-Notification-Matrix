@@ -604,7 +604,6 @@ function renderSettings(body, s) {
   ch.ntfy = ch.ntfy || { enabled: false };
   ch.email = ch.email || { enabled: false, recipients: [] };
   ch.pushover = ch.pushover || { enabled: false };
-  ch.webhook = ch.webhook || { enabled: false };
 
   if (ch.ntfy) {
     var nc = el("div", "card");
@@ -656,26 +655,13 @@ function renderSettings(body, s) {
     testRow(pc, "pushover");
     body.appendChild(pc);
   }
-  if (ch.webhook) {
-    var hc = el("div", "card");
-    hc.appendChild(el("div", "title", "Webhook"));
-    var hf = el("div", "fields");
-    hf.appendChild(labelled("Enabled", check(ch.webhook, "enabled")));
-    hf.appendChild(labelled("URL", bind(ch.webhook, "url")));
-    hf.appendChild(labelled("Skip certificate check", check(ch.webhook, "insecure_skip_verify")));
-    hc.appendChild(hf);
-    secretRow(hc, ch.webhook.secret_set, "signing secret", ch.webhook, "secret_new");
-    hc.appendChild(el("div", "note",
-      "One JSON POST per alert, to anything you run. With a signing secret set, " +
-      "each request carries an HMAC your receiver can check -- without one, " +
-      "anybody who learns the URL can feed it false alarms."));
-    testRow(hc, "webhook");
-    body.appendChild(hc);
-  }
+  // The outbound webhook endpoints are on the Webhooks tab, with the inbound
+  // ones: they are the same idea pointing opposite ways, and an operator
+  // thinking about one is thinking about both.
 
-  var anyEnabled = ["ntfy", "email", "pushover", "webhook"].some(function (k) {
+  var anyEnabled = ["ntfy", "email", "pushover"].some(function (k) {
     return ch[k] && ch[k].enabled;
-  });
+  }) || (ch.webhooks || []).some(function (w) { return w.enabled; });
   if (!anyEnabled) {
     body.appendChild(el("div", "empty",
       "No channel is enabled. Incidents will still be tracked, and nobody will be told."));
@@ -714,9 +700,6 @@ function renderSettings(body, s) {
   wc.appendChild(el("div", "note",
     "A listen address change takes effect when the service restarts."));
   body.appendChild(wc);
-
-  body.appendChild(el("h3", null, "Inbound hooks"));
-  renderHooks(body, draft, s.hook_conditions || []);
 
   body.appendChild(el("h3", null, "Escalation"));
   renderPolicies(body, draft);
@@ -914,12 +897,13 @@ function statusClass(status) {
 function refreshTab() {
   if (state.tab === "incidents") refreshIncidents();
   else if (state.tab === "setup") refreshSetup();
+  else if (state.tab === "webhooks") refreshWebhooks();
   else if (state.tab === "settings") refreshSettings();
   else if (state.tab === "audit") refreshAudit();
 }
 function refreshAll() { refreshStatus(); refreshTab(); }
 
-var TAB_NAMES = ["incidents", "setup", "health", "settings", "audit"];
+var TAB_NAMES = ["incidents", "setup", "health", "webhooks", "settings", "audit"];
 
 // tabFromHash reads #health and friends, so a tab can be linked to.
 //
@@ -978,7 +962,9 @@ document.addEventListener("DOMContentLoaded", function () {
 // the whole point of the feature and cannot be said any other way.
 
 var SEVERITIES = ["critical", "high", "medium", "low", "info"];
-var CHANNEL_NAMES = ["ntfy", "email", "pushover", "webhook"];
+// The built-in channels. Outbound webhooks are added by name at render time,
+// because how many there are and what they are called is configuration.
+var CHANNEL_NAMES = ["ntfy", "email", "pushover"];
 
 // DEFAULT_LADDERS mirrors escalate.DefaultPolicies, so a severity the config
 // does not override can still be SHOWN. Displayed as "default" rather than
@@ -1014,7 +1000,14 @@ function toggleIn(list, name, on) {
 // visit is entitled to put ntfy on a rung.
 function enabledChannels(draft) {
   var ch = draft.channels || {};
-  return CHANNEL_NAMES.filter(function (n) { return ch[n] && ch[n].enabled; });
+  var out = CHANNEL_NAMES.filter(function (n) { return ch[n] && ch[n].enabled; });
+  // Every outbound webhook is addressable by its own name, so the escalation
+  // editor has to offer them alongside the built-ins rather than a single
+  // "webhook".
+  (ch.webhooks || []).forEach(function (w) {
+    if (w.enabled && w.name && out.indexOf(w.name) < 0) out.push(w.name);
+  });
+  return out;
 }
 
 function renderPolicies(body, draft) {
@@ -1543,4 +1536,192 @@ function renderDemoBanner(text) {
   b.style.textAlign = "center";
   b.style.fontWeight = "600";
   document.body.insertBefore(b, document.body.firstChild);
+}
+
+// ---------- the Webhooks tab ----------
+//
+// Both directions in one place, because they are the same idea pointing
+// opposite ways and an operator thinking about webhooks is thinking about
+// both. Inbound used to live buried in Settings under a heading nobody found,
+// and outbound was one endpoint filed as a notification channel, which is
+// where nobody looked for it either.
+//
+// IN  -- one endpoint per UniFi Alarm Manager rule. This is the only way
+//        Network alarms exist at all: the Integration API publishes no events.
+// OUT -- one or more endpoints this pushes an alert document to, each
+//        addressable by name from an escalation rung.
+
+// webhookNotice survives the re-render a save triggers.
+//
+// Setting the message and then reloading wiped it in the same tick, so a
+// successful save looked like nothing happening -- which, on a page whose job
+// is telling you whether something worked, is the worst available outcome.
+var webhookNotice = null;
+
+function refreshWebhooks() {
+  var body = byId("webhooks-body");
+  api("GET", "api/settings").then(function (res) {
+    if (res.status === 401) { renderSignIn(body); return; }
+    if (!res.ok) {
+      clear(body);
+      body.appendChild(el("div", "card err", res.data.error || "could not load webhooks"));
+      return;
+    }
+    renderWebhooksTab(body, res.data);
+    if (webhookNotice) {
+      var n = el("div", webhookNotice.cls, webhookNotice.text);
+      body.appendChild(n);
+      webhookNotice = null;
+    }
+  });
+}
+
+function renderWebhooksTab(body, s) {
+  clear(body);
+  var draft = JSON.parse(JSON.stringify(s));
+
+  body.appendChild(el("h3", null, "Incoming — UniFi pushes to us"));
+  body.appendChild(el("div", "note",
+    "WAN outages, threat detections, PoE faults and Protect's own hardware " +
+    "alarms are not readable by any API. They exist ONLY as Alarm Manager " +
+    "rules that push to a URL, and no API can create those rules -- so these " +
+    "endpoints are the only way those alarms reach this product at all."));
+  renderHooks(body, draft, s.hook_conditions || []);
+
+  body.appendChild(el("h3", null, "Outgoing — we push to you"));
+  body.appendChild(el("div", "note",
+    "One JSON POST per alert, to anything you run. Each endpoint has a name, " +
+    "and an escalation rung refers to it by that name -- so a home automation " +
+    "box and an on-call service can be told about different severities."));
+  renderOutboundWebhooks(body, draft);
+
+  var msg = el("div", "msg");
+  var save = el("button", "act primary", "Save webhooks");
+  save.addEventListener("click", function () {
+    msg.className = "msg"; msg.textContent = "";
+    save.disabled = true;
+    // Only the two sections this tab owns are posted. Everything absent is
+    // left alone by the server, which is what makes a tab that edits part of
+    // the configuration safe to have at all.
+    api("POST", "api/settings", {
+      hooks: draft.hooks || [],
+      channels: { webhooks: (draft.channels && draft.channels.webhooks) || [] }
+    }).then(function (res) {
+      save.disabled = false;
+      if (!res.ok) {
+        msg.className = "msg err";
+        msg.textContent = (res.data && res.data.error) || "that was refused";
+        return;
+      }
+      webhookNotice = {
+        cls: "msg",
+        text: "Saved. Channel changes take effect when the service restarts.",
+      };
+      refreshWebhooks();
+    });
+  });
+  var bar = el("div", "formbar");
+  bar.appendChild(save);
+  body.appendChild(bar);
+  body.appendChild(msg);
+}
+
+function renderOutboundWebhooks(body, draft) {
+  var chans = draft.channels || (draft.channels = {});
+  var list = chans.webhooks || (chans.webhooks = []);
+  var card = el("div", "card");
+  var panel = el("div");
+  card.appendChild(panel);
+
+  var draw = function () {
+    clear(panel);
+    if (!list.length) {
+      panel.appendChild(el("div", "empty",
+        "Nothing is pushed out. Incidents are still tracked and still " +
+        "delivered through whatever channels you have enabled."));
+    }
+    list.forEach(function (h, idx) {
+      panel.appendChild(outboundCard(h, idx, list, draw));
+    });
+    var bar = el("div", "formbar");
+    var add = el("button", "act primary", "Add an endpoint");
+    add.addEventListener("click", function () {
+      list.push({ name: "", enabled: true, url: "", headers: {} });
+      draw();
+    });
+    bar.appendChild(add);
+    panel.appendChild(bar);
+  };
+  draw();
+  body.appendChild(card);
+}
+
+function outboundCard(h, idx, list, redraw) {
+  var c = el("div", "card");
+  var f = el("div", "fields");
+  f.appendChild(labelled("Name (an escalation rung refers to this)", bind(h, "name")));
+  f.appendChild(labelled("URL", bind(h, "url")));
+  c.appendChild(f);
+
+  var r = el("div", "row");
+  r.appendChild(labelled("Enabled", check(h, "enabled")));
+  r.appendChild(labelled("Skip certificate check", check(h, "insecure_skip_verify")));
+  c.appendChild(r);
+
+  secretRow(c, h.secret_set, "signing secret", h, "secret_new");
+  c.appendChild(el("div", "note",
+    "With a signing secret set, each request carries an HMAC over the " +
+    "timestamp and body that your receiver can check. Without one, anybody " +
+    "who learns the URL can feed it false alarms -- and the URL itself is " +
+    "often a credential, because most receivers put a token in it."));
+
+  // Static headers, for receivers that want an API key or a routing hint.
+  c.appendChild(el("div", "label", "Extra headers"));
+  var hdrs = h.headers || (h.headers = {});
+  var hp = el("div");
+  var drawHeaders = function () {
+    clear(hp);
+    Object.keys(hdrs).forEach(function (k) {
+      var row = el("div", "row");
+      var kv = el("input"); kv.type = "text"; kv.value = k;
+      var vv = el("input"); vv.type = "text"; vv.value = hdrs[k];
+      kv.addEventListener("change", function () {
+        var val = hdrs[k];
+        delete hdrs[k];
+        if (kv.value.trim()) hdrs[kv.value.trim()] = val;
+        drawHeaders();
+      });
+      vv.addEventListener("input", function () { hdrs[k] = vv.value; });
+      row.appendChild(labelled("Header", kv));
+      row.appendChild(labelled("Value", vv));
+      var rm = el("button", "act", "Remove");
+      rm.addEventListener("click", function () { delete hdrs[k]; drawHeaders(); });
+      row.appendChild(rm);
+      hp.appendChild(row);
+    });
+    var addH = el("button", "act", "Add a header");
+    addH.addEventListener("click", function () {
+      var n = 1;
+      while (hdrs["header-" + n] !== undefined) n++;
+      hdrs["header-" + n] = "";
+      drawHeaders();
+    });
+    var b = el("div", "formbar"); b.appendChild(addH);
+    hp.appendChild(b);
+  };
+  drawHeaders();
+  c.appendChild(hp);
+  c.appendChild(el("div", "note",
+    "The signature and timestamp headers cannot be overridden here -- setting " +
+    "them by hand breaks every receiver's verification, in the direction " +
+    "where the receiver rejects real alarms."));
+
+  if (h.name) testRow(c, h.name);
+
+  var bar = el("div", "formbar");
+  var rm = el("button", "act", "Remove this endpoint");
+  rm.addEventListener("click", function () { list.splice(idx, 1); redraw(); });
+  bar.appendChild(rm);
+  c.appendChild(bar);
+  return c;
 }

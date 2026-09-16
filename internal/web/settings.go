@@ -73,7 +73,7 @@ type channelsView struct {
 	Ntfy     *ntfyView     `json:"ntfy,omitempty"`
 	Email    *emailView    `json:"email,omitempty"`
 	Pushover *pushoverView `json:"pushover,omitempty"`
-	Webhook  *webhookView  `json:"webhook,omitempty"`
+	Webhooks []webhookView `json:"webhooks"`
 }
 
 // Every credential here is reported as a BOOLEAN, never as a value. The
@@ -89,6 +89,8 @@ type pushoverView struct {
 }
 
 type webhookView struct {
+	// Name is how an escalation rung addresses this endpoint.
+	Name               string            `json:"name"`
 	Enabled            bool              `json:"enabled"`
 	URL                string            `json:"url"`
 	SecretSet          bool              `json:"secret_set"`
@@ -189,10 +191,10 @@ type consoleUpdate struct {
 }
 
 type channelsUpdate struct {
-	Ntfy     *ntfyUpdate     `json:"ntfy"`
-	Email    *emailUpdate    `json:"email"`
-	Pushover *pushoverUpdate `json:"pushover"`
-	Webhook  *webhookUpdate  `json:"webhook"`
+	Ntfy     *ntfyUpdate      `json:"ntfy"`
+	Email    *emailUpdate     `json:"email"`
+	Pushover *pushoverUpdate  `json:"pushover"`
+	Webhooks *[]webhookUpdate `json:"webhooks"`
 }
 
 type pushoverUpdate struct {
@@ -204,6 +206,7 @@ type pushoverUpdate struct {
 }
 
 type webhookUpdate struct {
+	Name               string            `json:"name"`
 	Enabled            bool              `json:"enabled"`
 	URL                string            `json:"url"`
 	SecretNew          string            `json:"secret_new"`
@@ -256,6 +259,15 @@ type webUpdate struct {
 	// plain string would let any client that omits the field silently re-widen
 	// an exposure the operator deliberately narrowed.
 	AckListen *string `json:"ack_listen"`
+}
+
+// webhookViewName is the endpoint's name, defaulting to what the original
+// single endpoint has always been called.
+func webhookViewName(h config.Webhook) string {
+	if n := strings.TrimSpace(h.Name); n != "" {
+		return n
+	}
+	return "webhook"
 }
 
 // viewSettings projects a config into the secret-free outbound shape.
@@ -320,8 +332,9 @@ func viewSettings(c *config.Config) settingsView {
 			Sound:    o.Sound,
 		}
 	}
-	if h := c.Channels.Webhook; h != nil {
-		v.Channels.Webhook = &webhookView{
+	for _, h := range c.WebhookEndpoints() {
+		v.Channels.Webhooks = append(v.Channels.Webhooks, webhookView{
+			Name:    webhookViewName(h),
 			Enabled: h.Enabled,
 			// The URL may itself carry a token in its query string, which is
 			// how a good many receivers authenticate. It is shown because the
@@ -332,7 +345,7 @@ func viewSettings(c *config.Config) settingsView {
 			SecretSet:          !h.Secret.IsZero(),
 			Headers:            h.Headers,
 			InsecureSkipVerify: h.InsecureSkipVerify,
-		}
+		})
 	}
 	if e := c.Channels.Email; e != nil {
 		recips := e.Recipients
@@ -526,21 +539,32 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 		}
 		next.Channels.Pushover = &o
 	}
-	if in := chans.Webhook; in != nil {
-		h := config.Webhook{
-			Enabled:            in.Enabled,
-			URL:                strings.TrimSpace(in.URL),
-			Headers:            in.Headers,
-			InsecureSkipVerify: in.InsecureSkipVerify,
+	if chans.Webhooks != nil {
+		// Signing secrets are carried across by NAME, for the same reason hook
+		// credentials are: the browser is never sent one and so cannot send
+		// one back. Renaming an endpoint therefore drops its secret, which is
+		// visible in the form rather than silent.
+		bySecret := map[string]secret.Secret{}
+		for _, prev := range cur.WebhookEndpoints() {
+			bySecret[strings.ToLower(webhookViewName(prev))] = prev.Secret
 		}
-		if cur.Channels.Webhook != nil {
-			h.Secret = cur.Channels.Webhook.Secret
+		next.Channels.Webhook = nil
+		next.Channels.Webhooks = nil
+		for _, in := range *chans.Webhooks {
+			h := config.Webhook{
+				Name:               strings.TrimSpace(in.Name),
+				Enabled:            in.Enabled,
+				URL:                strings.TrimSpace(in.URL),
+				Headers:            in.Headers,
+				InsecureSkipVerify: in.InsecureSkipVerify,
+				Secret:             bySecret[strings.ToLower(strings.TrimSpace(in.Name))],
+			}
+			if in.SecretNew != "" {
+				h.Secret = secret.Secret(in.SecretNew)
+				touched = append(touched, "webhook "+h.Name+" signing secret")
+			}
+			next.Channels.Webhooks = append(next.Channels.Webhooks, h)
 		}
-		if in.SecretNew != "" {
-			h.Secret = secret.Secret(in.SecretNew)
-			touched = append(touched, "webhook signing secret")
-		}
-		next.Channels.Webhook = &h
 	}
 
 	next.Rules = upd.Rules

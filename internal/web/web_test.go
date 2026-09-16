@@ -1336,12 +1336,14 @@ func channelsAsUpdate(c *config.Config) channelsUpdate {
 	if p := c.Channels.Pushover; p != nil {
 		u.Pushover = &pushoverUpdate{Enabled: p.Enabled, Device: p.Device, Sound: p.Sound}
 	}
-	if h := c.Channels.Webhook; h != nil {
-		u.Webhook = &webhookUpdate{
-			Enabled: h.Enabled, URL: h.URL, Headers: h.Headers,
-			InsecureSkipVerify: h.InsecureSkipVerify,
-		}
+	endpoints := []webhookUpdate{}
+	for _, h := range c.WebhookEndpoints() {
+		endpoints = append(endpoints, webhookUpdate{
+			Name: webhookViewName(h), Enabled: h.Enabled, URL: h.URL,
+			Headers: h.Headers, InsecureSkipVerify: h.InsecureSkipVerify,
+		})
 	}
+	u.Webhooks = &endpoints
 	return u
 }
 

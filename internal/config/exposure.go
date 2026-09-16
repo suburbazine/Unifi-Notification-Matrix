@@ -159,6 +159,13 @@ func ackListenNote(ackListen string) string {
 func (c Config) exposureWarnings() []string {
 	var w []string
 
+	if strings.TrimSpace(c.Web.AckBaseURL) == "" && c.anyChannelEnabled() {
+		w = append(w, "web.ack_base_url is not set, so alerts will carry no "+
+			"acknowledgement link -- an alert can then only be stopped from the "+
+			"web UI, which is on this machine and not in the hand holding the "+
+			"notification")
+	}
+
 	public := LooksInternetFacing(c.Web.AckBaseURL)
 	scoped := strings.TrimSpace(c.Web.AckListen) != ""
 

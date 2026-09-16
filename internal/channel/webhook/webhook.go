@@ -62,6 +62,16 @@ const (
 
 // Config is everything this channel needs. Plain data: no clients, no state.
 type Config struct {
+	// ChannelName distinguishes this endpoint from other webhook endpoints.
+	//
+	// Empty means "webhook", which is what a single configured endpoint is
+	// called and what every existing policy and rule already names. A site
+	// pushing to more than one receiver -- a home automation box and an
+	// on-call service want different documents at different times -- needs
+	// each to be addressable by an escalation rung, and a rung names a
+	// channel by its name.
+	ChannelName string
+
 	// URL is where the document is POSTed.
 	//
 	// It is treated as a credential in its own right, because for most receivers
@@ -350,7 +360,15 @@ func insecureTransport(base http.RoundTripper) (http.RoundTripper, error) {
 }
 
 // Name is the identifier used in policy stage lists and diagnostics.
-func (c *Channel) Name() string { return "webhook" }
+func (c *Channel) Name() string {
+	if n := strings.TrimSpace(c.cfg.ChannelName); n != "" {
+		return n
+	}
+	return DefaultName
+}
+
+// DefaultName is what a webhook endpoint is called when it is the only one.
+const DefaultName = "webhook"
 
 // Send delivers one alert.
 func (c *Channel) Send(ctx context.Context, a channel.Alert) error {
