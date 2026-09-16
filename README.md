@@ -1,5 +1,29 @@
 # UniFi Notification Matrix
 
+<p align="center">
+  <a href="https://github.com/suburbazine/Unifi-Notification-Matrix/releases/latest/download/notifymatrix-windows-amd64.exe"><img alt="Download for Windows, 64-bit" src="https://img.shields.io/badge/Windows-x64%20(.exe)-0078D4?style=for-the-badge&logo=windows&logoColor=white"></a>
+  <a href="https://github.com/suburbazine/Unifi-Notification-Matrix/releases/latest/download/notifymatrix-linux-amd64"><img alt="Download for Linux, 64-bit" src="https://img.shields.io/badge/Linux-x64-1B1B1B?style=for-the-badge&logo=linux&logoColor=white"></a>
+  <a href="https://github.com/suburbazine/Unifi-Notification-Matrix/releases/latest/download/notifymatrix-linux-arm64"><img alt="Download for Linux, ARM64" src="https://img.shields.io/badge/Linux-arm64-1B1B1B?style=for-the-badge&logo=linux&logoColor=white"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/suburbazine/Unifi-Notification-Matrix/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/suburbazine/Unifi-Notification-Matrix?include_prereleases&sort=semver&label=release"></a>
+  <a href="https://github.com/suburbazine/Unifi-Notification-Matrix/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/suburbazine/Unifi-Notification-Matrix/total?label=downloads"></a>
+  <a href="https://github.com/suburbazine/Unifi-Notification-Matrix/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/suburbazine/Unifi-Notification-Matrix/ci.yml?branch=main&label=CI"></a>
+  <img alt="Signed and reproducible" src="https://img.shields.io/badge/builds-signed%20%2B%20reproducible-2ea44f">
+  <a href="LICENSE.md"><img alt="Licence" src="https://img.shields.io/badge/licence-PolyForm%20Noncommercial-blue"></a>
+</p>
+
+<p align="center">
+  <sub>
+    Windows binaries are Authenticode-signed and timestamped; every binary
+    ships a Sigstore bundle and SLSA provenance.<br>
+    <b><a href="#verifying-a-download">Check what you downloaded</a></b> —
+    it takes one command, and this is a program you are about to give
+    a view of your cameras and doors.
+  </sub>
+</p>
+
 > **Status: all three products ingest.** Protect, Access and Network.
 > Built and tested: the incident lifecycle, the durable store, the escalation
 > scheduler, the rule engine, acknowledgement, the secret store, configuration,
