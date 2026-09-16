@@ -603,7 +603,11 @@ function renderSettings(body, s) {
     nc.appendChild(el("div", "title", "ntfy"));
     var nf = el("div", "fields");
     nf.appendChild(labelled("Enabled", check(ch.ntfy, "enabled")));
-    nf.appendChild(labelled("Server URL", bind(ch.ntfy, "server_url")));
+    var nurl = bind(ch.ntfy, "server_url");
+    // The default is real and usable, so it is shown as the placeholder rather
+    // than left as an empty box somebody has to know how to fill.
+    nurl.placeholder = "https://ntfy.sh  (leave blank for the public server)";
+    nf.appendChild(labelled("Server URL", nurl));
     nf.appendChild(labelled("Topic", bind(ch.ntfy, "topic")));
     nc.appendChild(nf);
     secretRow(nc, ch.ntfy.token_set, "token", ch.ntfy, "token_new");

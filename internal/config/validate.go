@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/ntfy"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 )
 
@@ -154,9 +155,17 @@ func (c Config) validateChannels() Problems {
 		if strings.TrimSpace(n.Topic) == "" {
 			p = append(p, "channel ntfy: needs a topic")
 		}
-		if u, err := url.Parse(n.ServerURL); err != nil || u.Host == "" ||
-			(u.Scheme != "http" && u.Scheme != "https") {
-			p = append(p, fmt.Sprintf("channel ntfy: server_url %q is not an http(s) URL", n.ServerURL))
+		// Empty means the public instance, which is what ntfy.New already does
+		// with it. Refusing it here made the two disagree: the channel had a
+		// perfectly good default and the validator would not let anybody reach
+		// it, so enabling ntfy meant knowing to type a URL that was going to be
+		// used anyway.
+		if raw := strings.TrimSpace(n.ServerURL); raw != "" {
+			if u, err := url.Parse(raw); err != nil || u.Host == "" ||
+				(u.Scheme != "http" && u.Scheme != "https") {
+				p = append(p, fmt.Sprintf("channel ntfy: server_url %q is not an "+
+					"http(s) URL. Leave it blank for %s", n.ServerURL, ntfy.DefaultServer))
+			}
 		}
 	}
 	if e := c.Channels.Email; e != nil && e.Enabled {

@@ -118,7 +118,7 @@ func (u *updater) check(ctx context.Context) (web.UpdateState, error) {
 // The version the operator saw is passed back in and checked against what the
 // feed now offers. Without it, a release published between the check and the
 // click gets installed instead -- silently, and not the one they agreed to.
-func (u *updater) apply(ctx context.Context, wantVersion string) error {
+func (u *updater) apply(ctx context.Context, wantVersion, dataDir string) error {
 	if can, why := applicable(); !can {
 		return fmt.Errorf("update: %s", why)
 	}
@@ -155,7 +155,7 @@ func (u *updater) apply(ctx context.Context, wantVersion string) error {
 	// Restarting is what makes the new binary the running one. A successful
 	// update that is still running the old code is the same as no update, and
 	// worse because the version on the page now disagrees with the process.
-	if err := restartSelf(service.New()); err != nil {
+	if err := restartSelf(service.New(), dataDir); err != nil {
 		return fmt.Errorf("update: %s was installed, but the service could not be "+
 			"restarted (%w). It will come up on the new version the next time it "+
 			"starts", rel.Version, err)

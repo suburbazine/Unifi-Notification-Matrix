@@ -307,7 +307,7 @@ func dispatch(cmd, dataDir, user string, showLinks, showAll, interactive, portab
 	case restartServiceVerb:
 		// Hidden: the detached child of a daemon restarting itself. Not listed
 		// in usage because it is not something to type.
-		return restartServiceHelper()
+		return restartServiceHelper(dataDir)
 
 	case "demo":
 		return demoCmd(dataDir, dataDirWasGiven)
@@ -800,13 +800,15 @@ func runDaemon(ctx context.Context, dataDir string) error {
 				case web.ServiceStart:
 					return m.Start()
 				case web.ServiceRestart:
-					return restartSelf(m)
+					return restartSelf(m, dataDir)
 				}
 				return fmt.Errorf("unknown service action %q", a)
 			},
 			UpdateState: upd.state,
 			CheckUpdate: upd.check,
-			ApplyUpdate: upd.apply,
+			ApplyUpdate: func(ctx context.Context, v string) error {
+				return upd.apply(ctx, v, dataDir)
+			},
 			Checklist: func() setup.Input {
 				cfgMu.RLock()
 				c := current

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/service"
 )
 
@@ -27,7 +30,12 @@ const restartServiceVerb = "restart-service"
 // service, waits for the service manager to say it really has stopped, and
 // starts it again. A service's children are not killed with it on Windows, and
 // the child inherits LocalSystem, so it has the rights to do both halves.
-func restartSelf(m service.Manager) error {
+//
+// The data directory goes with it so the child can RECORD a failure. Without
+// that, a restart that stops and does not start leaves no trace anywhere and
+// the only symptom is a daemon that is not running -- which is exactly the
+// thing this product exists to notice about everything except itself.
+func restartSelf(m service.Manager, dataDir string) error {
 	st, err := m.Status()
 	if err != nil {
 		return fmt.Errorf("could not read the service state: %w", err)
@@ -44,7 +52,11 @@ func restartSelf(m service.Manager) error {
 	if err != nil {
 		return fmt.Errorf("could not locate this executable: %w", err)
 	}
-	cmd := exec.Command(exe, restartServiceVerb)
+	args := []string{restartServiceVerb}
+	if dataDir != "" {
+		args = append(args, "--data-dir", dataDir)
+	}
+	cmd := exec.Command(exe, args...)
 	detachChild(cmd)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("could not start the restart helper: %w", err)
@@ -58,33 +70,83 @@ func restartSelf(m service.Manager) error {
 // restartServiceHelper is the detached child: stop, wait, start.
 //
 // Its whole job is to be a process that is not the one being restarted.
-func restartServiceHelper() int {
+func restartServiceHelper(dataDir string) int {
 	m := service.New()
 
 	if err := m.Stop(); err != nil && !errors.Is(err, service.ErrNotInstalled) {
-		fmt.Fprintln(os.Stderr, "restart: stopping:", err)
 		// Carry on to the start regardless. A stop that failed because the
 		// service was already down must still be followed by a start, or the
 		// helper leaves it off -- and a daemon that is off raises nothing.
+		recordRestartTrouble(dataDir, "stopping the service reported an error", err)
 	}
 
-	// Wait for the service manager to agree it has stopped. Starting a service
-	// that is still stopping fails, and it fails in a way that leaves it
-	// stopped, so this is the difference between a restart and an outage.
+	// Wait for STOPPED specifically.
+	//
+	// This is where the first version got it wrong, and the bug took a live
+	// installation down and left it down. Stop() only SENDS the control and
+	// returns; the service then sits in STOP_PENDING while it closes its store
+	// and drains its queues. The wait was written as "not running", and
+	// STOP_PENDING is not running -- so it fell through immediately and called
+	// Start() into a service that was still stopping, which Windows refuses.
+	// The helper then exited quietly and the machine was left with no daemon.
+	stopped := false
 	deadline := time.Now().Add(restartStopTimeout)
 	for time.Now().Before(deadline) {
-		st, err := m.Status()
-		if err == nil && st.State != service.StateRunning {
+		if st, err := m.Status(); err == nil && st.State == service.StateStopped {
+			stopped = true
 			break
 		}
 		time.Sleep(restartPollInterval)
 	}
-
-	if err := m.Start(); err != nil {
-		fmt.Fprintln(os.Stderr, "restart: starting:", err)
-		return 1
+	if !stopped {
+		recordRestartTrouble(dataDir,
+			"the service did not reach a stopped state within "+restartStopTimeout.String()+
+				"; starting anyway", nil)
 	}
-	return 0
+
+	// And retry the start, because the window between "stopped" and "startable"
+	// is not always zero. Failing here is the failure that matters: everything
+	// above has already taken the daemon down.
+	var err error
+	for attempt := 1; attempt <= restartStartAttempts; attempt++ {
+		if err = m.Start(); err == nil {
+			return 0
+		}
+		time.Sleep(restartStartBackoff)
+	}
+
+	recordRestartTrouble(dataDir,
+		"THE SERVICE IS STOPPED AND COULD NOT BE STARTED. Nothing is being "+
+			"watched until it is started by hand", err)
+	fmt.Fprintln(os.Stderr, "restart: starting:", err)
+	return 1
+}
+
+// recordRestartTrouble writes to the audit record, which is the only place a
+// detached child with no console can say anything at all.
+//
+// Best effort by necessity -- if this fails there is genuinely nowhere left to
+// report -- but it is the difference between a stopped daemon with a reason
+// and a stopped daemon that simply stopped.
+func recordRestartTrouble(dataDir, summary string, cause error) {
+	if dataDir == "" {
+		return
+	}
+	log, err := audit.Open(filepath.Dir(filepath.Join(dataDir, "audit.jsonl")))
+	if err != nil {
+		return
+	}
+	defer log.Close()
+
+	fields := map[string]string{"stage": "restart"}
+	if cause != nil {
+		fields["error"] = cause.Error()
+	}
+	_ = log.Append(context.Background(), audit.Entry{
+		Kind: audit.KindService, Actor: "system",
+		Summary: "restart: " + summary,
+		Fields:  fields,
+	})
 }
 
 const (
@@ -95,4 +157,9 @@ const (
 	restartStopTimeout = 60 * time.Second
 
 	restartPollInterval = 250 * time.Millisecond
+
+	// restartStartAttempts covers the gap between the service manager
+	// reporting STOPPED and being willing to start it again.
+	restartStartAttempts = 10
+	restartStartBackoff  = 1 * time.Second
 )

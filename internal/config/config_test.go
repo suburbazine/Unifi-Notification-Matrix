@@ -578,3 +578,44 @@ web:
 		t.Error("re-encryption lost the value")
 	}
 }
+
+// ntfy.New already treats an empty server URL as the public instance, and the
+// validator refused to let anybody reach that: enabling ntfy meant knowing to
+// type a URL that was going to be used anyway, and getting it wrong was the
+// difference between alerts and silence.
+func TestNtfyWithNoServerURLIsValidAndMeansThePublicInstance(t *testing.T) {
+	c := Default()
+	c.Channels.Ntfy = &Ntfy{Enabled: true, Topic: "something-nobody-could-guess"}
+	c.Consoles = nil
+
+	for _, prob := range c.Validate().(Problems) {
+		if strings.Contains(prob, "server_url") {
+			t.Fatalf("a blank ntfy server_url was refused: %s", prob)
+		}
+	}
+}
+
+// A server URL that is present and wrong is still refused -- and the refusal
+// says what blank would have done, because "not an http(s) URL" on its own
+// does not tell somebody they could simply delete it.
+func TestABadNtfyServerURLIsStillRefusedAndNamesTheDefault(t *testing.T) {
+	c := Default()
+	c.Channels.Ntfy = &Ntfy{Enabled: true, Topic: "t", ServerURL: "ntfy.sh"}
+
+	var found string
+	if err := c.Validate(); err != nil {
+		if probs, ok := err.(Problems); ok {
+			for _, p := range probs {
+				if strings.Contains(p, "server_url") {
+					found = p
+				}
+			}
+		}
+	}
+	if found == "" {
+		t.Fatal("a server_url with no scheme was accepted")
+	}
+	if !strings.Contains(found, "https://ntfy.sh") {
+		t.Errorf("the refusal does not say what blank would give: %s", found)
+	}
+}

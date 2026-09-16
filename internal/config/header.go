@@ -83,7 +83,7 @@ const fileHeader = `# notifymatrix configuration
 # channels:
 #   ntfy:
 #     enabled: true
-#     server_url: https://ntfy.sh
+#     server_url: https://ntfy.sh    # optional; this is the default
 #     topic: <something nobody could guess>
 #   email:
 #     enabled: true
