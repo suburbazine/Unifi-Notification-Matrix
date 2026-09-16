@@ -287,6 +287,16 @@ func channelStep(in Input) Step {
 }
 
 func ackStep(in Input) Step {
+	lan := LocalAddress()
+	port := ListenPort(in.Listen)
+	if port == "" {
+		port = "8322"
+	}
+	example := "http://" + lan + ":" + port
+	if lan == "" {
+		example = "http://<this machine's LAN address>:" + port
+	}
+
 	s := Step{
 		Title: "Make the acknowledgement links work",
 		Why: "Alerts carry a link that stops the escalation. If this address is " +
@@ -295,9 +305,25 @@ func ackStep(in Input) Step {
 			"on the same network -- which, if nobody is at the site, means nobody " +
 			"can stop it at all.",
 		How: []string{
-			"Set web.ack_base_url to an address the phone can actually reach.",
-			"If the phone is on the same network: this machine's LAN address, " +
-				"not 127.0.0.1 -- for example http://192.168.1.50:8322",
+			"TWO settings have to agree, and getting either alone is the usual " +
+				"failure: web.listen decides where this program ACCEPTS " +
+				"connections, and web.ack_base_url is the address put into the " +
+				"link. A perfect address with nothing listening for it produces a " +
+				"link that times out.",
+			"1. Set web.listen to 0.0.0.0:" + port + " -- every interface. Binding " +
+				"it to one address instead (for example " + orExample(lan, "192.168.1.50") +
+				":" + port + ") works from the network and STOPS 127.0.0.1 from " +
+				"working, so the interface looks dead from this machine while the " +
+				"process is plainly running.",
+			"2. Set web.ack_base_url to " + example + " -- this machine's own " +
+				"address, not 127.0.0.1, because the phone holding the notification " +
+				"is not this machine.",
+			"3. Use http:// unless something else is terminating TLS. This program " +
+				"serves plain HTTP; an https:// address pointing straight at its " +
+				"port cannot connect at all, and that is a configuration that looks " +
+				"entirely correct and answers nothing.",
+			"Then open " + example + "/ from a phone on the same Wi-Fi. If that " +
+				"page loads, acknowledgement will work.",
 		},
 	}
 
@@ -323,8 +349,10 @@ func ackStep(in Input) Step {
 		"Put TLS in front of it. The acknowledgement token travels in the URL, so "+
 			"over plain http anyone on the path can read it and silence an alarm. "+
 			"A reverse proxy that obtains a certificate automatically (Caddy, "+
-			"nginx with certbot) is the usual answer. If that is more than you "+
-			"want to run, use the VPN option instead -- it is genuinely easier.",
+			"nginx with certbot) is the usual answer -- and THAT is what makes an "+
+			"https:// ack address work, because the proxy speaks TLS and this "+
+			"program does not. If that is more than you want to run, use the VPN "+
+			"option instead: it is genuinely easier.",
 		"Then set web.ack_base_url to the public address, and check it from a "+
 			"phone on mobile data with Wi-Fi off. That is the only test that "+
 			"matches the situation it exists for.",
@@ -333,10 +361,27 @@ func ackStep(in Input) Step {
 	switch {
 	case strings.TrimSpace(in.AckBaseURL) == "":
 		s.Status, s.State = Todo, "not set -- alerts will carry no acknowledgement link"
+
 	case strings.Contains(in.AckBaseURL, "127.0.0.1"), strings.Contains(in.AckBaseURL, "localhost"):
 		s.Status = Todo
 		s.State = in.AckBaseURL + " -- only works on this machine, so the link " +
 			"in a phone notification will not open"
+
+	// Nothing is listening where the link points. Each half looks right on its
+	// own, which is why this needs saying rather than leaving to inspection.
+	case ListenIsLoopbackOnly(in.Listen) && !in.AckScoped:
+		s.Status = Todo
+		s.State = in.AckBaseURL + " -- but web.listen is " + in.Listen +
+			", which accepts connections only from this machine, so nothing " +
+			"answers that address. Set web.listen to 0.0.0.0:" + port
+
+	// An https address aimed at a port this program serves in plain HTTP.
+	case AckURLTargetsThePlainListener(in.AckBaseURL, in.Listen, in.AckListen):
+		s.Status = Todo
+		s.State = in.AckBaseURL + " is https, but that port is served by this " +
+			"program in plain HTTP -- nothing will connect unless a reverse proxy " +
+			"is terminating TLS in front of it"
+
 	case in.PublicAckURL && !in.AckScoped:
 		// The dangerous middle state: a public address, and nothing scoping
 		// what is published on it.
@@ -344,14 +389,22 @@ func ackStep(in Input) Step {
 		s.State = in.AckBaseURL + " looks public, but web.ack_listen is not set -- " +
 			"if a port is forwarded to the main listener then the status page and " +
 			"the settings sign-in are on the internet too"
+
 	case in.PublicAckURL && strings.HasPrefix(strings.ToLower(in.AckBaseURL), "http://"):
 		s.Status = Optional
 		s.State = in.AckBaseURL + " is public over plain http -- the acknowledgement " +
 			"token is in the URL and readable in transit"
+
 	default:
 		s.Status, s.State = Done, in.AckBaseURL
 		if in.AckScoped {
 			s.State += " (acknowledgements scoped to " + in.AckListen + ")"
+		}
+		if ListenIsOneAddress(in.Listen) {
+			// Not a failure -- it works -- but the consequence is invisible and
+			// the first symptom is somebody deciding the program is broken.
+			s.State += ". Note: web.listen is pinned to " + in.Listen +
+				", so http://127.0.0.1:" + port + "/ will NOT open on this machine"
 		}
 	}
 	return s
@@ -360,6 +413,15 @@ func ackStep(in Input) Step {
 // hooksTitle is referenced by Render, so the URLs are printed under the right
 // step without matching on prose.
 const hooksTitle = "Create the UniFi Alarm Manager rules"
+
+// orExample returns the real value when there is one, and a placeholder
+// otherwise, so instructions never print an empty string mid-sentence.
+func orExample(real, fallback string) string {
+	if strings.TrimSpace(real) != "" {
+		return real
+	}
+	return fallback
+}
 
 func hooksStep(in Input) Step {
 	s := Step{

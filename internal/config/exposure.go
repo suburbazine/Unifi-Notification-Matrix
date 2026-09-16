@@ -98,6 +98,29 @@ func WantsRandom(addr string) bool {
 // this has a reason, and refusing to start would leave them with an alarm
 // system that does not run. Saying it every time they start is the right
 // amount of pressure.
+// httpsAimedAtOurOwnPort reports an https acknowledgement address whose port
+// is one of the ports this daemon listens on.
+func httpsAimedAtOurOwnPort(ackURL, listen, ackListen string) bool {
+	raw := strings.TrimSpace(ackURL)
+	if !strings.HasPrefix(strings.ToLower(raw), "https://") {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	port := u.Port()
+	if port == "" {
+		return false // 443, which is never one of ours
+	}
+	for _, addr := range []string{listen, ackListen} {
+		if _, p, err := net.SplitHostPort(strings.TrimSpace(addr)); err == nil && p == port {
+			return true
+		}
+	}
+	return false
+}
+
 // ackURLIsThisMachine reports whether the acknowledgement address names
 // loopback, which validate() already refuses for its own reasons.
 func ackURLIsThisMachine(rawurl string) bool {
@@ -164,6 +187,19 @@ func (c Config) exposureWarnings() []string {
 			"the acknowledgement token is in the URL, so anyone on the path can "+
 			"read it and silence an alarm. Put TLS in front of it, or reach it "+
 			"over a VPN instead")
+	}
+	// An https acknowledgement address aimed at a port THIS program serves.
+	//
+	// It serves plain HTTP. The address is right, the port is right, the
+	// scheme is the one everybody knows they should be using, and nothing
+	// connects -- which is a failure that looks like a network problem rather
+	// than a configuration one. Legitimate only with a reverse proxy in front,
+	// and nothing in the config can tell whether one is there.
+	if httpsAimedAtOurOwnPort(c.Web.AckBaseURL, c.Web.Listen, c.Web.AckListen) {
+		w = append(w, "web.ack_base_url is https but names a port this program "+
+			"serves itself, and it serves plain HTTP -- nothing will connect "+
+			"unless a reverse proxy is terminating TLS in front of it. If there "+
+			"is no proxy, this address needs to be http://")
 	}
 	if scoped && strings.EqualFold(strings.TrimSpace(c.Web.AckListen), strings.TrimSpace(c.Web.Listen)) {
 		w = append(w, "web.ack_listen is the same address as web.listen, so it "+

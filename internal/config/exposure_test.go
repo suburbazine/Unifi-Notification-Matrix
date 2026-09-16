@@ -304,3 +304,33 @@ func warnsAbout(c Config, substr string) bool {
 	}
 	return false
 }
+
+// An https acknowledgement address aimed at a port this daemon serves itself.
+// It serves plain HTTP: the address is right, the port is right, the scheme is
+// the one everybody knows they should use, and nothing connects -- which reads
+// as a network fault rather than a configuration one.
+func TestAnHTTPSAckURLOnOurOwnPortIsWarnedAbout(t *testing.T) {
+	c := Default()
+	c.Web.Listen = "0.0.0.0:50001"
+	c.Web.AckBaseURL = "https://alerts.example.com:50001"
+
+	if !warnsAbout(c, "plain HTTP") {
+		t.Fatalf("no warning for https aimed at our own plain-HTTP port:\n%v", c.Warnings())
+	}
+}
+
+// Behind a proxy on the normal https port, or on any port that is not ours,
+// this is the recommended configuration and must be silent.
+func TestAnHTTPSAckURLThroughAProxyIsNotWarnedAbout(t *testing.T) {
+	for _, url := range []string{
+		"https://alerts.example.com",      // 443, never ours
+		"https://alerts.example.com:8443", // a proxy on its own port
+	} {
+		c := Default()
+		c.Web.Listen = "0.0.0.0:50001"
+		c.Web.AckBaseURL = url
+		if warnsAbout(c, "plain HTTP") {
+			t.Errorf("%s was warned about:\n%v", url, c.Warnings())
+		}
+	}
+}

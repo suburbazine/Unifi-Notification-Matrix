@@ -431,3 +431,81 @@ func TestTheRenderedStepsUseTheRealName(t *testing.T) {
 		t.Error("no step mentions the executable the operator actually has")
 	}
 }
+
+// Reported from a live install: the process was plainly running and the
+// interface "was not". web.listen had been pinned to one address, so
+// 127.0.0.1 -- which every message, document and habit prints -- stopped
+// working. Nothing anywhere said that would happen.
+func TestPinningTheListenerToOneAddressSaysLoopbackWillStopWorking(t *testing.T) {
+	in := Input{
+		Listen:     "192.168.20.115:50001",
+		AckBaseURL: "http://192.168.20.115:50001",
+	}
+	s := ackStep(in)
+	if !strings.Contains(s.State, "127.0.0.1") {
+		t.Errorf("a pinned listener does not warn that loopback stops working:\n  %s", s.State)
+	}
+	// It still WORKS, so it must not be reported as unfinished.
+	if s.Status == Todo {
+		t.Errorf("a working configuration was marked as todo: %s", s.State)
+	}
+}
+
+// The other half of the same report: an ack address is meaningless if nothing
+// accepts connections there. Each setting looks right alone.
+func TestAnAckAddressWithALoopbackListenerIsReportedAsUnfinished(t *testing.T) {
+	in := Input{
+		Listen:     "127.0.0.1:8322",
+		AckBaseURL: "https://alerts.example.com",
+	}
+	s := ackStep(in)
+	if s.Status != Todo {
+		t.Fatalf("an unreachable ack address was not flagged: %v / %s", s.Status, s.State)
+	}
+	if !strings.Contains(s.State, "0.0.0.0") {
+		t.Errorf("the state does not say what to set instead:\n  %s", s.State)
+	}
+}
+
+// An https address aimed at the port this program serves in plain HTTP. The
+// address is right, the port is right, the scheme is the one everybody knows
+// they should use, and nothing connects.
+func TestAnHTTPSAckURLAimedAtThePlainListenerIsFlagged(t *testing.T) {
+	in := Input{
+		Listen:     "0.0.0.0:50001",
+		AckBaseURL: "https://notifymatrix.example.com:50001",
+	}
+	s := ackStep(in)
+	if s.Status != Todo {
+		t.Fatalf("an https URL aimed at the plain listener was accepted: %v / %s",
+			s.Status, s.State)
+	}
+	if !strings.Contains(s.State, "plain HTTP") {
+		t.Errorf("the state does not say why it cannot work:\n  %s", s.State)
+	}
+}
+
+// Behind a reverse proxy on a DIFFERENT port, https is correct and must not be
+// nagged -- that is the configuration the instructions recommend.
+func TestAnHTTPSAckURLOnAnotherPortIsFine(t *testing.T) {
+	in := Input{
+		Listen:     "0.0.0.0:50001",
+		AckListen:  "0.0.0.0:51234",
+		AckScoped:  true,
+		AckBaseURL: "https://alerts.example.com",
+	}
+	if s := ackStep(in); s.Status == Todo {
+		t.Errorf("a proxied setup was flagged: %s", s.State)
+	}
+}
+
+// The instructions must name BOTH settings. Telling somebody the ack address
+// and not the listener is how the reported failure happened.
+func TestTheInstructionsNameTheListenerAsWellAsTheAddress(t *testing.T) {
+	how := strings.Join(ackStep(Input{Listen: "127.0.0.1:8322"}).How, "\n")
+	for _, want := range []string{"web.listen", "web.ack_base_url", "0.0.0.0", "plain HTTP"} {
+		if !strings.Contains(how, want) {
+			t.Errorf("the instructions never mention %q:\n%s", want, how)
+		}
+	}
+}
