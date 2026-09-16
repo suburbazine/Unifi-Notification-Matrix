@@ -3,6 +3,7 @@ package protect
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 )
@@ -264,6 +265,58 @@ func TestOnlyMotionShapedConditionsAreResolvedByTheirOwnEnd(t *testing.T) {
 	for alarmType, m := range alarmTypeMappings {
 		if m.endClears {
 			t.Errorf("alarmType %q resolves itself on its own `end`; a smoke alarm's window ending is not the smoke stopping", alarmType)
+		}
+	}
+}
+
+// A CAMERA THAT COMES BACK THROUGH CONNECTING STILL CLEARS ITS INCIDENT.
+//
+// CONNECTING emits nothing, because it is a transient on the way to a state we
+// do not know yet -- but the registry was STORING it, which threw away the one
+// state we did know. DISCONNECTED, CONNECTING, CONNECTED left prev=CONNECTING
+// at the final step, and a clear only fires from DISCONNECTED, so the offline
+// incident never resolved: it nagged at HIGH until a human closed it by hand,
+// and the reconnect sweep could not repair it either, because by then the
+// stored state was CONNECTED and there was no transition left to notice.
+func TestAnOfflineCameraClearsWhenItReturnsThroughConnecting(t *testing.T) {
+	r := newRegistry()
+	base := time.Date(2026, 1, 1, 3, 0, 0, 0, time.UTC)
+
+	type step struct {
+		state      string
+		wantCond   string
+		wantClears bool
+		wantEmit   bool
+	}
+	steps := []step{
+		{"CONNECTED", "", false, false},
+		{"DISCONNECTED", ConditionOffline, false, true},
+		{"CONNECTING", "", false, false},
+		{"CONNECTED", ConditionOffline, true, true},
+	}
+	for i, s := range steps {
+		prev := r.observe(DeviceState{ID: "cam-1", State: s.state}, base.Add(time.Duration(i)*time.Second))
+		cond, clears, emit := classifyState(prev, s.state)
+		if cond != s.wantCond || clears != s.wantClears || emit != s.wantEmit {
+			t.Errorf("step %d (%s, prev %s) = (%q, %v, %v), want (%q, %v, %v)",
+				i, s.state, prev, cond, clears, emit, s.wantCond, s.wantClears, s.wantEmit)
+		}
+	}
+}
+
+// And a camera that was never seen to fail must still not announce a clear.
+// CONNECTING must carry no information in EITHER direction, or it would
+// resolve an incident opened by the Alarm Manager route on no evidence of our
+// own.
+func TestConnectingAloneDoesNotClearAnything(t *testing.T) {
+	r := newRegistry()
+	base := time.Date(2026, 1, 1, 3, 0, 0, 0, time.UTC)
+
+	for i, state := range []string{"CONNECTING", "CONNECTED"} {
+		prev := r.observe(DeviceState{ID: "cam-2", State: state}, base.Add(time.Duration(i)*time.Second))
+		if _, clears, emit := classifyState(prev, state); clears || emit {
+			t.Errorf("%s (prev %q) announced something: clears=%v emit=%v",
+				state, prev, clears, emit)
 		}
 	}
 }

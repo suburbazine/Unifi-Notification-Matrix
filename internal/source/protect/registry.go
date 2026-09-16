@@ -83,7 +83,17 @@ func (r *registry) mergeLocked(d DeviceState, at time.Time, fromStream bool) (pr
 		info.MAC = d.MAC
 		r.byMAC[normaliseMAC(d.MAC)] = d.ID
 	}
-	if s := normaliseState(d.State); s != "" {
+	// CONNECTING carries no information, so it must not ERASE any.
+	//
+	// classifyState says the same thing from the other end -- CONNECTING emits
+	// nothing, because it is a transient on the way to a state we do not know
+	// yet -- but storing it threw away the one we did know. A camera going
+	// DISCONNECTED then CONNECTING then CONNECTED left prev=CONNECTING at the
+	// final step, and a clear only fires from DISCONNECTED, so the offline
+	// incident never resolved. It nagged at HIGH until a human closed it by
+	// hand, and the 15-minute sweep could not repair it either: by then the
+	// stored state was CONNECTED and there was no transition left to notice.
+	if s := normaliseState(d.State); s != "" && s != stateConnecting {
 		info.State = s
 		if fromStream {
 			info.updatedAt = at
