@@ -755,6 +755,23 @@ func (s *Source) readSocket(ctx context.Context, out event.Sink) (time.Duration,
 
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// Unblocks a reader parked in ReadMessage when the context is cancelled.
+	//
+	// gorilla's DialContext stops watching the context once the handshake
+	// succeeds, and this socket is CHATTY AT IDLE -- it pushes full state
+	// syncs on a timer -- so ReadMessage keeps returning happily and the loop
+	// below never looks at ctx again. On shutdown the daemon waits for this
+	// goroutine, the Windows service manager gives the whole stop 25 seconds,
+	// and the process was killed before the clean-shutdown marker could be
+	// written -- so the NEXT start raised an "did not shut down cleanly"
+	// incident about a shutdown that was fine. Protect has had this since it
+	// was written; Access was missing it.
+	go func() {
+		<-connCtx.Done()
+		conn.Close()
+	}()
+
 	go s.keepalive(connCtx, conn)
 
 	conn.SetReadLimit(maxFrameBytes)
