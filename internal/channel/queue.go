@@ -16,8 +16,24 @@ import (
 // was supposed to send.
 const DefaultQueueDepth = 200
 
-// DefaultSendTimeout bounds one delivery attempt.
-const DefaultSendTimeout = 30 * time.Second
+// DefaultSendTimeout bounds one delivery, INCLUDING any retry ladder the
+// channel runs internally.
+//
+// 60s rather than 30s because of a specific arithmetic collision. The ntfy
+// channel's bounded 429 retry sleeps 2s + 8s + 20s = 30s across four attempts,
+// so a 30s budget could never fund the fourth attempt — the channel documented
+// a ladder it was structurally incapable of climbing, and rate-limited alerts
+// were abandoned one rung early.
+//
+// The cost of the larger budget is bounded by the queue being per channel: a
+// worker stalled for a minute on ntfy delays nothing but ntfy. And 60s still
+// sits well inside the shortest escalation interval (2 minutes for critical),
+// so a slow delivery cannot collide with the next scheduled one.
+//
+// If a channel ever needs a longer internal ladder than this, it must say so
+// rather than silently truncating: the ladder and this budget are one number
+// in two places, and they have already disagreed once.
+const DefaultSendTimeout = 60 * time.Second
 
 // ErrQueueFull means the backlog is full and this alert was dropped.
 var ErrQueueFull = errors.New("channel queue is full")

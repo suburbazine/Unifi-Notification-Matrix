@@ -81,28 +81,39 @@ to ignore the product, which is a worse failure than not sending at all.
 Layered so that ingest, decision and delivery are separable: a source knows
 nothing about channels, and a channel knows nothing about UniFi.
 
+`✓` exists and is tested; `·` is not written yet.
+
 ```
-cmd/notifymatrix/       main; service install/uninstall; CLI verbs
-internal/
-  unifi/                ported: pacing, backoff, TLS + cert pinning (console facts)
-  source/
-    protect/            Protect ingest
-    access/             Access ingest
-    network/            Network ingest
-    inbound/            generic webhook receiver (Alarm Manager + your other apps)
-  event/                Event type, severity vocabulary, normalisation
-  rule/                 matching, dedup keys, severity mapping
-  incident/             lifecycle state machine + durable store
-  escalate/             policies, the scheduler, re-alert timing
-  channel/
-    ntfy/ pushover/ email/ webhook/ voice/
-  ack/                  token mint + verify, ack routes
-  secret/               Secret type; dpapi_windows.go, linux_*.go, other.go
-  config/
-  selfcheck/            diagnostics for "this is not working and I do not know why"
-  audit/                append-only record: every event, delivery, ack
-  web/                  local UI: setup, live incidents, ack
+✓ cmd/notifymatrix/     main; CLI verbs (version, selfcheck)
+  internal/
+  · unifi/              shared per-console pacing, backoff, TLS + cert pinning
+    source/
+  ✓   protect/          Protect ingest: two WebSockets + reconciliation sweep
+  ·   access/           Access ingest: notifications socket + system-log tail
+  ·   network/          Network ingest: poll + Alarm Manager webhook
+  ·   inbound/          generic webhook receiver (Alarm Manager, other apps)
+  ✓ event/              Event, Entity, the shared condition vocabulary
+  · rule/               matching, severity mapping, dedup-key assignment
+  ✓ incident/           lifecycle (state derived, not stored) + Store interface
+  ✓ store/              SQLite implementation of incident.Store
+  ✓ escalate/           policies, the scheduler, re-alert timing
+    channel/
+  ✓   (root)            Alert, Channel interface, per-channel bounded queue
+  ✓   ntfy/  email/
+  ·   pushover/  webhook/  voice/
+  · ack/                HMAC token mint + verify, ack routes
+  ✓ secret/             Secret type, the four-tier prefix chain
+  · config/             YAML, written by the web UI, source of truth
+  · service/            install/uninstall, recovery actions, single-instance (§9a)
+  · selfcheck/          diagnostics for "it is running and nothing happens"
+  · audit/              append-only record: every event, delivery, ack
+  · web/                local UI: setup, live incidents, ack
 ```
+
+**The store is `internal/store`, not inside `internal/incident`.** The
+interface lives with the type it carries (`incident.Store`) and the SQLite
+implementation lives apart from it, so nothing in the lifecycle logic can quietly
+acquire a dependency on a database.
 
 `internal/unifi`, `internal/source/access` and `internal/source/protect` build
 on prior in-house implementations of these APIs rather than starting from the
