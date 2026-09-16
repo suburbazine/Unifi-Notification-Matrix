@@ -423,9 +423,42 @@ Anyone on your network can read the status page. That is deliberate: it makes a
 wall display useful. Changing settings, acknowledging alarms and reading the
 audit record must not be open to everyone.
 
-1. Open `http://<this machine>:8322/`.
-2. The daemon prints a one-time setup token each time it starts. Enter it.
-3. Choose a password. The token then stops working.
+Set a password from the terminal. This is the way that always works, including
+on a machine you have just installed as a service:
+
+```bash
+notifymatrix set-password
+```
+
+It asks twice without echoing, needs at least 12 characters, and writes the
+result to the configuration. You can run it before anything else is configured.
+
+If a daemon is already running against that data directory it will say so and
+offer to restart it. Take the offer. A running daemon is still holding the old
+configuration, and would write that stale copy back over this one the next time
+anything saved.
+
+Where there is no terminal — an unattended install — it reads a single line
+from standard input instead.
+
+### Or claim it from the browser
+
+On first run the daemon mints a one-time token. Enter it at
+`http://<this machine>:8322/`, choose a password there, and the token stops
+working the moment one exists.
+
+Started from a terminal, that token is printed at startup. **Installed as a
+service it is not**, because a service has no console to print to. Ask for it:
+
+```bash
+notifymatrix setup-token
+```
+
+On Windows that needs administrator rights, and being *in* the Administrators
+group is not enough on its own: Windows withholds those rights from a process
+until it elevates, which is why opening the file by hand reports "access
+denied" even for an account that should be able to read it. The command
+elevates itself and shows the token in the window that comes up.
 
 ---
 
@@ -451,6 +484,18 @@ notifymatrix status       # is the service running, will it restart
 notifymatrix incidents    # what is open right now
 notifymatrix selfcheck    # what this machine can do
 ```
+
+**Locked out of the settings page.** Nothing is lost and nothing needs
+reinstalling — set a new password from the terminal and restart the daemon when
+it offers:
+
+```bash
+notifymatrix set-password
+```
+
+Anyone who can run that could already edit the configuration file directly, so
+it is not a way around the password so much as the same authority wearing a
+different hat.
 
 The audit record is plain text, one JSON object per line, in the data
 directory. It records the events a rule **silenced** as deliberately as the
