@@ -19,6 +19,7 @@ import (
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
@@ -481,7 +482,7 @@ func TestSecretsNeverReachAResponseBody(t *testing.T) {
 			Ntfy:  &ntfyUpdate{Enabled: true, ServerURL: "https://ntfy.sh", Topic: "site-alerts"},
 			Email: &emailUpdate{Enabled: true, Host: "smtp.example.com", Port: 587, TLS: "auto", Username: "alerts@example.com", From: "alerts@example.com", Recipients: []string{"operator@example.com"}},
 		}),
-		Web: webUpdate{Listen: "127.0.0.1:8322", AckBaseURL: "https://alerts.example.com"},
+		Web: webUpdate{Listen: "127.0.0.1:8322", AckBaseURL: strPtr("https://alerts.example.com")},
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("save: %d %s", resp.StatusCode, saveBody)
@@ -512,7 +513,7 @@ func TestSecretsSurviveASaveThatDidNotResendThem(t *testing.T) {
 			Ntfy:  &ntfyUpdate{Enabled: true, ServerURL: "https://ntfy.sh", Topic: "site-alerts"},
 			Email: &emailUpdate{Enabled: true, Host: "smtp.example.com", Port: 587, TLS: "auto", Username: "alerts@example.com", From: "alerts@example.com", Recipients: []string{"operator@example.com"}},
 		}),
-		Web: webUpdate{Listen: "127.0.0.1:8322", AckBaseURL: "https://alerts.example.com"},
+		Web: webUpdate{Listen: "127.0.0.1:8322", AckBaseURL: strPtr("https://alerts.example.com")},
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("save: %d %s", resp.StatusCode, body)
@@ -547,7 +548,7 @@ func TestSecretsSurviveASaveThatDidNotResendThem(t *testing.T) {
 			Ntfy:  &ntfyUpdate{Enabled: true, ServerURL: "https://ntfy.sh", Topic: "site-alerts"},
 			Email: &emailUpdate{Enabled: true, Host: "smtp.example.com", Port: 587, TLS: "auto", Username: "alerts@example.com", From: "alerts@example.com", Recipients: []string{"operator@example.com"}},
 		}),
-		Web: webUpdate{Listen: "127.0.0.1:8322", AckBaseURL: "https://alerts.example.com"},
+		Web: webUpdate{Listen: "127.0.0.1:8322", AckBaseURL: strPtr("https://alerts.example.com")},
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("save: %d %s", resp.StatusCode, body)
@@ -869,7 +870,7 @@ func validUpdate() settingsUpdate {
 			Ntfy:  &ntfyUpdate{Enabled: true, ServerURL: "https://ntfy.sh", Topic: "site-alerts"},
 			Email: &emailUpdate{Enabled: true, Host: "smtp.example.com", Port: 587, TLS: "auto", Username: "alerts@example.com", From: "alerts@example.com", Recipients: []string{"operator@example.com"}},
 		}),
-		Web: webUpdate{Listen: "127.0.0.1:8322", AckBaseURL: "https://alerts.example.com"},
+		Web: webUpdate{Listen: "127.0.0.1:8322", AckBaseURL: strPtr("https://alerts.example.com")},
 	}
 }
 
@@ -881,7 +882,7 @@ func TestValidationIsShownAndInternalErrorsAreNot(t *testing.T) {
 	// A mistake the operator can fix must be reported in full. That is the
 	// entire point of validating rather than accepting.
 	bad := validUpdate()
-	bad.Web.AckBaseURL = "https://127.0.0.1:8322"
+	bad.Web.AckBaseURL = strPtr("https://127.0.0.1:8322")
 	resp, body := h.do("POST", "/api/settings", bad)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("a bad ack base URL was accepted: %d %s", resp.StatusCode, body)
@@ -924,9 +925,7 @@ func TestSavingIsAudited(t *testing.T) {
 	h.signIn()
 
 	upd := validUpdate()
-	upd.QuietHours.Enabled = true
-	upd.QuietHours.Start = "22:00"
-	upd.QuietHours.End = "07:00"
+	upd.QuietHours = &escalate.QuietHours{Enabled: true, Start: "22:00", End: "07:00"}
 	resp, body := h.do("POST", "/api/settings", upd)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("save: %d %s", resp.StatusCode, body)
@@ -1289,11 +1288,11 @@ func TestNothingOutsideTheFormIsLostBySavingIt(t *testing.T) {
 	upd := settingsUpdate{
 		Consoles:   ptrConsoles(consolesAsUpdate(cur)),
 		Channels:   ptrChannels(channelsAsUpdate(cur)),
-		Rules:      cur.Rules,
-		QuietHours: cur.QuietHours,
+		Rules:      &cur.Rules,
+		QuietHours: &cur.QuietHours,
 		Web: webUpdate{
 			Listen:     cur.Web.Listen,
-			AckBaseURL: cur.Web.AckBaseURL,
+			AckBaseURL: &cur.Web.AckBaseURL,
 			AckListen:  &cur.Web.AckListen,
 		},
 	}
@@ -1396,3 +1395,4 @@ func TestAnEmptyBannerLeavesEverythingGated(t *testing.T) {
 
 func ptrConsoles(v []consoleUpdate) *[]consoleUpdate { return &v }
 func ptrChannels(v channelsUpdate) *channelsUpdate   { return &v }
+func strPtr(v string) *string                        { return &v }

@@ -156,7 +156,10 @@ type settingsUpdate struct {
 	Consoles *[]consoleUpdate `json:"consoles"`
 	Channels *channelsUpdate  `json:"channels"`
 
-	Rules rule.Set `json:"rules"`
+	// Rules are the operator's overrides. A pointer for the same reason as
+	// everything else here: the Webhooks tab posts only the two sections it
+	// owns, and as a plain value that save deleted every rule on the site.
+	Rules *rule.Set `json:"rules"`
 
 	// Hooks are the inbound webhook endpoints. A pointer, so a client that
 	// does not mention them leaves them alone rather than deleting every
@@ -172,8 +175,11 @@ type settingsUpdate struct {
 	// told a second time.
 	Policies *map[string]config.Policy `json:"policies"`
 
-	QuietHours escalate.QuietHours `json:"quiet_hours"`
-	Web        webUpdate           `json:"web"`
+	// QuietHours, likewise a pointer. As a plain value an unrelated save
+	// silently re-enabled overnight alerting that the operator had turned off.
+	QuietHours *escalate.QuietHours `json:"quiet_hours"`
+
+	Web webUpdate `json:"web"`
 }
 
 type consoleUpdate struct {
@@ -251,8 +257,13 @@ type hookUpdate struct {
 }
 
 type webUpdate struct {
-	Listen     string `json:"listen"`
-	AckBaseURL string `json:"ack_base_url"`
+	Listen string `json:"listen"`
+
+	// A pointer, so a save that never mentions it leaves it alone. As a plain
+	// string, any partial save blanked it -- which does not stop alerts going
+	// out, but strips the acknowledge link off every one of them, so the only
+	// way left to acknowledge is to be at the web UI.
+	AckBaseURL *string `json:"ack_base_url"`
 	// A pointer, so "the client did not mention it" is distinguishable from
 	// "the client cleared it". AckListen is what stops a port forward from
 	// publishing the status page alongside the acknowledgement routes, and a
@@ -478,10 +489,19 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 		next.Consoles = append(next.Consoles, con)
 	}
 
+	// Each channel below is replaced only when the update MENTIONS it.
+	//
+	// This used to clear next.Channels wholesale first, so that a save
+	// mentioning "channels" at all deleted every channel it did not name. The
+	// Webhooks tab posts exactly one -- channels.webhooks -- and so deleted
+	// ntfy, email and Pushover on a site that had them, reporting "Saved."
+	// Nothing was delivered again until somebody noticed and retyped it all.
+	//
+	// A channel is turned OFF by its enabled flag, never by omission, so
+	// absent can safely mean "leave alone" for every one of them.
 	chans := channelsUpdate{}
 	if upd.Channels != nil {
 		chans = *upd.Channels
-		next.Channels = config.Channels{}
 	}
 	if in := chans.Ntfy; in != nil {
 		n := config.Ntfy{
@@ -567,8 +587,12 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 		}
 	}
 
-	next.Rules = upd.Rules
-	next.QuietHours = upd.QuietHours
+	if upd.Rules != nil {
+		next.Rules = *upd.Rules
+	}
+	if upd.QuietHours != nil {
+		next.QuietHours = *upd.QuietHours
+	}
 
 	if upd.Hooks != nil {
 		// Credentials are carried across by NAME, because that is the only
@@ -632,7 +656,9 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 	// Whole-struct assignment is what made a new field silently droppable, so
 	// it does not happen here any more.
 	next.Web.Listen = strings.TrimSpace(upd.Web.Listen)
-	next.Web.AckBaseURL = strings.TrimSpace(upd.Web.AckBaseURL)
+	if upd.Web.AckBaseURL != nil {
+		next.Web.AckBaseURL = strings.TrimSpace(*upd.Web.AckBaseURL)
+	}
 	if upd.Web.AckListen != nil {
 		next.Web.AckListen = strings.TrimSpace(*upd.Web.AckListen)
 	}

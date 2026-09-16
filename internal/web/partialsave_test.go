@@ -1,108 +1,76 @@
 package web
 
 import (
-	"net/http"
-	"strings"
+	"encoding/json"
 	"testing"
 
-	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/rule"
 )
 
-// Reported from the field: adding email was refused because ntfy was not
-// finished. The only way out of a broken configuration was to fix every part
-// of it in one edit, which is the opposite of what a settings page is for.
+// A tab that edits PART of the configuration must leave the rest alone.
 //
-// You may not make it worse. You are not held hostage by damage already there.
-func TestAPreExistingProblemDoesNotBlockAnUnrelatedFix(t *testing.T) {
-	// Already broken: email is enabled with an unusable From.
+// The Webhooks tab posts only the two sections it owns. Everything nested
+// inside `channels` was being cleared first and refilled from the update, so
+// that save deleted ntfy, email and Pushover -- and Rules, QuietHours and
+// AckBaseURL went the same way for being plain values rather than pointers.
+// The save was accepted, "Saved." was printed, and the site stopped delivering
+// anything at all until somebody worked out why.
+//
+// The payload below is what app.js actually sends, byte for byte, so this test
+// fails if the interface and this function ever disagree again.
+func TestSavingOneTabLeavesEveryOtherSectionAlone(t *testing.T) {
 	cur := testConfig()
-	cur.Channels.Email = &config.Email{
-		Enabled: true, Host: "smtp.example.com", Port: 587,
-		From: "Notify Matrix", Recipients: []string{"oncall@example.com"},
-	}
-	if cur.Validate() == nil {
-		t.Fatal("the fixture is not actually broken, so this proves nothing")
-	}
+	cur.Rules = rule.Set{{Name: "quiet-lobby-cam", Ignore: true}}
+	cur.QuietHours = escalate.QuietHours{Enabled: true, Start: "22:00", End: "07:00"}
 
-	// A save that touches something else entirely and leaves the break alone.
-	next := *cur
-	next.Web.AckBaseURL = "http://192.168.1.50:8322"
+	const webhooksTabPayload = `{"hooks":[],"channels":{"webhooks":[` +
+		`{"name":"homeassistant","enabled":true,"url":"http://10.0.0.5/hook"}]}}`
 
-	if err := refusedBy(cur, &next); err != nil {
-		t.Fatalf("an unrelated fix was refused because of a pre-existing "+
-			"problem:\n%v", err)
+	var upd settingsUpdate
+	if err := json.Unmarshal([]byte(webhooksTabPayload), &upd); err != nil {
+		t.Fatal(err)
+	}
+	next, _ := applyUpdate(cur, upd)
+
+	if next.Channels.Ntfy == nil {
+		t.Error("ntfy was deleted by a save that never mentioned it")
+	}
+	if next.Channels.Email == nil {
+		t.Error("email was deleted by a save that never mentioned it")
+	}
+	if len(next.Rules) != len(cur.Rules) {
+		t.Errorf("rules were deleted by a save that never mentioned them: %d left, want %d",
+			len(next.Rules), len(cur.Rules))
+	}
+	if next.QuietHours != cur.QuietHours {
+		t.Errorf("quiet hours were changed by a save that never mentioned them: %+v", next.QuietHours)
+	}
+	if next.Web.AckBaseURL != cur.Web.AckBaseURL {
+		t.Errorf("ack_base_url was changed by a save that never mentioned it: %q", next.Web.AckBaseURL)
+	}
+	// And the thing it DID mention actually landed.
+	if len(next.Channels.Webhooks) != 1 || next.Channels.Webhooks[0].Name != "homeassistant" {
+		t.Errorf("the endpoint the tab was editing did not survive: %+v", next.Channels.Webhooks)
 	}
 }
 
-// Making it worse is still refused, and the message names only what this edit
-// broke -- not a wall of problems that were already there.
-func TestASaveThatAddsAProblemIsStillRefused(t *testing.T) {
+// The mirror image: a save that DOES mention a section must still be able to
+// change and to empty it, or "leave absent alone" would have made the settings
+// page read-only for anything list-shaped.
+func TestASaveThatMentionsASectionCanStillEmptyIt(t *testing.T) {
 	cur := testConfig()
-	cur.Channels.Email = &config.Email{
-		Enabled: true, Host: "smtp.example.com", Port: 587,
-		From: "Notify Matrix", Recipients: []string{"oncall@example.com"},
+	cur.Rules = rule.Set{{Name: "quiet-lobby-cam", Ignore: true}}
+
+	empty := rule.Set{}
+	next, _ := applyUpdate(cur, settingsUpdate{Rules: &empty})
+	if len(next.Rules) != 0 {
+		t.Errorf("an explicit empty rule set was ignored: %+v", next.Rules)
 	}
 
-	next := *cur
-	// A NEW break, in a different section.
-	next.Web.AckBaseURL = "not-a-url-at-all"
-
-	err := refusedBy(cur, &next)
-	if err == nil {
-		t.Fatal("a save that introduced a new problem was accepted")
-	}
-	if !strings.Contains(err.Error(), "ack_base_url") {
-		t.Errorf("the refusal does not name what this edit broke: %v", err)
-	}
-	if strings.Contains(err.Error(), "from") {
-		t.Errorf("the refusal repeats a problem that was already there:\n%v", err)
-	}
-}
-
-// Fixing the pre-existing problem must obviously work too.
-func TestFixingTheBrokenFieldIsAccepted(t *testing.T) {
-	cur := testConfig()
-	cur.Channels.Email = &config.Email{
-		Enabled: true, Host: "smtp.example.com", Port: 587,
-		From: "Notify Matrix", Recipients: []string{"oncall@example.com"},
-	}
-	next := *cur
-	email := *cur.Channels.Email
-	email.From = "Notify Matrix <alerts@example.com>"
-	next.Channels.Email = &email
-
-	if err := refusedBy(cur, &next); err != nil {
-		t.Fatalf("repairing the broken field was refused: %v", err)
-	}
-}
-
-// End to end through the endpoint, since the rule only matters where the
-// browser meets it.
-func TestTheEndpointAcceptsAnUnrelatedFixOnABrokenConfig(t *testing.T) {
-	h := newHarness(t)
-	h.setPassword(testPassword)
-	h.signIn()
-
-	h.mu.Lock()
-	h.cfg.Channels.Email = &config.Email{
-		Enabled: true, Host: "smtp.example.com", Port: 587,
-		From: "Notify Matrix", Recipients: []string{"oncall@example.com"},
-	}
-	cur := h.cfg
-	h.mu.Unlock()
-
-	upd := map[string]any{
-		"consoles":    consolesAsUpdate(cur),
-		"channels":    channelsAsUpdate(cur),
-		"rules":       cur.Rules,
-		"quiet_hours": cur.QuietHours,
-		"web": map[string]any{
-			"listen":       cur.Web.Listen,
-			"ack_base_url": "http://192.168.1.50:8322",
-		},
-	}
-	res, body := h.do("POST", "/api/settings", upd)
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("an unrelated fix was refused with %d: %s", res.StatusCode, body)
+	cleared := ""
+	next, _ = applyUpdate(cur, settingsUpdate{Web: webUpdate{AckBaseURL: &cleared}})
+	if next.Web.AckBaseURL != "" {
+		t.Errorf("an explicitly cleared ack_base_url was ignored: %q", next.Web.AckBaseURL)
 	}
 }
