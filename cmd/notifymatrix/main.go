@@ -168,6 +168,26 @@ func channelPendingRestart(c *config.Config, live []string, name string) bool {
 	return false
 }
 
+// wrapText breaks a warning so it stays readable in a terminal.
+func wrapText(s string, width int) string {
+	var out strings.Builder
+	line := 0
+	for i, w := range strings.Fields(s) {
+		if i > 0 {
+			if line+1+len(w) > width {
+				out.WriteString("\n         ")
+				line = 0
+			} else {
+				out.WriteString(" ")
+				line++
+			}
+		}
+		out.WriteString(w)
+		line += len(w)
+	}
+	return out.String()
+}
+
 // typedCommand renders a runnable command for whatever this executable is
 // actually called. Shares its rule with setup.Input.Command, so the checklist
 // and the control screen never disagree about what to type.
@@ -983,6 +1003,15 @@ func serviceCmd(cmd, dataDir, user string) int {
 	var err error
 	switch cmd {
 	case "install":
+		// Said BEFORE the install, because install records the path it was run
+		// from and keeps it for ever. Afterwards this is advice about a
+		// decision already taken.
+		if exe, e := os.Executable(); e == nil {
+			if w := service.LocationWarning(exe); w != "" {
+				fmt.Fprintln(os.Stderr, "\nWARNING: "+wrapText(w, 72))
+				fmt.Fprintln(os.Stderr)
+			}
+		}
 		err = m.Install(service.InstallOptions{DataDir: dataDir, User: user})
 	case "uninstall":
 		err = m.Uninstall()
