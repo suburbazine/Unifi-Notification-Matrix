@@ -27,10 +27,14 @@
 > **Status: all three products ingest.** Protect, Access and Network.
 > Built and tested: the incident lifecycle, the durable store, the escalation
 > scheduler, the rule engine, acknowledgement, the secret store, configuration,
-> the three sources, the inbound webhook receiver, the ingest supervisor and
-> its deadman, the ntfy and email channels, the audit record, the local web UI,
-> the capability probe, the setup checklist, and Windows-service / systemd
-> integration.
+> the three sources, inbound webhooks, the ingest supervisor and its deadman,
+> the ntfy, email, Pushover and outbound-webhook channels, the audit record,
+> the local web UI and its editors, the capability probe, the setup checklist,
+> the signed in-app updater, and Windows-service / systemd integration.
+>
+> Not built yet: the voice channel (the top escalation rung), and live config
+> reload — channels, policies and rules are built at start, so a saved change
+> needs a restart, and the interface has a button for that.
 
 UniFi tells you a thing happened. Once.
 
