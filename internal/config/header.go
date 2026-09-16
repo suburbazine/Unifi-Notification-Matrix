@@ -92,7 +92,8 @@ const fileHeader = `# notifymatrix configuration
 #     username: you@example.com
 #     password: <paste it here>
 #     from: you@example.com
-#     to: [you@example.com]
+#     recipients: [you@example.com]
+#     tls: auto                     # optional; auto, starttls or implicit
 #
 #   pushover:
 #     enabled: true
