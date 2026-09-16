@@ -95,22 +95,49 @@ cd Unifi-Notification-Matrix
 git checkout v1.2.3
 cat .go-version                       # install exactly this Go version
 
+mkdir -p /tmp/rebuild                 # NOT inside the checkout -- see below
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
   -ldflags "-s -w -buildid= -X main.version=1.2.3" \
-  -o notifymatrix-linux-amd64 ./cmd/notifymatrix
+  -o /tmp/rebuild/notifymatrix-linux-amd64 ./cmd/notifymatrix
 
-sha256sum notifymatrix-linux-amd64    # compare against SHA256SUMS
+sha256sum /tmp/rebuild/notifymatrix-linux-amd64   # compare against SHA256SUMS
 ```
 
-`main.version` has to be the tag with its leading `v` stripped, exactly — it is
-baked into the binary, so `1.2.3` and `v1.2.3` produce different bytes.
+Two things have to be exactly right, and both fail quietly:
 
-A mismatch is worth reporting. The usual innocent cause is a different Go patch
-release — `.go-version` records the one the release used, and it is kept on the
-**latest** patch of its line deliberately: CI runs `govulncheck`, and a Go
-patch release is the usual way a standard-library vulnerability gets fixed
-under you. The toolchain is a build input, so bumping it changes the expected
-hashes.
+**`main.version` is the tag with its leading `v` stripped.** It is compiled
+into the binary, so `1.2.3` and `v1.2.3` give different bytes.
+
+**The checkout has to be clean — including of untracked files.** Go stamps
+`vcs.modified` into every binary it builds from a repository, and *any*
+untracked file sets it. Writing the output into the checkout is enough to do
+it: the build succeeds, and the binary silently differs from the release. It
+bites on the second architecture rather than the first, which makes it look
+like an arm64 problem. Build somewhere outside the work tree, as above.
+
+### If the hashes do not match
+
+Ask the binary what went into it before assuming the release is wrong:
+
+```bash
+go version -m /tmp/rebuild/notifymatrix-linux-amd64   # yours
+go version -m ./notifymatrix-linux-amd64              # the downloaded one
+```
+
+The two outputs should be identical. In order of likelihood:
+
+- **`vcs.modified=true`, or a `+dirty` suffix on the `mod` line** — your
+  checkout is not clean. `git status --porcelain` will show it; untracked
+  files count.
+- **`mod ... (devel)` instead of a version** — no VCS information reached the
+  build at all. A `git worktree`, an export, or a source tarball does this.
+  Use a real clone.
+- **A different `go1.x.y` on the first line** — `.go-version` records the
+  toolchain the release used, and it is kept on the **latest** patch of its
+  line deliberately: CI runs `govulncheck`, and a Go patch release is the
+  usual way a standard-library vulnerability gets fixed under you. The
+  toolchain is a build input, so bumping it changes the expected hashes.
+- **Identical metadata and different bytes** — now it is worth reporting.
 
 > The **Windows** binary will *not* match, because signing rewrites the file
 > after the build. Verify that one with Authenticode or with cosign against the

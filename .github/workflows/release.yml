@@ -89,6 +89,12 @@ jobs:
       #   CGO_ENABLED=0  no host libc leaking in
       # Given the same tag and the same Go version, anyone can rebuild this
       # byte for byte and compare hashes. docs/RELEASING.md says how.
+      #
+      # The output goes to dist/, which is in .gitignore, and that is
+      # load-bearing rather than tidiness: Go stamps `vcs.modified` into the
+      # binary, an untracked file in the checkout sets it, and the build would
+      # still succeed while producing bytes nobody can reproduce. Do not move
+      # this output anywhere git can see it.
       - name: build
         env:
           GOOS: ${{ matrix.goos }}

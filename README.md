@@ -191,9 +191,10 @@ Builds are `CGO_ENABLED=0` by design — it produces static binaries that run
 anywhere including Alpine and Docker, and it keeps releases reproducible enough
 that you can verify a published binary matches its tag.
 
-Builds are reproducible: given the same tag and the Go version in
-`.go-version`, `go build -trimpath -ldflags "-s -w -buildid= -X main.version=…"`
-produces the released bytes exactly. That is the point of publishing source for
+Builds are reproducible: from a clean clone at the same tag, with the Go
+version in `.go-version`,
+`go build -trimpath -ldflags "-s -w -buildid= -X main.version=…"` produces the
+released bytes exactly — verified against a published release, not assumed. That is the point of publishing source for
 a security tool — source nobody can check against the binary buys very little.
 
 ## Verifying a download
