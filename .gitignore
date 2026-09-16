@@ -1,0 +1,53 @@
+# Build output
+/notifymatrix
+/notifymatrix.exe
+/dist/
+/build/
+*.exe
+*.syso
+
+# Runtime state and configuration.
+#
+# These are excluded because they hold credentials. config.yaml carries
+# DPAPI-encrypted (Windows) or machine-bound (Linux) API keys, and while those
+# blobs are useless on another machine, a committed one still leaks the console
+# host, the topic names, the mail server and the recipient list -- a map of the
+# site. The incident store additionally holds every event ever seen.
+/config.yaml
+/config.yml
+/data/
+/snapshots/
+*.db
+*.db-wal
+*.db-shm
+
+# Signing. signing.json carries no secret material (endpoint, account and
+# profile only), but it names the signing identity, and a fork that inherits it
+# and then fails to sign is a confusing failure. Ship signing.example.json.
+/signing.json
+
+# Never, under any circumstances
+*.pem
+*.key
+*.pfx
+*.p12
+.env
+.env.*
+!.env.example
+
+# Private working notes. Not part of the published project.
+/internal-notes/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Go
+/vendor/
+*.test
+*.out
+!/docs/**/*.out
