@@ -1098,6 +1098,17 @@ func serviceCmd(cmd, dataDir, user string, portable bool) int {
 			}
 		} else {
 			placed, perr := service.PlaceBinary(exePath)
+			// A permission failure here is not something to report and stop
+			// on: it is something to elevate past. Copying the binary happens
+			// before the service is created, so it failed FIRST -- and only
+			// m.Install returned the sentinel the handler below elevates on.
+			// The UAC prompt that the double-click path and SETUP.md both
+			// promise was therefore unreachable, and the only way forward
+			// offered was --portable, which is the insecure one.
+			if errors.Is(perr, service.ErrNeedsPrivilege) {
+				err = perr
+				break
+			}
 			if perr != nil {
 				fmt.Fprintln(os.Stderr, "error:", perr)
 				fmt.Fprintln(os.Stderr, "       to install from where it is instead, add --portable")
@@ -1139,7 +1150,7 @@ func serviceCmd(cmd, dataDir, user string, portable bool) int {
 		if runtime.GOOS == "windows" {
 			args := cmd
 			if dataDir != "" {
-				args += fmt.Sprintf(` --data-dir "%s"`, dataDir)
+				args += " --data-dir " + service.EscapeArg(dataDir)
 			}
 			// Carried across the elevation, or the elevated run would do the
 			// opposite of what was asked.

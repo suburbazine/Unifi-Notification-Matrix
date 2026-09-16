@@ -360,6 +360,17 @@ func (h *handler) Execute(_ []string, req <-chan svc.ChangeRequest, status chan<
 // The alternative is an access-denied message the operator has to interpret,
 // on a product whose install path must work for somebody who has never opened
 // a terminal.
+// EscapeArg quotes one command-line argument the way Windows parses them.
+//
+// The elevation paths built their command line with --data-dir "%s", which is
+// correct right up until the path ends in a backslash -- and PowerShell tab
+// completion produces exactly that. A path like D:\nm\ became "D:\nm\", where
+// the trailing \" is an ESCAPED QUOTE rather than a closing one, so the
+// elevated process received an unterminated argument and used the wrong data
+// directory. In a separate elevated window, where the operator could not see
+// it happen.
+func EscapeArg(s string) string { return windows.EscapeArg(s) }
+
 func Elevate(args string) error {
 	exe, err := os.Executable()
 	if err != nil {

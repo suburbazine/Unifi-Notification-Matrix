@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -32,6 +33,22 @@ const placedBackupSuffix = ".previous"
 // Copy, verify, then rename into place. The verification is not ceremony: a
 // truncated copy is a service that will not start, discovered at the moment
 // something needed watching.
+// placeError reports a failure to write into the install directory, and marks
+// the permission case as one elevation would fix.
+//
+// Wrapping ErrNeedsPrivilege is what makes install actually prompt. Without
+// it, an unelevated install failed HERE -- before m.Install, which was the only
+// thing that returned the sentinel -- so the caller printed "access denied",
+// suggested --portable, and exited. The UAC prompt the double-click path and
+// SETUP.md both promise was unreachable, and the only route offered was the
+// insecure one: a LocalSystem service running out of a user-writable folder.
+func placeError(dir string, err error) error {
+	if errors.Is(err, fs.ErrPermission) {
+		return fmt.Errorf("service: writing to %s: %w: %w", dir, ErrNeedsPrivilege, err)
+	}
+	return fmt.Errorf("service: writing to %s: %w", dir, err)
+}
+
 func PlaceBinary(src string) (string, error) {
 	dest := DefaultInstallPath()
 
@@ -50,8 +67,7 @@ func PlaceBinary(src string) (string, error) {
 
 	dir := filepath.Dir(dest)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("service: creating %s (this needs administrator "+
-			"rights): %w", dir, err)
+		return "", placeError(dir, err)
 	}
 
 	// Staged in the destination directory, so the final step is a rename
@@ -60,8 +76,7 @@ func PlaceBinary(src string) (string, error) {
 	// half-written binary.
 	tmp, err := os.CreateTemp(dir, ".notifymatrix-install-*")
 	if err != nil {
-		return "", fmt.Errorf("service: writing to %s (this needs administrator "+
-			"rights): %w", dir, err)
+		return "", placeError(dir, err)
 	}
 	tmpName := tmp.Name()
 	defer func() {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -364,5 +365,33 @@ func TestIsHeldTestsTheLockRatherThanReadingTheFile(t *testing.T) {
 	if IsHeld(dir) {
 		t.Error("a released lock still reports as held; IsHeld is reading the " +
 			"file instead of testing the lock")
+	}
+}
+
+// An install that cannot write to Program Files must be reported as something
+// ELEVATION fixes, not as a flat failure.
+//
+// PlaceBinary runs before the service is created, so it is the first thing to
+// hit the permission wall -- and only ErrNeedsPrivilege makes the caller
+// re-run the command elevated. Without the sentinel here, an unelevated
+// install printed "access denied", suggested --portable, and exited: the UAC
+// prompt the double-click path promises was unreachable, and the only route
+// offered was a LocalSystem service running from a user-writable folder.
+func TestAPermissionFailureWhilePlacingTheBinaryAsksForElevation(t *testing.T) {
+	err := placeError(`C:\Program Files\NotifyMatrix`, fs.ErrPermission)
+	if !errors.Is(err, ErrNeedsPrivilege) {
+		t.Errorf("a permission failure did not ask for elevation: %v", err)
+	}
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("the cause was lost: %v", err)
+	}
+}
+
+// Anything else stays an ordinary failure: a full disk is not fixed by a UAC
+// prompt, and looping the operator through one would waste their time.
+func TestOtherFailuresWhilePlacingTheBinaryDoNotAskForElevation(t *testing.T) {
+	err := placeError(`C:\Program Files\NotifyMatrix`, errors.New("no space left on device"))
+	if errors.Is(err, ErrNeedsPrivilege) {
+		t.Errorf("a non-permission failure asked for elevation: %v", err)
 	}
 }

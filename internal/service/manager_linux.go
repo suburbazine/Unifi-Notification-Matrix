@@ -226,6 +226,10 @@ func RunAsService(func(context.Context) error) (bool, error) { return false, nil
 // Elevate is not available on Linux; there is no UAC equivalent to prompt
 // with, and re-execing under sudo from a daemon would be a worse idea than
 // telling the operator to use it themselves.
+// EscapeArg is a no-op off Windows: nothing here builds a command line as
+// a single string.
+func EscapeArg(s string) string { return s }
+
 func Elevate(string) error {
 	return fmt.Errorf("%w: re-run with sudo", ErrNeedsPrivilege)
 }

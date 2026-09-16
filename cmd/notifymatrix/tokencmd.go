@@ -85,7 +85,7 @@ why opening the file directly reports "access denied".
 
 	args := "setup-token"
 	if dataDir != "" {
-		args += fmt.Sprintf(` --data-dir "%s"`, dataDir)
+		args += " --data-dir " + service.EscapeArg(dataDir)
 	}
 	if err := service.Elevate(args); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
