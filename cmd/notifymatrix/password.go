@@ -95,7 +95,7 @@ func setPassword(dataDir string, interactive bool) int {
 	st, serr := service.New().Status()
 	if serr != nil || st.State != service.StateRunning {
 		fmt.Println("\nThat daemon is not this machine's service -- most likely a")
-		fmt.Println("`notifymatrix run` in another window. Stop it and start it again.")
+		fmt.Println("`" + typedCommand("run") + "` in another window. Stop it and start it again.")
 		return 0
 	}
 
@@ -105,7 +105,7 @@ func setPassword(dataDir string, interactive bool) int {
 		}
 		return serviceCmd("start", dataDir, "")
 	}
-	fmt.Println("\nTo do it yourself:  notifymatrix stop && notifymatrix start")
+	fmt.Println("\nTo do it yourself:  " + typedCommand("stop") + " && " + typedCommand("start"))
 	return 0
 }
 

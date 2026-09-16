@@ -38,6 +38,9 @@ func setupInput(dataDir string) setup.Input {
 		DataDir:    dataDir,
 		ConfigPath: config.Path(dataDir),
 		Listen:     "127.0.0.1:8322",
+		// The name they must actually type, which for a downloaded binary is
+		// not "notifymatrix" and is not on PATH.
+		Exe: typeableExeName(),
 	}
 
 	// LoadOrCreate rather than Load: on a fresh machine there is no config

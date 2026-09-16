@@ -98,6 +98,17 @@ type Input struct {
 
 	PasswordSet bool
 
+	// Exe is what the operator must actually TYPE to run this program.
+	//
+	// Every instruction here used to read "notifymatrix install". Nobody has a
+	// program called that: they have `notifymatrix-windows-amd64 (1).exe` in
+	// Downloads, and it is not on PATH, so every command in this checklist
+	// failed with "not recognized" for anybody who had not already solved a
+	// problem the checklist never mentioned.
+	//
+	// Empty means the plain name, which is right for a packaged install.
+	Exe string
+
 	// Hooks are the configured webhook endpoints and whether anything has ever
 	// arrived at each.
 	Hooks []HookState
@@ -462,7 +473,7 @@ func passwordStep(in Input) Step {
 	// never displayed, and it was the only instruction here.
 	if in.ServiceInstalled {
 		s.How = []string{
-			"Run: notifymatrix set-password",
+			"Run: " + in.Command("set-password"),
 			"It asks twice, does not echo, and writes the password straight to " +
 				"the configuration.",
 			"It offers to restart the service afterwards, which is required: a " +
@@ -474,7 +485,7 @@ func passwordStep(in Input) Step {
 			"Open http://" + listenOr(in.Listen) + "/ in a browser.",
 			"The daemon prints a one-time setup token each time it starts. Enter it.",
 			"Choose a password. The token then stops working.",
-			"Or, if you would rather not use the token: notifymatrix set-password",
+			"Or, if you would rather not use the token: " + in.Command("set-password"),
 		}
 	}
 
@@ -498,17 +509,17 @@ func serviceStep(in Input) Step {
 			"log out, and when the machine reboots -- and it will not be watching " +
 			"anything during the night that matters.",
 		How: []string{
-			"Run: notifymatrix install",
+			"Run: " + in.Command("install"),
 			"It will ask for administrator rights, install itself to start at boot, " +
 				"and configure itself to restart after a crash.",
-			"Check it afterwards with: notifymatrix status",
+			"Check it afterwards with: " + in.Command("status"),
 		},
 	}
 	switch {
 	case !in.ServiceInstalled:
 		s.Status, s.State = Todo, "not installed -- it will stop when you close this window"
 	case !in.ServiceRunning:
-		s.Status, s.State = Todo, "installed but not running (notifymatrix start)"
+		s.Status, s.State = Todo, "installed but not running ("+in.Command("start")+")"
 	case !in.RecoversFromCrash:
 		// Loud, because this configuration looks completely healthy and will
 		// not come back from a crash at 2am.
@@ -518,6 +529,25 @@ func serviceStep(in Input) Step {
 		s.Status, s.State = Done, "running, and restarts after a crash"
 	}
 	return s
+}
+
+// command renders "<exe> verb" as something that can be pasted into a shell.
+//
+// A downloaded binary is named after its platform and often carries a " (1)"
+// from a second download, so the name needs quoting far more often than not.
+// Command is exported so the CLI renders the same command text this checklist
+// does; two different answers to "what do I type" is worse than neither.
+func (in Input) Command(verb string) string {
+	exe := strings.TrimSpace(in.Exe)
+	if exe == "" {
+		return "notifymatrix " + verb
+	}
+	if strings.ContainsAny(exe, " ()&^%!,;=") {
+		// PowerShell needs the call operator before a quoted path, or it
+		// treats the string as a string and prints it back at you.
+		return `& ".\` + exe + `" ` + verb
+	}
+	return exe + " " + verb
 }
 
 func listenOr(listen string) string {

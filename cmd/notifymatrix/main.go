@@ -124,6 +124,32 @@ func executableName(argv0 string) string {
 	return argv0
 }
 
+// typeableExeName is what a person has to type to run this program.
+//
+// "notifymatrix" only when that is genuinely the name. A downloaded release
+// asset is called notifymatrix-windows-amd64.exe, becomes
+// "notifymatrix-windows-amd64 (1).exe" on a second download, and is not on
+// PATH -- so every instruction this product printed failed with "not
+// recognized" for anybody who had not already renamed it.
+//
+// Empty when it IS the plain name, which is what setup.Input documents as
+// meaning "the packaged install"; the .exe suffix is not a rename.
+func typeableExeName() string {
+	name := executableName(os.Args[0])
+	switch strings.ToLower(name) {
+	case "notifymatrix", "notifymatrix.exe":
+		return ""
+	}
+	return name
+}
+
+// typedCommand renders a runnable command for whatever this executable is
+// actually called. Shares its rule with setup.Input.Command, so the checklist
+// and the control screen never disagree about what to type.
+func typedCommand(verb string) string {
+	return setup.Input{Exe: typeableExeName()}.Command(verb)
+}
+
 // holdTheWindowOpen keeps a double-clicked console window on screen.
 //
 // Double-clicking this in Explorer ran it, printed the status, and closed the
@@ -247,6 +273,18 @@ func dispatch(cmd, dataDir, user string, showLinks, showAll, interactive bool) i
 }
 
 func usage() {
+	// The verbs below are written as `notifymatrix X`, which is what they are
+	// called. It is not necessarily what THIS file is called, and a reference
+	// page full of commands that return "not recognized" is worse than no
+	// reference page.
+	if exe := typeableExeName(); exe != "" {
+		fmt.Fprintf(os.Stderr, `Note: this file is called %s, not notifymatrix.
+Either rename it to notifymatrix.exe, or read every command below as:
+
+    %s
+
+`, exe, setup.Input{Exe: exe}.Command("<command>"))
+	}
 	fmt.Fprintf(os.Stderr, `notifymatrix %s
 
   notifymatrix run          run in the foreground
@@ -647,6 +685,7 @@ func runDaemon(ctx context.Context, dataDir string) error {
 				in := fromConfig(setup.Input{
 					DataDir: dataDir, ConfigPath: config.Path(dataDir),
 					Listen: "127.0.0.1:8322",
+					Exe:    typeableExeName(),
 				}, c)
 				if st, err := service.New().Status(); err == nil {
 					in.ServiceInstalled = st.State != service.StateNotInstalled
@@ -899,7 +938,7 @@ func serviceCmd(cmd, dataDir, user string) int {
 		return 1
 
 	case errors.Is(err, service.ErrNotInstalled):
-		fmt.Fprintln(os.Stderr, "error: the service is not installed; run: notifymatrix install")
+		fmt.Fprintln(os.Stderr, "error: the service is not installed; run: "+typedCommand("install"))
 		return 1
 
 	default:
@@ -976,7 +1015,7 @@ It needs administrator rights, so Windows will ask you to confirm.`)
 		if interactive && askYesNo(os.Stdout, in, "Install and start it now?") {
 			return serviceCmd("install", dataDir, "")
 		}
-		fmt.Println("\nTo do it later, from a terminal:  notifymatrix install")
+		fmt.Println("\nTo do it later, from a terminal:  " + typedCommand("install"))
 
 	case st.State == service.StateRunning && !st.RecoversFromCrash:
 		// Loud, because this configuration looks completely healthy and will
@@ -991,14 +1030,14 @@ you installed it to avoid. Reinstalling fixes it.`)
 			}
 			return serviceCmd("install", dataDir, "")
 		}
-		fmt.Println("\nTo do it later:  notifymatrix uninstall && notifymatrix install")
+		fmt.Println("\nTo do it later:  " + typedCommand("uninstall") + " && " + typedCommand("install"))
 
 	case st.State == service.StateStopped:
 		fmt.Println("\nInstalled, but not running -- so nothing is being watched.")
 		if interactive && askYesNo(os.Stdout, in, "Start it now?") {
 			return serviceCmd("start", dataDir, "")
 		}
-		fmt.Println("\nTo do it later:  notifymatrix start")
+		fmt.Println("\nTo do it later:  " + typedCommand("start"))
 
 	case st.State == service.StateRunning:
 		// Where to go next. Somebody who has just watched it install has no
@@ -1008,7 +1047,7 @@ you installed it to avoid. Reinstalling fixes it.`)
 	}
 
 	fmt.Printf("\nData directory: %s\n", dataDir)
-	fmt.Println("Run `notifymatrix selfcheck` to see what this machine can do.")
+	fmt.Println("Run `" + typedCommand("selfcheck") + "` to see what this machine can do.")
 	return 0
 }
 

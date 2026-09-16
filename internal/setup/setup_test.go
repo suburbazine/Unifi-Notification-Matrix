@@ -388,3 +388,46 @@ func TestThePasswordStepStillOffersTheTokenBeforeInstall(t *testing.T) {
 		t.Errorf("status = %v, want Todo", s.Status)
 	}
 }
+
+// Every instruction this checklist printed read "notifymatrix install".
+// Nobody who downloads a release has a program called that: they have
+// notifymatrix-windows-amd64.exe -- "notifymatrix-windows-amd64 (1).exe" after
+// a second download -- sitting in Downloads and not on PATH. So every command
+// here failed with "not recognized", and the checklist never mentioned the one
+// problem standing between them and all of it.
+func TestCommandsNameTheFileTheOperatorActuallyHas(t *testing.T) {
+	for _, tc := range []struct{ name, exe, want string }{
+		{"packaged install", "", "notifymatrix install"},
+		{"plain name needs nothing", "notifymatrix", "notifymatrix install"},
+		{"a downloaded asset", "notifymatrix-windows-amd64.exe", "notifymatrix-windows-amd64.exe install"},
+		{"a second download", "notifymatrix-windows-amd64 (1).exe", `& ".\notifymatrix-windows-amd64 (1).exe" install`},
+		{"a space alone is enough", "notify matrix.exe", `& ".\notify matrix.exe" install`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := (Input{Exe: tc.exe}).Command("install"); got != tc.want {
+				t.Errorf("Command(install) with Exe=%q\n  got  %s\n  want %s", tc.exe, got, tc.want)
+			}
+		})
+	}
+}
+
+// The name reaches the steps, not just the helper. A correct renderer nothing
+// calls fixes nothing.
+func TestTheRenderedStepsUseTheRealName(t *testing.T) {
+	in := Input{Exe: "notifymatrix-windows-amd64 (1).exe", Listen: "127.0.0.1:8322"}
+	var found bool
+	for _, s := range Steps(in) {
+		for _, h := range s.How {
+			if strings.Contains(h, "notifymatrix-windows-amd64 (1).exe") {
+				found = true
+			}
+			// "Run: notifymatrix install" must not survive anywhere.
+			if strings.Contains(h, "Run: notifymatrix ") {
+				t.Errorf("step %q still tells them to run a program they do not have:\n  %s", s.Title, h)
+			}
+		}
+	}
+	if !found {
+		t.Error("no step mentions the executable the operator actually has")
+	}
+}
