@@ -1,7 +1,10 @@
 # UniFi Notification Matrix
 
-> **Status: early development.** The architecture is settled; the
-> implementation has not started. Nothing here is usable yet.
+> **Status: early development — not usable yet.** The architecture is settled
+> and the foundations are built and tested: the incident lifecycle, the
+> escalation policy, and the secret store. Ingest, channels, the durable store
+> and the web UI are not written. The only working commands are `version` and
+> `selfcheck`.
 
 UniFi tells you a thing happened. Once.
 
