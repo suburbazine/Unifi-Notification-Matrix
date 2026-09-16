@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/service"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/store"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/web"
 )
 
 // version is injected at build time via -ldflags "-X main.version=...".
@@ -364,7 +366,112 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		}
 
 		mux := http.NewServeMux()
+		// The more specific pattern wins, so the ack routes keep their OWN
+		// headers -- internal/ack sets a stricter default-src 'none' policy
+		// than the UI needs, and wrapping the UI's middleware around it would
+		// loosen it.
 		mux.Handle("/ack/", ackHandler)
+
+		// The operator interface. Status is public so a wall display can show
+		// it; every change needs the password.
+		var cfgMu sync.RWMutex
+		current := cfg
+		ui, err := web.New(web.Deps{
+			Store: db,
+			Audit: auditLog,
+			Config: func() *config.Config {
+				cfgMu.RLock()
+				defer cfgMu.RUnlock()
+				return current
+			},
+			SaveConfig: func(next *config.Config) error {
+				if err := config.Save(dataDir, next); err != nil {
+					return err
+				}
+				cfgMu.Lock()
+				current = next
+				cfgMu.Unlock()
+				// TODO(reload): channels, policies and rules are built at
+				// start, so a saved change reaches the FILE and the UI but not
+				// the running engine until a restart. Said plainly here rather
+				// than left for an operator to discover by saving a channel
+				// and watching nothing use it.
+				fmt.Fprintln(os.Stderr, "settings saved; restart to apply them to the running daemon")
+				return nil
+			},
+			Health: func() web.Health {
+				_ = prev // see UncleanPreviousExit below
+				cfgMu.RLock()
+				c := current
+				cfgMu.RUnlock()
+				h := web.Health{}
+				for _, st := range delivery.Stats() {
+					h.Channels = append(h.Channels, web.ChannelHealth{
+						Name: st.Channel, Enabled: true, Depth: st.Depth,
+						Pending: st.Pending, Dropped: st.Dropped,
+						InFlight: st.InFlight,
+					})
+				}
+				for _, con := range c.Consoles {
+					for _, src := range con.Sources {
+						// TODO(source-health): real last-seen comes from the
+						// sources, which report it to nothing yet. Reported as
+						// configured-but-unobserved rather than invented, so
+						// the page never claims a source is fine when nobody
+						// has asked it.
+						h.Sources = append(h.Sources, web.SourceHealth{
+							Name:   con.Name + "/" + src,
+							Detail: "not yet reporting liveness",
+						})
+					}
+				}
+				if st, err := service.New().Status(); err == nil {
+					h.Service = web.ServiceHealth{
+						State:               string(st.State),
+						StartType:           st.StartType,
+						RestartsAfterCrash:  st.RecoversFromCrash,
+						PID:                 st.PID,
+						Detail:              st.Detail,
+						UncleanPreviousExit: prev != nil,
+					}
+				}
+				return h
+			},
+			PasswordHash: func() string {
+				cfgMu.RLock()
+				defer cfgMu.RUnlock()
+				return current.Web.PasswordHash
+			},
+			SetPasswordHash: func(h string) error {
+				cfgMu.Lock()
+				next := *current
+				next.Web.PasswordHash = h
+				cfgMu.Unlock()
+				if err := config.Save(dataDir, &next); err != nil {
+					return err
+				}
+				cfgMu.Lock()
+				current = &next
+				cfgMu.Unlock()
+				return nil
+			},
+			Version: version,
+		})
+		if err != nil {
+			return err
+		}
+		mux.Handle("/", ui.Handler())
+		if tok := ui.SetupToken(); tok != "" {
+			fmt.Printf(`
+No settings password is set yet. To set one, open the interface
+and enter this one-time setup token:
+
+    %s
+
+It works once, and a new one is printed each time this starts.
+
+`, tok)
+		}
 
 		srv := &http.Server{
 			Addr:    cfg.Web.Listen,
@@ -404,7 +511,7 @@ func runDaemon(ctx context.Context, dataDir string) error {
 			defer cancel()
 			_ = srv.Shutdown(shutdown)
 		}()
-		fmt.Printf("acknowledgement endpoint on http://%s/ack/\n", cfg.Web.Listen)
+		fmt.Printf("interface on http://%s/  (acknowledgements at /ack/)\n", cfg.Web.Listen)
 		if cfg.Web.AckBaseURL == "" {
 			fmt.Fprintln(os.Stderr, "note: web.ack_base_url is unset, so alerts will "+
 				"carry no acknowledgement link")

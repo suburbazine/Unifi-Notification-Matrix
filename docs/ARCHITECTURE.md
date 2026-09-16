@@ -105,10 +105,10 @@ nothing about channels, and a channel knows nothing about UniFi.
   ✓ secret/             Secret type, the four-tier prefix chain
   ✓ config/             YAML, source of truth; validation that refuses at startup
   ✓ service/            install/uninstall, recovery actions, single-instance (§9a)
-  · selfcheck/          diagnostics for "it is running and nothing happens"
+  ~ selfcheck/          folded into the CLI and the UI's health view
   ✓ audit/              append-only record: every event, delivery, ack
   ~ probe/              capability discovery (local-network guard built)
-  · web/                local UI: setup, live incidents, ack
+  ✓ web/                local UI: status public, changes gated
 ```
 
 **The store is `internal/store`, not inside `internal/incident`.** The
@@ -601,6 +601,44 @@ because it occupies the slot a working one would have.
   intelligible is reported rather than trusted.
 - **Delivery failures are surfaced, never only logged.** Repeated failure on a
   channel is itself an incident.
+
+---
+
+## 8b. The operator interface: status open, changes gated
+
+**Status is readable without signing in. Every change needs the password.**
+
+The reason is a wall display. An operator wants the incident board on a screen
+in an office or a comms room, and a screen that has to be signed into is a
+screen that shows a login prompt at 3am. So the incident list, the health view
+and the "why is nothing happening" surface are public on the LAN.
+
+The trade is stated rather than hidden: **that board is reconnaissance for
+anyone already on the LAN.** It names cameras that are offline and doors that
+are open. That is accepted because it is the same LAN the consoles are on — an
+attacker there can query the console directly — and because the alternative
+makes the wall display useless.
+
+What is never public, to anyone, signed in or not:
+
+- **Secret values.** Not redacted on the way out — never placed in the
+  structure that is serialised. The settings view has no field capable of
+  holding one; it reports `api_key_set: true` and nothing more.
+- **The audit record**, which names what was silenced and by which rule.
+- **Anything that writes.**
+
+Authentication is PBKDF2-HMAC-SHA256 with a per-password salt and a
+self-describing stored hash, so the iteration count can rise later without
+invalidating what is stored. **There is no "no password set means everyone is
+authenticated" path**: the first password is set with a one-time token the
+daemon prints at startup, and the token is spent exactly once — but handed back
+if the password cannot be stored, so a disk error does not lock an operator out
+of their own fresh install. Sessions live in memory and die with the process,
+which on a restart is correct rather than inconvenient.
+
+Failed sign-ins are throttled per client, and `X-Forwarded-For` is deliberately
+ignored: honouring it on a LAN listener would let one device rotate the
+throttle key on every attempt.
 
 ---
 

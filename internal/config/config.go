@@ -163,6 +163,16 @@ type Web struct {
 	// (ARCHITECTURE.md §8a).
 	Listen string `json:"listen,omitempty"`
 
+	// PasswordHash gates the settings surface. Status is readable without it;
+	// changing anything is not.
+	//
+	// A HASH, never a password, and self-describing
+	// (pbkdf2-sha256$iterations$salt$key) so the iteration count can be raised
+	// later without invalidating what is already stored. Empty means no
+	// password is set, which does NOT mean everyone is authenticated -- the
+	// first one is set with a one-time token the daemon prints at startup.
+	PasswordHash string `json:"password_hash,omitempty"`
+
 	// AckKey signs acknowledgement links. Generated on first save; never
 	// entered by hand.
 	//
