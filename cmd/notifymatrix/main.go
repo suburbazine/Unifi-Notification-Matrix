@@ -15,10 +15,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -97,13 +99,60 @@ func isFlagExpectingValue(arg string) bool {
 }
 
 func main() {
+	// Asked once: the answer cannot change mid-run, and the offer made
+	// during the run and the pause after it must agree about who is watching.
+	alone := ownsTheConsoleAlone()
+	code := run(alone)
+	// Before os.Exit, which skips defers. A double-clicked binary has a
+	// console only for as long as the process lives.
+	holdTheWindowOpen(os.Stdout, os.Stdin, alone, os.Args[0])
+	os.Exit(code)
+}
+
+// holdTheWindowOpen keeps a double-clicked console window on screen.
+//
+// Double-clicking this in Explorer ran it, printed the status, and closed the
+// window in the same instant -- so it read as "it opens and closes and does
+// nothing", which is the impression a downloaded security tool can least
+// afford to make. The program was working; nobody could see it.
+//
+// It takes its inputs rather than reading the world, because the interesting
+// case is unreachable from a test: a test process shares its console with the
+// test runner, so `alone` is never true when it matters.
+func holdTheWindowOpen(out io.Writer, in io.Reader, alone bool, argv0 string) {
+	if !alone {
+		return
+	}
+	exe := filepath.Base(argv0)
+	fmt.Fprintf(out, `
+---
+
+Windows closes this window as soon as the program finishes, so it is being
+held open for you. Nothing else is running.
+
+There is more it can do than the above. From a terminal in this folder --
+shift+right-click the folder, "Open PowerShell window here":
+
+    .\%s setup        what is left to configure, one step at a time
+    .\%s selfcheck    what this machine can do
+    .\%s --help       everything else
+
+Press Enter to close this window. `, exe, exe, exe)
+	// One byte is enough: Enter, any other key followed by Enter, or a closed
+	// stdin all mean "stop waiting".
+	var b [1]byte
+	in.Read(b[:])
+	fmt.Fprintln(out)
+}
+
+func run(alone bool) int {
 	cmd, flagArgs := splitCommand(os.Args[1:])
 
 	// The probe owns its own flag set: it has flags nothing else wants, and
 	// the shared set below is ExitOnError, so routing them through it would
 	// refuse the command rather than run it.
 	if cmd == "probe" {
-		os.Exit(probeCommand(service.DefaultDataDir(), flagArgs))
+		return probeCommand(service.DefaultDataDir(), flagArgs)
 	}
 
 	fs := flag.NewFlagSet("notifymatrix", flag.ExitOnError)
@@ -113,7 +162,7 @@ func main() {
 	user := fs.String("user", "", "account the Linux service runs as (default notifymatrix)")
 	fs.Usage = usage
 	if err := fs.Parse(flagArgs); err != nil {
-		os.Exit(2)
+		return 2
 	}
 
 	dir := *dataDir
@@ -130,15 +179,15 @@ func main() {
 	if handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
-	os.Exit(dispatch(cmd, dir, *user, *links, *all))
+	return dispatch(cmd, dir, *user, *links, *all, alone)
 }
 
-func dispatch(cmd, dataDir, user string, showLinks, showAll bool) int {
+func dispatch(cmd, dataDir, user string, showLinks, showAll, interactive bool) int {
 	switch cmd {
 	case "version":
 		fmt.Printf("notifymatrix %s (%s/%s, %s)\n", version, runtime.GOOS, runtime.GOARCH, runtime.Version())
@@ -170,7 +219,7 @@ func dispatch(cmd, dataDir, user string, showLinks, showAll bool) int {
 		// opened a terminal must be able to get from "downloaded a file" to
 		// "it is running and will keep running", so this reports state and
 		// says what to do rather than printing usage and exiting.
-		return control(dataDir)
+		return control(dataDir, interactive)
 
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
@@ -836,8 +885,51 @@ func serviceCmd(cmd, dataDir, user string) int {
 	}
 }
 
+// webAddress is where the interface is listening, according to the config the
+// service is actually running with.
+//
+// Falls back to the documented default rather than reporting an error: this is
+// a signpost printed beside a healthy service, and "could not read the config"
+// in place of an address helps nobody who is looking for the address.
+func webAddress(dataDir string) string {
+	if cfg, err := config.Load(dataDir); err == nil && strings.TrimSpace(cfg.Web.Listen) != "" {
+		return cfg.Web.Listen
+	}
+	return "127.0.0.1:8322"
+}
+
+// askYesNo puts a question to somebody who is actually sitting there.
+//
+// Defaults to yes on a bare Enter, because it is only ever asked after the
+// program has said what it is about to do, and the alternative for the person
+// it is aimed at is a terminal they have never opened. A closed stdin reads as
+// no: unattended runs must not be committed to installing a service because
+// nobody was there to decline.
+func askYesNo(out io.Writer, in *bufio.Reader, question string) bool {
+	fmt.Fprintf(out, "\n%s [Y/n] ", question)
+	line, err := in.ReadString('\n')
+	if err != nil && line == "" {
+		fmt.Fprintln(out)
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "", "y", "yes":
+		return true
+	}
+	return false
+}
+
 // control is what a double-clicked executable does.
-func control(dataDir string) int {
+//
+// When somebody is sitting in front of it -- which is exactly the double-click
+// case -- this OFFERS to do the next thing rather than printing a command for
+// them to type. Telling a person who has never opened a terminal to open one
+// is where this product loses them, and it is the one audience that most needs
+// the thing installed correctly.
+//
+// Run from a script or a shell pipeline, `interactive` is false and it behaves
+// as it always did: report state, print the command, change nothing.
+func control(dataDir string, interactive bool) int {
 	fmt.Printf("notifymatrix %s\n\n", version)
 
 	st, err := service.New().Status()
@@ -847,25 +939,49 @@ func control(dataDir string) int {
 		fmt.Println("Service:", st)
 	}
 
+	in := bufio.NewReader(os.Stdin)
+
 	switch {
 	case err != nil:
 	case st.State == service.StateNotInstalled:
 		fmt.Println(`
-Not installed yet. To install it so it starts at boot, survives a logout and
-restarts itself after a crash:
+Not installed yet. Installing it means it starts at boot, survives a logout,
+and restarts itself after a crash -- none of which happens if you just leave
+this window open.
 
-    notifymatrix install
+It needs administrator rights, so Windows will ask you to confirm.`)
+		if interactive && askYesNo(os.Stdout, in, "Install and start it now?") {
+			return serviceCmd("install", dataDir, "")
+		}
+		fmt.Println("\nTo do it later, from a terminal:  notifymatrix install")
 
-That needs administrator rights and will prompt for them.`)
 	case st.State == service.StateRunning && !st.RecoversFromCrash:
 		// Loud, because this configuration looks completely healthy and will
 		// not come back from a panic at 2am.
 		fmt.Println(`
-WARNING: this service will NOT restart after a crash. Reinstall to fix it:
+WARNING: this service will NOT restart after a crash. It looks healthy right
+now and will stay down the next time it falls over, which is the whole thing
+you installed it to avoid. Reinstalling fixes it.`)
+		if interactive && askYesNo(os.Stdout, in, "Reinstall it now?") {
+			if code := serviceCmd("uninstall", dataDir, ""); code != 0 {
+				return code
+			}
+			return serviceCmd("install", dataDir, "")
+		}
+		fmt.Println("\nTo do it later:  notifymatrix uninstall && notifymatrix install")
 
-    notifymatrix uninstall && notifymatrix install`)
 	case st.State == service.StateStopped:
-		fmt.Println("\nInstalled but not running. Start it with:\n\n    notifymatrix start")
+		fmt.Println("\nInstalled, but not running -- so nothing is being watched.")
+		if interactive && askYesNo(os.Stdout, in, "Start it now?") {
+			return serviceCmd("start", dataDir, "")
+		}
+		fmt.Println("\nTo do it later:  notifymatrix start")
+
+	case st.State == service.StateRunning:
+		// Where to go next. Somebody who has just watched it install has no
+		// way to know there is a web interface at all, and the address is not
+		// guessable -- it is whatever their config says.
+		fmt.Printf("\nRunning. The interface is at http://%s/\n", webAddress(dataDir))
 	}
 
 	fmt.Printf("\nData directory: %s\n", dataDir)

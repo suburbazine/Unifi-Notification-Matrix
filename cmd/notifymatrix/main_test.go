@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"strings"
 	"testing"
@@ -80,5 +81,101 @@ func TestDoubleDashEndsFlagParsing(t *testing.T) {
 	}
 	if len(flags) != 1 || flags[0] != "--data-dir" {
 		t.Errorf("flags = %v, want the literal argument preserved", flags)
+	}
+}
+
+// Double-clicking the .exe in Explorer ran it, printed its status, and closed
+// the window in the same instant. The report was "it just opens and closes
+// silently" -- and for a downloaded security tool that reads as broken, or
+// worse, as something that did not want to be watched. The program was fine.
+// Nobody could see it.
+func TestADoubleClickedWindowWaitsBeforeItCloses(t *testing.T) {
+	var out strings.Builder
+	holdTheWindowOpen(&out, strings.NewReader("\n"), true, `C:\Users\x\Downloads\notifymatrix-windows-amd64.exe`)
+
+	got := out.String()
+	if got == "" {
+		t.Fatal("nothing was printed before the window closed; the flash is the whole bug")
+	}
+	for _, want := range []string{
+		"Press Enter", // the pause itself
+		"PowerShell",  // and where the rest of the commands live
+		"setup",       // pointed at the command that leads somewhere
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the message does not mention %q:\n%s", want, got)
+		}
+	}
+
+	// The command it suggests has to be the file the user actually has, not
+	// the project's name for it. They downloaded `notifymatrix-windows-amd64.exe`
+	// and typing `notifymatrix setup` gets them "not recognized".
+	if !strings.Contains(got, `.\notifymatrix-windows-amd64.exe setup`) {
+		t.Errorf("suggested a command naming something other than the file on disk:\n%s", got)
+	}
+	if strings.Contains(got, `C:\Users\x\Downloads`) {
+		t.Errorf("printed the full path where a command is meant to go:\n%s", got)
+	}
+}
+
+// The pause must happen ONLY for a double-click. Run from a shell the output
+// stays on screen with nothing to wait for, and a pause there would stall every
+// scripted invocation -- including the service, and including CI.
+func TestNothingWaitsWhenTheConsoleIsShared(t *testing.T) {
+	var out strings.Builder
+	// A reader that fails the test if it is ever consulted: blocking on stdin
+	// is the failure being guarded against, and it would not look like a
+	// failing assertion, it would look like a hung build.
+	holdTheWindowOpen(&out, readerThatMustNotBeRead{t}, false, "notifymatrix")
+	if out.String() != "" {
+		t.Errorf("printed a double-click message into a shell session:\n%s", out.String())
+	}
+}
+
+type readerThatMustNotBeRead struct{ t *testing.T }
+
+func (r readerThatMustNotBeRead) Read([]byte) (int, error) {
+	r.t.Fatal("waited for a keypress in a session that was not a double-click; unattended runs would hang here")
+	return 0, nil
+}
+
+// ARCHITECTURE says a double-click must get somebody from "downloaded a file"
+// to "it is running and will keep running" WITHOUT being told to open a
+// terminal. Printing `notifymatrix install` for them to type is exactly being
+// told to open a terminal, so the offer has to be a question they can answer
+// where they are.
+func TestTheOfferDefaultsToYesOnAPlainEnter(t *testing.T) {
+	for _, tc := range []struct {
+		typed string
+		want  bool
+	}{
+		{"\n", true},       // just pressed Enter -- the whole point
+		{"y\n", true},      //
+		{"YES\n", true},    //
+		{"  \n", true},     // Enter with a stray space
+		{"n\n", false},     //
+		{"no\n", false},    //
+		{"later\n", false}, // anything that is not yes
+		{"", false},        // stdin closed: nobody is there to consent
+	} {
+		var out strings.Builder
+		got := askYesNo(&out, bufio.NewReader(strings.NewReader(tc.typed)), "Install it?")
+		if got != tc.want {
+			t.Errorf("typed %q: got %v, want %v", tc.typed, got, tc.want)
+		}
+		if !strings.Contains(out.String(), "Install it?") {
+			t.Errorf("typed %q: the question was never asked: %q", tc.typed, out.String())
+		}
+	}
+}
+
+// A closed stdin must read as NO, not as a default yes. This is the branch
+// that installs a Windows service and triggers a UAC prompt: getting it wrong
+// means an unattended run commits to a system change nobody asked for, because
+// there was nobody there to decline it.
+func TestAClosedStdinDeclinesRatherThanConsenting(t *testing.T) {
+	var out strings.Builder
+	if askYesNo(&out, bufio.NewReader(strings.NewReader("")), "Install and start it now?") {
+		t.Fatal("consented to installing a service on behalf of a session with no human in it")
 	}
 }

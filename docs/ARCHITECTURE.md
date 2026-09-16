@@ -983,10 +983,29 @@ the executable, so two installations with separate configs remain legal.
   work, and self-elevate through UAC on Windows rather than failing with an
   access-denied message the operator has to interpret.
 - **Double-clicking the executable** when it is not running as a service enters
-  a control mode: it reports service state, offers to install and start it, and
-  opens the browser on the UI. An operator who has never used a command line
-  must be able to get from "downloaded a file" to "it is running and will keep
-  running" without being told to open a terminal.
+  a control mode: it reports service state, *offers* to install and start it —
+  as a question answered where they are, not a command printed for them to
+  retype — and prints the address of the UI once it is running. An operator who
+  has never used a command line must be able to get from "downloaded a file" to
+  "it is running and will keep running" without being told to open a terminal.
+  Opening the browser for them is not done yet; the address is printed instead.
+
+  Two details make this work rather than merely intend to.
+
+  **The window is held open.** Explorer destroys the console the instant a
+  console program exits, so the first version of this printed its whole
+  control mode into a window that vanished — reported as *"it just opens and
+  closes silently"*, which for a downloaded security tool reads as broken or
+  as evasive. `GetConsoleProcessList` returning 1 means this process owns the
+  console alone, which is what a double-click looks like; started from a shell
+  the console is shared, there are two or more processes in the list, and
+  nothing pauses.
+
+  **The offer is gated on somebody being there.** It is asked only when the
+  console is owned alone *and* stdin is a real console, and a closed or
+  redirected stdin answers no. The branch installs a Windows service and
+  raises a UAC prompt, so the failure to avoid is an unattended run consenting
+  to a system change because there was nobody present to decline it.
 
 ### The account: `User=notifymatrix`, decided
 
