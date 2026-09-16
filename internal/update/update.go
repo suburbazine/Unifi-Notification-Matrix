@@ -37,6 +37,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -278,7 +279,10 @@ func (c *Client) Download(ctx context.Context, rel *Release, targetExe string) (
 	// is a rename over the running binary, and a rename across filesystems is
 	// a copy that can fail halfway.
 	dir := filepath.Dir(targetExe)
-	tmp, err := os.CreateTemp(dir, ".notifymatrix-update-*")
+	// The target's extension is carried onto the temp file because the
+	// candidate is EXECUTED below to ask its version, and Windows will not
+	// launch an image that is not named .exe.
+	tmp, err := os.CreateTemp(dir, ".notifymatrix-update-*"+filepath.Ext(targetExe))
 	if err != nil {
 		return "", fmt.Errorf("update: cannot write to %s: %w", dir, err)
 	}
@@ -321,7 +325,63 @@ func (c *Client) Download(ctx context.Context, rel *Release, targetExe string) (
 	if err = os.Chmod(tmpName, 0o755); err != nil {
 		return "", err
 	}
+
+	// And that the binary is the version the release CLAIMS it is.
+	//
+	// Every check above this is satisfied by any release-signed build,
+	// whatever its age: the version is read from the release's tag_name and
+	// nothing ever asks the binary. So somebody holding a token with
+	// contents:write -- no certificate, no environment approval, none of the
+	// pipeline -- could publish v99.0.0 whose asset is an OLD signed exe and
+	// its matching SHA256SUMS. Checksum passes, Authenticode passes, the
+	// publisher pin passes, and a known-vulnerable build installs itself as an
+	// upgrade. It is the one hole in "this survives a compromised GitHub".
+	if err = verifyVersion(ctx, tmpName, rel.Version); err != nil {
+		return "", err
+	}
 	return tmpName, nil
+}
+
+// versionProbeTimeout bounds asking the candidate what it is. Printing a
+// version string is instant; anything slower is not answering the question.
+const versionProbeTimeout = 20 * time.Second
+
+// verifyVersion runs the candidate and confirms it reports the version the
+// release advertised.
+//
+// Running it is safe HERE and nowhere earlier: VerifyPublisher has already
+// established this is a genuine build signed by the same publisher as the
+// binary currently running, so executing it is no more trusting than
+// installing it, which is what happens next.
+func verifyVersion(ctx context.Context, candidate, want string) error {
+	ctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, candidate, "version").Output()
+	if err != nil {
+		return fmt.Errorf("update: the download would not report its version, "+
+			"so it was discarded and nothing was installed: %w", err)
+	}
+	return matchesVersion(out, want)
+}
+
+// matchesVersion checks the output of `notifymatrix version` against the
+// version the release advertised. Split out from the exec so the comparison is
+// testable without building a binary to run.
+func matchesVersion(out []byte, want string) error {
+	// "notifymatrix 0.1.1 (windows/amd64, go1.26.8)"
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 || !strings.EqualFold(fields[0], "notifymatrix") {
+		return fmt.Errorf("update: the download reported an unreadable version "+
+			"(%q), so it was discarded and nothing was installed", strings.TrimSpace(string(out)))
+	}
+	if got := strings.TrimPrefix(fields[1], "v"); got != want {
+		return fmt.Errorf("update: the release is tagged %s but the binary in it "+
+			"reports %s -- it was discarded and nothing was installed. A release "+
+			"whose tag and contents disagree is how an old build gets installed "+
+			"as an upgrade", want, got)
+	}
+	return nil
 }
 
 func (c *Client) open(ctx context.Context, url string) (io.ReadCloser, error) {

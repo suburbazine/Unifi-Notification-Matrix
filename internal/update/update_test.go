@@ -188,3 +188,41 @@ func TestADownloadThatDoesNotMatchTheManifestIsDiscarded(t *testing.T) {
 		t.Errorf("the installed binary was touched: %q", got)
 	}
 }
+
+// A RELEASE'S TAG IS NOT EVIDENCE OF WHAT IS IN IT.
+//
+// Every other gate is satisfied by any release-signed build, whatever its age:
+// the version comes from the release's tag_name and nothing asks the binary.
+// So a token with contents:write -- no certificate, no environment approval --
+// could publish v99.0.0 carrying an OLD signed exe and its matching
+// SHA256SUMS, and a known-vulnerable build would install itself as an upgrade.
+func TestAnAssetThatDisagreesWithItsTagIsRefused(t *testing.T) {
+	err := matchesVersion([]byte("notifymatrix 0.0.9 (windows/amd64, go1.26.8)\n"), "99.0.0")
+	if err == nil {
+		t.Fatal("an old binary published under a newer tag was accepted")
+	}
+	if !strings.Contains(err.Error(), "0.0.9") || !strings.Contains(err.Error(), "99.0.0") {
+		t.Errorf("the refusal does not name both versions: %v", err)
+	}
+}
+
+func TestAnAssetThatMatchesItsTagIsAccepted(t *testing.T) {
+	if err := matchesVersion([]byte("notifymatrix 0.1.2 (linux/amd64, go1.26.8)\n"), "0.1.2"); err != nil {
+		t.Errorf("a matching version was refused: %v", err)
+	}
+	// The tag's leading v is stripped before comparison, and the binary may
+	// print it either way.
+	if err := matchesVersion([]byte("notifymatrix v0.1.2 (linux/amd64, go1.26.8)\n"), "0.1.2"); err != nil {
+		t.Errorf("a matching version with a v prefix was refused: %v", err)
+	}
+}
+
+// Anything that is not this program answering the question is a refusal, not
+// something to parse hopefully.
+func TestAnUnreadableVersionIsRefused(t *testing.T) {
+	for _, out := range []string{"", "\n", "bash: command not found", "0.1.2"} {
+		if err := matchesVersion([]byte(out), "0.1.2"); err == nil {
+			t.Errorf("accepted %q as a version report", out)
+		}
+	}
+}
