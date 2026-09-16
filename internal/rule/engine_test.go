@@ -29,10 +29,19 @@ func newEngine(t *testing.T, rules Set) (*Engine, *store.SQLite, *time.Time) {
 	t.Cleanup(func() { db.Close() })
 
 	clk := t0
+	// Guarded: Handle runs on whatever goroutine the event arrived on, so an
+	// injected id generator is called concurrently. A bare counter here is a
+	// data race in the TEST, and the race detector found it.
+	var idMu sync.Mutex
 	var n int
 	e, err := New(db, rules,
 		WithClock(func() time.Time { return clk }),
-		WithIDs(func() string { n++; return fmt.Sprintf("i%d", n) }))
+		WithIDs(func() string {
+			idMu.Lock()
+			defer idMu.Unlock()
+			n++
+			return fmt.Sprintf("i%d", n)
+		}))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -64,9 +64,17 @@ type Engine struct {
 type Option func(*Engine)
 
 // WithClock injects a clock so tests need not sleep.
+//
+// Must be safe for concurrent use: several sources emit at once and Handle
+// does not serialise them.
 func WithClock(f func() time.Time) Option { return func(e *Engine) { e.now = f } }
 
 // WithIDs injects the incident id generator.
+//
+// Must be safe for concurrent use -- Handle calls it from whatever goroutine
+// the event arrived on. The default (randomID) is, because crypto/rand is; a
+// test that substituted a bare counter tripped the race detector, which is how
+// this requirement came to be written down.
 func WithIDs(f func() string) Option { return func(e *Engine) { e.newID = f } }
 
 // New builds an engine.
