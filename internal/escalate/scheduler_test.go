@@ -474,8 +474,12 @@ func TestGiveUpClosesTheIncidentWithoutOneLastAlert(t *testing.T) {
 			GiveUpAfter: time.Hour,
 		},
 	}
-	// Opened two hours ago, never delivered, so it is also due.
+	// Opened two hours ago and DELIVERED at the time, so the horizon applies:
+	// somebody was told, repeatedly, and never acknowledged. An incident that
+	// was never delivered at all is a different case and must not be closed --
+	// TestAnUndeliveredIncidentIsNeverGivenUpOn covers it.
 	inc := incident.Open("inc-1", "protect/cam-1/offline", incident.SeverityHigh, "protect", "Camera offline", "", sched0.Add(-2*time.Hour))
+	_ = inc.RecordAlert(sched0.Add(-2*time.Hour), 0)
 
 	st := newFakeStore(inc)
 	r := &recorder{}
@@ -883,5 +887,48 @@ func TestCommitRefusesToWriteOverANewerRow(t *testing.T) {
 	}
 	if st.must(t, "i1").Title == "written from a stale read" {
 		t.Error("the stale write was applied anyway")
+	}
+}
+
+// AN ALARM NOBODY COULD BE TOLD ABOUT IS NOT ONE TO GIVE UP ON.
+//
+// Giving up closes the incident with "gave up after N without
+// acknowledgement", which asserts that a human was asked and did not answer.
+// With every channel failing, nobody was asked -- and closing it on that
+// wording removed it from the board with a reason that reads like it was
+// handled. A four-hour network outage is exactly the shape of this, and the
+// high policy gives up after four hours.
+func TestAnUndeliveredIncidentIsNeverGivenUpOn(t *testing.T) {
+	ctx := context.Background()
+	pols := map[incident.Severity]Policy{
+		incident.SeverityHigh: {
+			Name:        "test-high",
+			Stages:      []Stage{{After: 0, Channels: []string{"ntfy"}}},
+			RepeatEvery: 5 * time.Minute,
+			GiveUpAfter: time.Hour,
+		},
+	}
+	// Opened well past the horizon, and never once delivered.
+	inc := incident.Open("inc-1", "protect/cam-1/offline", incident.SeverityHigh,
+		"protect", "Camera offline", "", sched0.Add(-2*time.Hour))
+
+	st := newFakeStore(inc)
+	r := &recorder{}
+	c := &clock{t: sched0}
+	s := newTestScheduler(t, st, pols, r, c)
+
+	if err := s.Tick(ctx); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+
+	stored := st.must(t, "inc-1")
+	if stored.ClosedAt != nil {
+		t.Fatalf("an incident nobody was ever told about was closed: %q",
+			stored.CloseReason)
+	}
+	// And it is still being tried, because that is the whole point of not
+	// closing it.
+	if r.count() == 0 {
+		t.Error("no delivery was attempted for an incident that is still open and overdue")
 	}
 }

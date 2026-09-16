@@ -187,6 +187,24 @@ func (p Policy) ShouldGiveUp(inc *incident.Incident, now time.Time) bool {
 	if p.GiveUpAfter <= 0 || inc.Terminal() || inc.Acknowledged() {
 		return false
 	}
+	// NOTHING DELIVERED MEANS NOTHING TO GIVE UP ON.
+	//
+	// Giving up closes the incident with "gave up after 4h without
+	// acknowledgement", which says a human was asked and did not answer. When
+	// no delivery has ever succeeded that is simply untrue, and it is untrue in
+	// the worst direction: the site's channels were down for the horizon --
+	// which is exactly what a four-hour network outage looks like -- so every
+	// incident raised during it was closed, unseen, with a reason that reads
+	// like it was handled. The same thing happened to an info incident opened
+	// inside quiet hours, held all night by design and closed an hour later
+	// having been sent nowhere.
+	//
+	// So the horizon only applies once somebody has actually been told. An
+	// incident nobody could be told about stays open and stays on the board,
+	// which is the honest report and the one thing the operator needs to see.
+	if inc.FirstAlertAt == nil {
+		return false
+	}
 	return now.Sub(inc.OpenedAt) > p.GiveUpAfter
 }
 
