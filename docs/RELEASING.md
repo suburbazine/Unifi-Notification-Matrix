@@ -96,7 +96,11 @@ sha256sum notifymatrix-linux-amd64    # compare against SHA256SUMS
 ```
 
 A mismatch is worth reporting. The usual innocent cause is a different Go patch
-release — `.go-version` records the one the release used.
+release — `.go-version` records the one the release used, and it is kept on the
+**latest** patch of its line deliberately: CI runs `govulncheck`, and a Go
+patch release is the usual way a standard-library vulnerability gets fixed
+under you. The toolchain is a build input, so bumping it changes the expected
+hashes.
 
 > The **Windows** binary will *not* match, because signing rewrites the file
 > after the build. Verify that one with Authenticode or with cosign against the
