@@ -143,9 +143,18 @@ type webView struct {
 // ---- inbound ----
 
 type settingsUpdate struct {
-	Consoles []consoleUpdate `json:"consoles"`
-	Channels channelsUpdate  `json:"channels"`
-	Rules    rule.Set        `json:"rules"`
+	// Consoles and Channels are pointers for the same reason Hooks and
+	// Policies are: absent has to mean "leave alone", not "delete".
+	//
+	// As plain values, a request that did not mention them -- an older page, a
+	// script, anything posting one section -- silently removed every console
+	// and disabled every channel. That is the whole product turned off by
+	// omission, and it became reachable the moment saves stopped being
+	// all-or-nothing.
+	Consoles *[]consoleUpdate `json:"consoles"`
+	Channels *channelsUpdate  `json:"channels"`
+
+	Rules rule.Set `json:"rules"`
 
 	// Hooks are the inbound webhook endpoints. A pointer, so a client that
 	// does not mention them leaves them alone rather than deleting every
@@ -372,7 +381,19 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 	// be SHOWN -- refusing a bad config with an explanation is the whole point
 	// of validating it -- so the message must survive whatever the injected
 	// save function does with errors.
-	if err := next.Validate(); err != nil {
+	//
+	// But only problems this save INTRODUCES may refuse it.
+	//
+	// The rule used to be "any problem refuses the save", and the effect was
+	// that a half-finished channel locked the whole settings page: an operator
+	// could not save a perfectly good email configuration because ntfy was
+	// mid-setup, so the only way out of a broken config was to fix every part
+	// of it in one edit. Reported from the field, and it is the opposite of
+	// what a settings page is for.
+	//
+	// So: you may not make it worse, and you are not held hostage by damage
+	// that is already there. Pre-existing problems are carried and reported.
+	if err := refusedBy(cur, next); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorBody(err.Error()))
 		return
 	}
@@ -418,8 +439,12 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 		byName[c.Name] = c
 	}
 
-	next.Consoles = nil
-	for i, in := range upd.Consoles {
+	consoles := []consoleUpdate{}
+	if upd.Consoles != nil {
+		consoles = *upd.Consoles
+		next.Consoles = nil
+	}
+	for i, in := range consoles {
 		prev, ok := byName[in.Name]
 		if !ok && i < len(cur.Consoles) {
 			prev = cur.Consoles[i]
@@ -440,8 +465,12 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 		next.Consoles = append(next.Consoles, con)
 	}
 
-	next.Channels = config.Channels{}
-	if in := upd.Channels.Ntfy; in != nil {
+	chans := channelsUpdate{}
+	if upd.Channels != nil {
+		chans = *upd.Channels
+		next.Channels = config.Channels{}
+	}
+	if in := chans.Ntfy; in != nil {
 		n := config.Ntfy{
 			Enabled:   in.Enabled,
 			ServerURL: strings.TrimSpace(in.ServerURL),
@@ -456,7 +485,7 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 		}
 		next.Channels.Ntfy = &n
 	}
-	if in := upd.Channels.Email; in != nil {
+	if in := chans.Email; in != nil {
 		e := config.Email{
 			Enabled:    in.Enabled,
 			Host:       strings.TrimSpace(in.Host),
@@ -476,7 +505,7 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 		}
 		next.Channels.Email = &e
 	}
-	if in := upd.Channels.Pushover; in != nil {
+	if in := chans.Pushover; in != nil {
 		o := config.Pushover{
 			Enabled: in.Enabled,
 			Device:  strings.TrimSpace(in.Device),
@@ -497,7 +526,7 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 		}
 		next.Channels.Pushover = &o
 	}
-	if in := upd.Channels.Webhook; in != nil {
+	if in := chans.Webhook; in != nil {
 		h := config.Webhook{
 			Enabled:            in.Enabled,
 			URL:                strings.TrimSpace(in.URL),
@@ -589,6 +618,43 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 		next.Web.Listen = cur.Web.Listen
 	}
 	return &next, touched
+}
+
+// refusedBy reports the problems this save would ADD, or nil when it adds
+// none.
+//
+// Problems already present in the current configuration are not the new
+// edit's fault and must not block it, or a configuration can become
+// impossible to repair one field at a time.
+func refusedBy(cur, next *config.Config) error {
+	before := map[string]bool{}
+	if err := cur.Validate(); err != nil {
+		for _, p := range problemsOf(err) {
+			before[p] = true
+		}
+	}
+
+	var added config.Problems
+	if err := next.Validate(); err != nil {
+		for _, p := range problemsOf(err) {
+			if !before[p] {
+				added = append(added, p)
+			}
+		}
+	}
+	if len(added) == 0 {
+		return nil
+	}
+	return added
+}
+
+// problemsOf unpacks a validation error into its individual problems.
+func problemsOf(err error) []string {
+	var probs config.Problems
+	if errors.As(err, &probs) {
+		return probs
+	}
+	return []string{err.Error()}
 }
 
 // changedSections names what moved, for the audit record. Computed from the

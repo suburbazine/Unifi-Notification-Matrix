@@ -289,9 +289,19 @@ func TestUnknownSourceIsRefused(t *testing.T) {
 	}
 }
 
-// A policy naming a channel that is not configured would deliver nothing and
-// look exactly like one that worked.
-func TestAPolicyNamingAnUnconfiguredChannelIsRefused(t *testing.T) {
+// A policy naming a channel that is not available used to be FATAL, on the
+// reasoning that a rung delivering nothing looks exactly like a rung that
+// worked. That reasoning is right about the risk and was wrong about the
+// remedy.
+//
+// In the field it meant one unconfigured channel made the entire
+// configuration invalid: a perfectly good email setup could not be saved
+// while ntfy was half-finished, and a ladder that could have delivered
+// through the channels that DID work delivered through none of them.
+//
+// So the rung is skipped and warned about, and the guarantee that matters is
+// enforced separately and is stronger -- see the test below.
+func TestAPolicyNamingAnUnavailableChannelStillDeliversThroughTheRest(t *testing.T) {
 	c := workable() // ntfy only
 	c.Policies = map[string]Policy{
 		"critical": {
@@ -300,9 +310,57 @@ func TestAPolicyNamingAnUnconfiguredChannelIsRefused(t *testing.T) {
 			GiveUpAfter: "never",
 		},
 	}
+
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a ladder naming one unavailable channel was refused: %v", err)
+	}
+
+	// The rung survives, carrying only what exists.
+	built, err := c.BuildPolicies(c.EnabledChannelNames())
+	if err != nil {
+		t.Fatal(err)
+	}
+	crit, ok := built["critical"]
+	if !ok {
+		t.Fatal("the critical ladder disappeared entirely")
+	}
+	if len(crit.Stages) != 1 || len(crit.Stages[0].Channels) != 1 ||
+		crit.Stages[0].Channels[0] != "ntfy" {
+		t.Fatalf("the stage was not narrowed to what exists: %+v", crit.Stages)
+	}
+
+	// And it is not silent: a rung the operator wrote that will never fire has
+	// to be reported.
+	var said bool
+	for _, w := range c.Warnings() {
+		if strings.Contains(w, "email") {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("nothing warned that the email rung is skipped: %v", c.Warnings())
+	}
+}
+
+// The guarantee that actually matters, and it stays fatal: a severity whose
+// whole ladder filters away has nowhere to send anything, and that silence is
+// what this product exists to prevent.
+func TestASeverityLeftWithNoChannelAtAllIsStillRefused(t *testing.T) {
+	c := workable() // ntfy only
+	c.Policies = map[string]Policy{
+		"critical": {
+			Stages:      []Stage{{After: "0s", Channels: []string{"email"}}},
+			RepeatEvery: "5m",
+			GiveUpAfter: "never",
+		},
+	}
+
 	err := c.Validate()
-	if err == nil || !strings.Contains(err.Error(), "email") {
-		t.Fatalf("a policy naming the disabled email channel was accepted: %v", err)
+	if err == nil {
+		t.Fatal("a severity with no deliverable rung at all was accepted")
+	}
+	if !strings.Contains(err.Error(), "critical") {
+		t.Errorf("the refusal does not name the severity: %v", err)
 	}
 }
 

@@ -23,11 +23,41 @@ type Delivery struct {
 	queues map[string]*channel.Queue
 	ackURL string
 	signer *ack.Signer
+
+	// broken records channels that were configured and could not be built.
+	//
+	// They used to abort the whole construction, which meant one malformed
+	// field in one channel stopped the DAEMON from starting: nothing watched,
+	// nothing ingested, no incidents raised, over a From address missing its
+	// angle brackets. Observed in the field exactly that way, and it is the
+	// worst possible response to a typo in an optional channel.
+	//
+	// A channel that cannot be built cannot deliver, which is worth saying
+	// loudly. It is not worth taking the alarm system down for, because
+	// everything else still works.
+	broken map[string]error
+}
+
+// Broken lists the channels that were configured and could not be built, with
+// the reason.
+//
+// Surfaced through Health and the checklist: a channel that silently does not
+// exist is precisely the state this product refuses to allow.
+func (d *Delivery) Broken() map[string]error {
+	out := make(map[string]error, len(d.broken))
+	for k, v := range d.broken {
+		out[k] = v
+	}
+	return out
 }
 
 // BuildDelivery constructs every enabled channel and starts its queue.
 func BuildDelivery(c *Config, onResult func(channel.Result)) (*Delivery, error) {
-	d := &Delivery{queues: map[string]*channel.Queue{}, ackURL: c.Web.AckBaseURL}
+	d := &Delivery{
+		queues: map[string]*channel.Queue{},
+		broken: map[string]error{},
+		ackURL: c.Web.AckBaseURL,
+	}
 	if !c.Web.AckKey.IsZero() {
 		s, err := ack.NewSigner(c.Web.AckKey)
 		if err != nil {
@@ -43,9 +73,11 @@ func BuildDelivery(c *Config, onResult func(channel.Result)) (*Delivery, error) 
 			Token:     n.Token,
 		}, nil)
 		if err != nil {
-			return nil, fmt.Errorf("channel ntfy: %w", err)
+			// Recorded and skipped, never fatal: see Delivery.broken.
+			d.broken["ntfy"] = err
+		} else {
+			d.queues["ntfy"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
 		}
-		d.queues["ntfy"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
 	}
 
 	if e := c.Channels.Email; e != nil && e.Enabled {
@@ -59,10 +91,11 @@ func BuildDelivery(c *Config, onResult func(channel.Result)) (*Delivery, error) 
 			To:       e.Recipients,
 		})
 		if err != nil {
-			d.Close()
-			return nil, fmt.Errorf("channel email: %w", err)
+			// Recorded and skipped, never fatal: see Delivery.broken.
+			d.broken["email"] = err
+		} else {
+			d.queues["email"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
 		}
-		d.queues["email"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
 	}
 
 	if o := c.Channels.Pushover; o != nil && o.Enabled {
@@ -73,10 +106,11 @@ func BuildDelivery(c *Config, onResult func(channel.Result)) (*Delivery, error) 
 			Sound:  o.Sound,
 		}, nil)
 		if err != nil {
-			d.Close()
-			return nil, fmt.Errorf("channel pushover: %w", err)
+			// Recorded and skipped, never fatal: see Delivery.broken.
+			d.broken["pushover"] = err
+		} else {
+			d.queues["pushover"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
 		}
-		d.queues["pushover"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
 	}
 
 	if h := c.Channels.Webhook; h != nil && h.Enabled {
@@ -87,10 +121,11 @@ func BuildDelivery(c *Config, onResult func(channel.Result)) (*Delivery, error) 
 			InsecureSkipVerify: h.InsecureSkipVerify,
 		}, nil)
 		if err != nil {
-			d.Close()
-			return nil, fmt.Errorf("channel webhook: %w", err)
+			// Recorded and skipped, never fatal: see Delivery.broken.
+			d.broken["webhook"] = err
+		} else {
+			d.queues["webhook"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
 		}
-		d.queues["webhook"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
 	}
 
 	return d, nil

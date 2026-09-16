@@ -357,7 +357,40 @@ func (c Config) BuildPolicies(enabled []string) (map[string]escalate.Policy, err
 		if err != nil {
 			return nil, err
 		}
-		out[sev] = built // unfiltered: the operator said this
+		if len(have) == 0 {
+			// Nothing configured yet. Keep the ladder whole, for the same
+			// reason the defaults are kept: the scheduler still has to start.
+			out[sev] = built
+			continue
+		}
+		// Filtered against what actually exists, exactly as the shipped
+		// defaults are.
+		//
+		// It used to be kept whole on the reasoning that the operator said
+		// this -- and the effect was that naming a channel which was disabled,
+		// broken or simply not set up yet made the WHOLE configuration
+		// invalid. One unconfigured channel then blocked saving a different,
+		// perfectly good one, and an escalation ladder that could have
+		// delivered through the channels that did work delivered through none.
+		//
+		// The ladder now uses whatever is available. The guarantee that
+		// matters is kept elsewhere and is stronger: validatePolicies still
+		// refuses a severity whose ladder filters away to nothing, so
+		// "somewhere to send it" remains fatal while "exactly these channels"
+		// does not.
+		// An explicit policy REPLACES the default for that severity, including
+		// when it filters away to nothing.
+		//
+		// Without the delete, a ladder that narrowed to nothing left the
+		// SHIPPED default sitting there -- so the operator's stated policy was
+		// silently discarded, an untouched default quietly took over, and the
+		// "no stage left" check never fired because a ladder was technically
+		// present. That is worse than either answer: it neither honours what
+		// they wrote nor tells them it could not.
+		delete(out, sev)
+		if filtered, ok := filterToEnabled(built, have); ok {
+			out[sev] = filtered
+		}
 	}
 	return out, nil
 }

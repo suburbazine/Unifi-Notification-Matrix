@@ -474,13 +474,13 @@ func TestSecretsNeverReachAResponseBody(t *testing.T) {
 
 	// And the save response, which echoes settings back, must be clean too.
 	resp, saveBody := h.do("POST", "/api/settings", settingsUpdate{
-		Consoles: []consoleUpdate{{
+		Consoles: ptrConsoles([]consoleUpdate{{
 			Name: "udm", Host: "10.0.0.1", Fingerprint: "AA:BB:CC", Sources: []string{"protect"},
-		}},
-		Channels: channelsUpdate{
+		}}),
+		Channels: ptrChannels(channelsUpdate{
 			Ntfy:  &ntfyUpdate{Enabled: true, ServerURL: "https://ntfy.sh", Topic: "site-alerts"},
 			Email: &emailUpdate{Enabled: true, Host: "smtp.example.com", Port: 587, TLS: "auto", Username: "alerts@example.com", From: "alerts@example.com", Recipients: []string{"operator@example.com"}},
-		},
+		}),
 		Web: webUpdate{Listen: "127.0.0.1:8322", AckBaseURL: "https://alerts.example.com"},
 	})
 	if resp.StatusCode != http.StatusOK {
@@ -505,13 +505,13 @@ func TestSecretsSurviveASaveThatDidNotResendThem(t *testing.T) {
 	h.signIn()
 
 	resp, body := h.do("POST", "/api/settings", settingsUpdate{
-		Consoles: []consoleUpdate{{
+		Consoles: ptrConsoles([]consoleUpdate{{
 			Name: "udm", Host: "10.0.0.2", Fingerprint: "AA:BB:CC", Sources: []string{"protect"},
-		}},
-		Channels: channelsUpdate{
+		}}),
+		Channels: ptrChannels(channelsUpdate{
 			Ntfy:  &ntfyUpdate{Enabled: true, ServerURL: "https://ntfy.sh", Topic: "site-alerts"},
 			Email: &emailUpdate{Enabled: true, Host: "smtp.example.com", Port: 587, TLS: "auto", Username: "alerts@example.com", From: "alerts@example.com", Recipients: []string{"operator@example.com"}},
-		},
+		}),
 		Web: webUpdate{Listen: "127.0.0.1:8322", AckBaseURL: "https://alerts.example.com"},
 	})
 	if resp.StatusCode != http.StatusOK {
@@ -539,14 +539,14 @@ func TestSecretsSurviveASaveThatDidNotResendThem(t *testing.T) {
 
 	// A value that WAS sent replaces the stored one.
 	resp, body = h.do("POST", "/api/settings", settingsUpdate{
-		Consoles: []consoleUpdate{{
+		Consoles: ptrConsoles([]consoleUpdate{{
 			Name: "udm", Host: "10.0.0.2", Fingerprint: "AA:BB:CC",
 			Sources: []string{"protect"}, APIKeyNew: "a-new-key",
-		}},
-		Channels: channelsUpdate{
+		}}),
+		Channels: ptrChannels(channelsUpdate{
 			Ntfy:  &ntfyUpdate{Enabled: true, ServerURL: "https://ntfy.sh", Topic: "site-alerts"},
 			Email: &emailUpdate{Enabled: true, Host: "smtp.example.com", Port: 587, TLS: "auto", Username: "alerts@example.com", From: "alerts@example.com", Recipients: []string{"operator@example.com"}},
-		},
+		}),
 		Web: webUpdate{Listen: "127.0.0.1:8322", AckBaseURL: "https://alerts.example.com"},
 	})
 	if resp.StatusCode != http.StatusOK {
@@ -862,13 +862,13 @@ func TestAcknowledgeRetriesTheCompareAndSwap(t *testing.T) {
 
 func validUpdate() settingsUpdate {
 	return settingsUpdate{
-		Consoles: []consoleUpdate{{
+		Consoles: ptrConsoles([]consoleUpdate{{
 			Name: "udm", Host: "10.0.0.1", Fingerprint: "AA:BB:CC", Sources: []string{"protect"},
-		}},
-		Channels: channelsUpdate{
+		}}),
+		Channels: ptrChannels(channelsUpdate{
 			Ntfy:  &ntfyUpdate{Enabled: true, ServerURL: "https://ntfy.sh", Topic: "site-alerts"},
 			Email: &emailUpdate{Enabled: true, Host: "smtp.example.com", Port: 587, TLS: "auto", Username: "alerts@example.com", From: "alerts@example.com", Recipients: []string{"operator@example.com"}},
-		},
+		}),
 		Web: webUpdate{Listen: "127.0.0.1:8322", AckBaseURL: "https://alerts.example.com"},
 	}
 }
@@ -1287,8 +1287,8 @@ func TestNothingOutsideTheFormIsLostBySavingIt(t *testing.T) {
 	// A save that changes nothing: whatever comes back must equal what went in.
 	before := viewSettings(cur)
 	upd := settingsUpdate{
-		Consoles:   consolesAsUpdate(cur),
-		Channels:   channelsAsUpdate(cur),
+		Consoles:   ptrConsoles(consolesAsUpdate(cur)),
+		Channels:   ptrChannels(channelsAsUpdate(cur)),
 		Rules:      cur.Rules,
 		QuietHours: cur.QuietHours,
 		Web: webUpdate{
@@ -1391,3 +1391,6 @@ func TestAnEmptyBannerLeavesEverythingGated(t *testing.T) {
 		t.Fatalf("a write returned %d with no banner set, want 401", res.StatusCode)
 	}
 }
+
+func ptrConsoles(v []consoleUpdate) *[]consoleUpdate { return &v }
+func ptrChannels(v channelsUpdate) *channelsUpdate   { return &v }

@@ -23,7 +23,7 @@ func TestAPolicyCanBeSavedFromTheInterface(t *testing.T) {
 		},
 	}
 
-	next, _ := applyUpdate(cur, settingsUpdate{Policies: &want})
+	next, _ := applyUpdate(cur, settingsUpdate{Channels: ptrChannels(channelsAsUpdate(cur)), Policies: &want})
 
 	if !reflect.DeepEqual(next.Policies, want) {
 		t.Fatalf("policies did not survive the save:\n  got  %+v\n  want %+v",
@@ -59,7 +59,7 @@ func TestClearingEveryPolicyReturnsToTheDefaults(t *testing.T) {
 	}
 	empty := map[string]config.Policy{}
 
-	next, _ := applyUpdate(cur, settingsUpdate{Policies: &empty})
+	next, _ := applyUpdate(cur, settingsUpdate{Channels: ptrChannels(channelsAsUpdate(cur)), Policies: &empty})
 
 	if next.Policies != nil {
 		t.Fatalf("clearing the overrides left %+v, want nil", next.Policies)
@@ -75,7 +75,7 @@ func TestAPolicyNamingAnUnknownChannelIsRefused(t *testing.T) {
 		"critical": {Stages: []config.Stage{{After: "0s", Channels: []string{"carrier-pigeon"}}}},
 	}
 
-	next, _ := applyUpdate(cur, settingsUpdate{Policies: &bad})
+	next, _ := applyUpdate(cur, settingsUpdate{Channels: ptrChannels(channelsAsUpdate(cur)), Policies: &bad})
 	if err := next.Validate(); err == nil {
 		t.Fatal("a policy naming a channel that does not exist was accepted")
 	}
@@ -88,7 +88,7 @@ func TestAStageWithAnUnparseableDelayIsRefused(t *testing.T) {
 	bad := map[string]config.Policy{
 		"critical": {Stages: []config.Stage{{After: "5", Channels: []string{"ntfy"}}}},
 	}
-	next, _ := applyUpdate(cur, settingsUpdate{Policies: &bad})
+	next, _ := applyUpdate(cur, settingsUpdate{Channels: ptrChannels(channelsAsUpdate(cur)), Policies: &bad})
 	if err := next.Validate(); err == nil {
 		t.Fatal(`a stage delay of "5" was accepted`)
 	}
@@ -101,7 +101,7 @@ func TestAChangedPolicyIsNamedInTheAuditRecord(t *testing.T) {
 	changed := map[string]config.Policy{
 		"critical": {Stages: []config.Stage{{After: "0s", Channels: []string{"ntfy"}}}},
 	}
-	next, touched := applyUpdate(cur, settingsUpdate{Policies: &changed})
+	next, touched := applyUpdate(cur, settingsUpdate{Channels: ptrChannels(channelsAsUpdate(cur)), Policies: &changed})
 
 	sections := changedSections(viewSettings(cur), viewSettings(next), touched)
 	var found bool

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/mail"
 	"net/url"
 	"sort"
 	"strings"
@@ -68,8 +69,60 @@ func (c Config) Warnings() []string {
 				"(notifymatrix will show you its fingerprint) or turn verification back on")
 		}
 	}
+	w = append(w, c.unavailableChannelWarnings()...)
 	w = append(w, c.exposureWarnings()...)
 	return w
+}
+
+// unavailableChannelWarnings reports escalation rungs naming a channel that is
+// not available, which are silently dropped rather than refused.
+//
+// Dropped is the right behaviour -- a ladder should deliver through whatever
+// exists rather than not at all -- but it must not be SILENT. A rung the
+// operator wrote and that will never fire is exactly the kind of thing this
+// product refuses to let pass without saying so.
+func (c Config) unavailableChannelWarnings() []string {
+	have := map[string]bool{}
+	for _, ch := range c.EnabledChannelNames() {
+		have[strings.ToLower(ch)] = true
+	}
+	if len(have) == 0 {
+		return nil // nothing is configured; a different problem says so
+	}
+
+	names := make([]string, 0, len(c.Policies))
+	for name := range c.Policies {
+		names = append(names, name)
+	}
+	sort.Strings(names) // stable across runs
+
+	var w []string
+	for _, name := range names {
+		missing := map[string]bool{}
+		var order []string
+		for _, st := range c.Policies[name].Stages {
+			for _, ch := range st.Channels {
+				if !have[strings.ToLower(ch)] && !missing[ch] {
+					missing[ch] = true
+					order = append(order, ch)
+				}
+			}
+		}
+		if len(order) == 0 {
+			continue
+		}
+		w = append(w, fmt.Sprintf("policy %q names %s, which %s not enabled -- "+
+			"those rungs are skipped and the rest of the ladder still delivers",
+			name, strings.Join(order, ", "), plural(len(order))))
+	}
+	return w
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
 }
 
 // Validate refuses a configuration that would fail silently later.
@@ -171,6 +224,29 @@ func (c Config) validateChannels() Problems {
 	if e := c.Channels.Email; e != nil && e.Enabled {
 		if strings.TrimSpace(e.Host) == "" {
 			p = append(p, "channel email: needs an SMTP host")
+		}
+		// Checked HERE rather than discovered when the channel is built.
+		//
+		// "Notify Matrix" with no address parses as a display name and nothing
+		// else, and an unparseable From used to surface only at construction
+		// time -- which took the whole daemon down. Saying it at save time is
+		// the difference between a rejected field and an alarm system that
+		// will not start.
+		if from := strings.TrimSpace(e.From); from != "" {
+			if _, err := mail.ParseAddress(from); err != nil {
+				p = append(p, fmt.Sprintf("channel email: from %q is not an email "+
+					"address -- write it as name@example.com, or as "+
+					"\"Display Name <name@example.com>\" if you want a name on it", from))
+			}
+		}
+		for _, to := range e.Recipients {
+			if to = strings.TrimSpace(to); to == "" {
+				continue
+			}
+			if _, err := mail.ParseAddress(to); err != nil {
+				p = append(p, fmt.Sprintf("channel email: recipient %q is not an "+
+					"email address", to))
+			}
 		}
 		if e.Port < 0 || e.Port > 65535 {
 			p = append(p, fmt.Sprintf("channel email: port %d is out of range", e.Port))
@@ -340,17 +416,20 @@ func (c Config) validatePolicies() Problems {
 		names = append(names, name)
 	}
 	sort.Strings(names) // stable message across runs
-	for _, name := range names {
-		for i, st := range c.Policies[name].Stages {
-			for _, ch := range st.Channels {
-				if !have[strings.ToLower(ch)] {
-					p = append(p, fmt.Sprintf(
-						"policy %q stage %d names channel %q, which is not configured or not enabled",
-						name, i, ch))
-				}
-			}
-		}
-	}
+	// Naming a channel that is not available is a WARNING, not a refusal.
+	//
+	// It used to be fatal, on the reasoning that a rung delivering nothing
+	// looks exactly like a rung that worked. That reasoning is right about the
+	// risk and wrong about the remedy: it meant one unconfigured channel made
+	// the entire configuration invalid, so an operator could not save a
+	// perfectly good email setup while ntfy was half-finished, and a ladder
+	// that could have delivered through the channels that DID work delivered
+	// through none of them.
+	//
+	// The risk is covered better below: a severity whose whole ladder filters
+	// away to nothing is still fatal. So "somewhere to send it" stays a
+	// refusal, and "exactly these channels" becomes advice.
+	_ = names
 
 	policies, err := c.BuildPolicies(enabled)
 	if err != nil {
