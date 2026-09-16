@@ -419,3 +419,78 @@ func TestEngineRefusesABadRuleSet(t *testing.T) {
 		t.Fatalf("New with a blanket ignore = %v, want ErrBlanketIgnore", err)
 	}
 }
+
+// A CONDITION THAT CAME BACK BEFORE ANYBODY SAW IT IS A NEW ALARM.
+//
+// A resolved incident is still non-terminal until it is also acknowledged, so
+// OpenByDedupKey finds it -- but Policy.NextDue refuses anything resolved, so
+// it will never alert again. Folding a fresh event into it therefore buried
+// that event permanently: door forced, door closed with nobody woken, door
+// forced again, and neither forcing ever reached a human.
+func TestARecurrenceBeforeAnyAcknowledgementOpensANewIncident(t *testing.T) {
+	e, _, clk := newEngine(t, nil)
+	ctx := context.Background()
+
+	first, err := e.Handle(ctx, offline("cam-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The condition clears. Nobody ever acknowledged it.
+	*clk = clk.Add(5 * time.Minute)
+	cleared := offline("cam-1")
+	cleared.Clears = true
+	if _, err := e.Handle(ctx, cleared); err != nil {
+		t.Fatal(err)
+	}
+
+	// It happens again.
+	*clk = clk.Add(25 * time.Minute)
+	again, err := e.Handle(ctx, offline("cam-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if again.Incident.ID == first.Incident.ID {
+		t.Fatalf("the second alarm folded into the resolved incident %s, "+
+			"which can never alert again", again.Incident.ID)
+	}
+	if again.Outcome != OutcomeRecurred {
+		t.Errorf("outcome = %s, want %s", again.Outcome, OutcomeRecurred)
+	}
+	if again.Incident.PredecessorID != first.Incident.ID {
+		t.Errorf("the new incident is not linked to its predecessor: %q",
+			again.Incident.PredecessorID)
+	}
+	if again.Incident.Acknowledged() {
+		t.Error("the new incident inherited an acknowledgement that never happened")
+	}
+}
+
+// The neighbouring case must NOT change: an acknowledged incident whose
+// condition has not cleared is somebody's open obligation, and a repeat event
+// on it is the same problem continuing, not a new one.
+func TestARepeatOnAnAcknowledgedIncidentStillFoldsIn(t *testing.T) {
+	e, db, clk := newEngine(t, nil)
+	ctx := context.Background()
+
+	first, err := e.Handle(ctx, offline("cam-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inc := first.Incident
+	inc.Acknowledge(*clk, "web")
+	if err := db.Put(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+
+	*clk = clk.Add(time.Minute)
+	again, err := e.Handle(ctx, offline("cam-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Incident.ID != first.Incident.ID {
+		t.Errorf("a repeat on an acknowledged incident opened a second one (%s)",
+			again.Incident.ID)
+	}
+}

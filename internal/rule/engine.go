@@ -159,6 +159,28 @@ func (e *Engine) handle(ctx context.Context, ev event.Event) (Result, error) {
 		open, err := e.store.OpenByDedupKey(ctx, key)
 		switch {
 		case err == nil:
+			// A RESOLVED incident that nobody ever acknowledged is not
+			// something to fold into. It is still non-terminal, so it is what
+			// this lookup finds, but the scheduler will never alert on it
+			// again -- Policy.NextDue refuses anything Resolved.
+			//
+			// So folding the new event in buried it completely: door forced at
+			// 03:00, door closes at 03:05 having woken nobody, door forced
+			// again at 03:30 -- and the second forcing joined a corpse. No
+			// alert, then or ever, for either one.
+			//
+			// Closing it here makes the next pass through this loop find
+			// nothing live and open a fresh incident linked to this one as its
+			// predecessor, which is what a condition that cleared and came
+			// back has always been meant to produce.
+			if open.Resolved() && !open.Acknowledged() {
+				open.Close(now, "the condition returned before anybody acknowledged it")
+				if err := e.store.Put(ctx, open); err != nil {
+					return Result{}, err
+				}
+				continue
+			}
+
 			// Already live: fold in. Deliberately does NOT re-alert or reset
 			// the escalation ladder -- a camera flapping fifty times a minute
 			// is one incident nagging on its own schedule, not fifty alerts.
