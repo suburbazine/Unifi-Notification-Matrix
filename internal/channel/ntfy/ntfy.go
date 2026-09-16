@@ -256,7 +256,32 @@ func (c *Channel) attempt(ctx context.Context, u *url.URL, body []byte) (time.Du
 		return retryAfter(resp.Header.Get("Retry-After")),
 			&rateLimitedError{server: redact(u), detail: detail}
 	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return 0, fmt.Errorf("ntfy: %s rejected the publish: %s%s\n%s",
+			redact(u), resp.Status, detail, unauthorisedAdvice(!c.cfg.Token.IsZero()))
+	}
 	return 0, fmt.Errorf("ntfy: %s rejected the publish: %s%s", redact(u), resp.Status, detail)
+}
+
+// unauthorisedAdvice explains a 401 from ntfy, because the useful response is
+// the opposite of the obvious one.
+//
+// A token that is wrong is rejected even on a topic that needs no token at
+// all: ntfy validates the credential it was given before it considers whether
+// the topic was open. So the fix for "401 on my public topic" is usually to
+// REMOVE the token, which nobody guesses -- the instinct is to go and find a
+// better one.
+func unauthorisedAdvice(hadToken bool) string {
+	if !hadToken {
+		return "       This topic requires a token. Create one at your ntfy server " +
+			"(Account > Access tokens on ntfy.sh) and put it in the ntfy channel " +
+			"settings."
+	}
+	return "       The token was sent and refused. Note that ntfy checks a token " +
+		"BEFORE it checks whether the topic needed one, so a stale or mistyped " +
+		"token fails even on a topic that is open to anybody -- if yours is a " +
+		"public topic, clearing the token is the fix. Otherwise the token has " +
+		"expired, or lacks write access to this topic."
 }
 
 // rateLimitedError marks the one status worth retrying.

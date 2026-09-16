@@ -716,3 +716,52 @@ func TestName(t *testing.T) {
 
 // Compile-time proof that this satisfies the interface the scheduler uses.
 var _ channel.Channel = (*Channel)(nil)
+
+// A 401 from ntfy is the one status where the useful response is the opposite
+// of the obvious one: ntfy validates whatever credential it was given BEFORE
+// it considers whether the topic needed one, so a stale or mistyped token is
+// refused even on a topic open to anybody. The instinct is to go and find a
+// better token; the fix is usually to remove it.
+func TestAnUnauthorisedPublishSaysWhichWayToGo(t *testing.T) {
+	var sawAuth bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAuth = r.Header.Get("Authorization") != ""
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"code":40101,"error":"unauthorized"}`))
+	}))
+	defer srv.Close()
+
+	// With a token: say that removing it may be the answer.
+	withToken, err := New(Config{ServerURL: srv.URL, Topic: "t", Token: "wrong"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = withToken.Send(context.Background(), sampleAlert())
+	if err == nil {
+		t.Fatal("a 401 was reported as a successful publish")
+	}
+	if !sawAuth {
+		t.Error("no Authorization header was sent even though a token was configured")
+	}
+	if !strings.Contains(err.Error(), "clearing the token") {
+		t.Errorf("the error does not offer the counter-intuitive fix:\n%v", err)
+	}
+
+	// Without one: say that the topic wants a token.
+	noToken, err := New(Config{ServerURL: srv.URL, Topic: "t"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = noToken.Send(context.Background(), sampleAlert())
+	if err == nil {
+		t.Fatal("a 401 was reported as a successful publish")
+	}
+	if !strings.Contains(err.Error(), "requires a token") {
+		t.Errorf("the error does not say a token is needed:\n%v", err)
+	}
+	// And it must not tell somebody with no token to clear the one they do
+	// not have.
+	if strings.Contains(err.Error(), "clearing the token") {
+		t.Errorf("advised clearing a token that was never set:\n%v", err)
+	}
+}
