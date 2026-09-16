@@ -170,6 +170,32 @@ jobs:
           if ($sig.Status -ne 'Valid') { throw "Authenticode status is $($sig.Status)" }
           if (-not $sig.TimeStamperCertificate) { throw "signature is not timestamped" }
 
+      # The in-app updater refuses any replacement whose Authenticode signature
+      # does not verify and whose signer is not the publisher of the binary
+      # already installed. Those tests skip without a genuinely signed file, so
+      # everywhere else they are decoration -- this is the one job that has one.
+      #
+      # It runs against THIS release's artefact, which means the check that
+      # guards self-update is exercised on the exact bytes being shipped. A
+      # verifier that had quietly stopped working would otherwise be discovered
+      # by an operator, on the day it let something through.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # clean: false is load-bearing. The default runs `git clean -ffdx`,
+          # which deletes ignored files -- and dist/ is ignored, so a default
+          # checkout here would destroy the signed artefact this job exists to
+          # produce, between signing it and uploading it.
+          clean: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache: true
+      - name: exercise the update verifier against the signed artefact
+        env:
+          NOTIFYMATRIX_SIGNED_FIXTURE: ${{ github.workspace }}\dist\notifymatrix-windows-amd64.exe
+        run: go test ./internal/update/ -run 'Signed|Tampered|Unsigned' -v
+
       - uses: actions/upload-artifact@v7
         with:
           name: signed-windows-amd64

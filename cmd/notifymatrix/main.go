@@ -46,6 +46,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/service"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/store"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/update"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/web"
 )
 
@@ -403,6 +404,14 @@ func runDaemon(ctx context.Context, dataDir string) error {
 	}
 	defer db.Close()
 
+	upd := newUpdater(version)
+	// The binary a previous update replaced, cleaned up here rather than at
+	// the end of that update: at the end of an update the old file is still
+	// the running process, and Windows will not delete a running executable.
+	if exe, err := exePath(); err == nil {
+		update.CleanBackups(exe)
+	}
+
 	// A delivery failure is reported as it lands: a channel that has started
 	// failing is itself something the operator needs to know, not only a field
 	// on an incident nobody is looking at.
@@ -751,6 +760,9 @@ func runDaemon(ctx context.Context, dataDir string) error {
 				}
 				return fmt.Errorf("unknown service action %q", a)
 			},
+			UpdateState: upd.state,
+			CheckUpdate: upd.check,
+			ApplyUpdate: upd.apply,
 			Checklist: func() setup.Input {
 				cfgMu.RLock()
 				c := current

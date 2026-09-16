@@ -104,6 +104,14 @@ type Deps struct {
 	// terminal, which is the thing this page exists to avoid.
 	ControlService func(ServiceAction) error
 
+	// UpdateState, CheckUpdate and ApplyUpdate are the in-app updater.
+	//
+	// All optional and all three together: a build with none of them shows no
+	// update panel rather than a set of buttons that cannot work.
+	UpdateState func() UpdateState
+	CheckUpdate func(context.Context) (UpdateState, error)
+	ApplyUpdate func(ctx context.Context, version string) error
+
 	// Version is shown in the header. Optional.
 	Version string
 }
@@ -272,6 +280,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/incidents/{id}/ack", s.requireAuth(http.HandlerFunc(s.handleAck)))
 	mux.Handle("POST /api/incidents/{id}/close", s.requireAuth(http.HandlerFunc(s.handleClose)))
 	mux.Handle("POST /api/service", s.requireAuth(http.HandlerFunc(s.handleServiceAction)))
+	mux.Handle("GET /api/update", s.requireAuth(http.HandlerFunc(s.handleUpdateState)))
+	mux.Handle("POST /api/update/check", s.requireAuth(http.HandlerFunc(s.handleUpdateCheck)))
+	mux.Handle("POST /api/update/apply", s.requireAuth(http.HandlerFunc(s.handleUpdateApply)))
 
 	return secureHeaders(mux)
 }

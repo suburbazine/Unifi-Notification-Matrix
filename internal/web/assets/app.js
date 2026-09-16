@@ -248,6 +248,90 @@ function renderHealth(h) {
     card.appendChild(msg);
   }
   svc.appendChild(card);
+  if (state.authed) renderUpdate(svc);
+}
+
+// ---------- updates ----------
+
+function renderUpdate(into) {
+  var card = el("div", "card");
+  card.appendChild(el("div", "title", "Version"));
+  var body = el("div");
+  card.appendChild(body);
+  into.appendChild(card);
+
+  var draw = function (u, note, noteClass) {
+    clear(body);
+    var r = el("div", "row");
+    r.appendChild(badge("running " + (u.current || "unknown"), "on"));
+    if (u.available) r.appendChild(badge(u.available + " available", ""));
+    body.appendChild(r);
+
+    if (u.error) {
+      // A check that failed is NOT "up to date". Reported as its own line,
+      // because the two look identical from the outside and one of them is a
+      // machine sitting on a build with a known problem.
+      body.appendChild(el("div", "delivery-error",
+        "The last check for updates failed: " + u.error));
+    }
+    if (!u.can_apply && u.why) {
+      body.appendChild(el("div", "note", u.why));
+    }
+
+    var bar = el("div", "formbar");
+    var check = el("button", "act", "Check for updates");
+    check.addEventListener("click", function () {
+      draw(u, "checking…", "msg");
+      api("POST", "api/update/check").then(function (res) {
+        if (!res.ok) {
+          draw(u, (res.data && res.data.error) || "the check failed", "msg err");
+          return;
+        }
+        draw(res.data, res.data.available ? "" : "This is the newest release.", "msg");
+      });
+    });
+    bar.appendChild(check);
+
+    if (u.available && u.can_apply) {
+      var go = el("button", "act primary", "Install " + u.available + " and restart");
+      go.addEventListener("click", function () {
+        draw(u, "downloading and checking the signature…", "msg");
+        api("POST", "api/update/apply", { version: u.available }).then(function (res) {
+          if (!res.ok) {
+            // Shown verbatim. "signed by a different publisher" is not a
+            // transient error to retry past -- it is the thing the check
+            // exists to catch, and summarising it away would throw out the
+            // only sentence that matters.
+            draw(u, (res.data && res.data.error) || "the update failed", "msg err");
+            return;
+          }
+          draw(u, "installed. Restarting — this page will go quiet briefly.", "msg");
+          setTimeout(refreshAll, 8000);
+        });
+      });
+      bar.appendChild(go);
+    }
+    if (u.available && u.release_url) {
+      var link = document.createElement("a");
+      link.href = u.release_url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.className = "act";
+      link.textContent = "Release notes";
+      bar.appendChild(link);
+    }
+    body.appendChild(bar);
+    if (note) {
+      var m = el("div", noteClass || "msg", note);
+      body.appendChild(m);
+    }
+  };
+
+  api("GET", "api/update").then(function (res) {
+    if (!res.ok) { clear(body); body.appendChild(el("div", "note",
+      "This build cannot check for updates.")); return; }
+    draw(res.data, "", "msg");
+  });
 }
 
 function table(cols) {
