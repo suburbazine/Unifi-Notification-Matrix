@@ -233,3 +233,65 @@ func TestNoRepeatEndsTheLadder(t *testing.T) {
 		t.Error("a policy with no RepeatEvery must stop after its last stage")
 	}
 }
+
+// THE LADDER MUST CLIMB EVEN WHEN ITS FIRST RUNG NEVER WORKS.
+//
+// Observed: an ntfy server the site could not reach at all. The default
+// critical ladder pushes ntfy at once and adds email at +2m, but the stage was
+// taken from the last SUCCESSFUL alert -- and there had not been one -- so
+// every critical incident sat on rung 0 retrying ntfy, and email was never
+// attempted. A configured, working channel named on the ladder delivered
+// nothing while the alarm went unheard.
+func TestTheLadderClimbsWhileNothingHasBeenDelivered(t *testing.T) {
+	p := Policy{
+		Name: "critical",
+		Stages: []Stage{
+			{After: 0, Channels: []string{"ntfy"}},
+			{After: 2 * time.Minute, Channels: []string{"ntfy", "email"}},
+		},
+		RepeatEvery: 5 * time.Minute,
+	}
+	inc := newInc()
+	// Nothing has ever been delivered: every attempt so far has failed.
+	inc.RecordDeliveryFailure(t0, "ntfy: could not connect at all")
+
+	due, stage, channels := p.DueNow(inc, t0.Add(10*time.Minute))
+	if !due {
+		t.Fatal("an incident nobody has been told about must stay due")
+	}
+	if stage == 0 {
+		t.Errorf("still on rung 0 ten minutes in; the ladder never climbs")
+	}
+	var sawEmail bool
+	for _, c := range channels {
+		if c == "email" {
+			sawEmail = true
+		}
+	}
+	if !sawEmail {
+		t.Errorf("email is on the ladder and was never attempted: channels=%v", channels)
+	}
+}
+
+// ...and the rung must still be paced by the ladder, not jumped to the top the
+// instant an incident opens. Escalation that arrives all at once is just a
+// louder first alert.
+func TestTheLadderDoesNotSkipAheadBeforeItsTime(t *testing.T) {
+	p := Policy{
+		Name: "critical",
+		Stages: []Stage{
+			{After: 0, Channels: []string{"ntfy"}},
+			{After: 2 * time.Minute, Channels: []string{"email"}},
+		},
+		RepeatEvery: 5 * time.Minute,
+	}
+	inc := newInc()
+
+	_, stage, channels := p.DueNow(inc, t0.Add(30*time.Second))
+	if stage != 0 {
+		t.Errorf("thirty seconds in the rung is %d, want 0", stage)
+	}
+	if len(channels) != 1 || channels[0] != "ntfy" {
+		t.Errorf("thirty seconds in the channels are %v, want [ntfy]", channels)
+	}
+}

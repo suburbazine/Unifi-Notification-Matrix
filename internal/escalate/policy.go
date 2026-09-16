@@ -124,12 +124,61 @@ func (p Policy) NextDue(inc *incident.Incident) (at time.Time, stage int, ok boo
 }
 
 // DueNow reports whether the incident should be alerted at now, and how.
+//
+// When NOTHING has ever been delivered, the rung is decided by how long the
+// incident has been open -- not by which rung was last attempted, and not by
+// the last SUCCESS, because there has not been one.
+//
+// NextDue answers "when is the next obligation" and, with LastAlertAt still
+// nil, that answer is always stage 0. Taking the stage from it too meant a
+// ladder could never climb while its first rung was failing: the default
+// critical ladder pushes ntfy at once and adds email at +2m, so an unreachable
+// ntfy server pinned every critical incident to ntfy forever and email -- named
+// on the ladder, configured, and working -- was never once attempted. That is
+// the failure the ladder exists to prevent, so it cannot be gated on the ladder
+// already having worked.
+//
+// The channels are the UNION of every rung whose time has passed, rather than
+// just the highest. A rung that drops a channel an earlier rung named is
+// expressing an order to try things in, not a decision to stop trying them,
+// and while nobody has been reached at all the widest net is the right one.
 func (p Policy) DueNow(inc *incident.Incident, now time.Time) (due bool, stage int, channels []string) {
 	at, st, ok := p.NextDue(inc)
 	if !ok || at.After(now) {
 		return false, 0, nil
 	}
+	if inc.LastAlertAt == nil {
+		st = p.highestRungDue(inc.OpenedAt, now)
+		return true, st, p.channelsUpTo(st)
+	}
 	return true, st, p.Stages[st].Channels
+}
+
+// highestRungDue is the last stage whose scheduled time has arrived.
+func (p Policy) highestRungDue(openedAt, now time.Time) int {
+	st := 0
+	for i, s := range p.Stages {
+		if !openedAt.Add(s.After).After(now) {
+			st = i
+		}
+	}
+	return st
+}
+
+// channelsUpTo collects the channels of every stage through st, in ladder
+// order and without repeating one that appears on more than one rung.
+func (p Policy) channelsUpTo(st int) []string {
+	seen := map[string]bool{}
+	var out []string
+	for i := 0; i <= st && i < len(p.Stages); i++ {
+		for _, c := range p.Stages[i].Channels {
+			if !seen[c] {
+				seen[c] = true
+				out = append(out, c)
+			}
+		}
+	}
+	return out
 }
 
 // ShouldGiveUp reports whether an unacknowledged incident has outlived the
