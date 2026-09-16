@@ -70,11 +70,33 @@ func TestConcurrentWaitersAreSpacedRatherThanReleasedTogether(t *testing.T) {
 			n, last, n-1, floor, departures)
 	}
 
-	// And they are spaced from each other, not merely spread out overall.
-	for i := 1; i < n; i++ {
-		gap := departures[i] - departures[i-1]
-		if gap < interval/2 {
-			t.Fatalf("waiters %d and %d departed %s apart, under half the %s interval: %v", i-1, i, gap, interval, departures)
+	// And each one waited for its OWN slot, not merely for the set to be
+	// spread out overall.
+	//
+	// Asserted as "waiter i departed no earlier than i intervals" rather than
+	// as a gap between adjacent departures, and the difference matters. The
+	// pacer reserves a slot under the mutex and sleeps outside it, so what it
+	// can actually promise is that nobody is RELEASED before their slot. It
+	// cannot promise the OS schedules a woken goroutine promptly -- and on a
+	// loaded CI runner it does not.
+	//
+	// The adjacent-gap version of this check failed on Windows CI with
+	// departures [0 20 40 60 80 100 141.5 141.5]: the runner stalled for 41ms,
+	// so waiter 6 woke 21ms past its slot and waiter 7 woke on time, and the
+	// two were observed departing together. Nobody departed EARLY -- the pacer
+	// was correct and the test was asserting something the pacer does not
+	// control. This form catches a burst implementation just as well (every
+	// departure would be near zero) and is immune to a stall, because a stall
+	// only ever makes a departure later.
+	for i := range departures {
+		earliest := time.Duration(i) * interval
+		// The 80% tolerance absorbs the small offset between `start` and the
+		// pacer's own first slot, plus clock granularity. It is far tighter
+		// than the interval, so a pacer that released two per slot would still
+		// fail.
+		if departures[i] < earliest*8/10 {
+			t.Fatalf("waiter %d departed after %s, before its slot at %s: %v",
+				i, departures[i], earliest, departures)
 		}
 	}
 }
