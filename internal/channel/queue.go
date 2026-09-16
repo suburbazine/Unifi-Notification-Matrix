@@ -76,6 +76,10 @@ type Queue struct {
 type job struct {
 	alert Alert
 	now   time.Time
+
+	// result, when non-nil, receives the outcome. Buffered by the sender so
+	// the worker never blocks on a caller that gave up waiting.
+	result chan<- error
 }
 
 // NewQueue starts a worker for ch. Call Close to stop it.
@@ -144,6 +148,11 @@ func (q *Queue) deliver(j job) {
 	defer cancel()
 
 	err := q.ch.Send(ctx, j.alert)
+	if j.result != nil {
+		// Buffered by the sender, so this never blocks even if the caller has
+		// already timed out and walked away.
+		j.result <- err
+	}
 	if q.onResult != nil {
 		q.onResult(Result{
 			Channel:    q.ch.Name(),
@@ -151,6 +160,52 @@ func (q *Queue) deliver(j job) {
 			Err:        err,
 			At:         j.now,
 		})
+	}
+}
+
+// SendAndWait queues an alert and waits for the outcome.
+//
+// The escalation scheduler needs to know whether the alert actually landed:
+// only a SUCCESSFUL delivery may advance LastAlertAt, because if every channel
+// failed then nobody has been told and the incident must stay due. So it
+// waits, where ingest does not.
+//
+// That distinction is the whole design. DESIGN-RULES §5 says delivery must
+// never block INGEST -- a greylisting mail server must not drag the poll cycle
+// -- and the sources are what that protects. The scheduler is a separate
+// goroutine and is allowed to wait for an answer.
+//
+// Queuing is still what serialises a channel: one send in flight per channel,
+// bounded backlog, and a stalled SMTP connection cannot delay an ntfy push
+// because they are different queues.
+func (q *Queue) SendAndWait(ctx context.Context, a Alert, now time.Time) error {
+	res := make(chan error, 1)
+
+	select {
+	case <-q.closed:
+		return errors.New("channel queue is closed")
+	default:
+	}
+	select {
+	case q.in <- job{alert: a, now: now, result: res}:
+	default:
+		q.mu.Lock()
+		q.dropped++
+		n := q.dropped
+		q.mu.Unlock()
+		return fmt.Errorf("%w (%d dropped on %s)", ErrQueueFull, n, q.ch.Name())
+	}
+
+	select {
+	case err := <-res:
+		return err
+	case <-ctx.Done():
+		// The send is still running and will still be attempted; we simply
+		// stop waiting. Reported as a failure so the incident stays due --
+		// erring toward a duplicate alert, never toward silence.
+		return fmt.Errorf("%s: gave up waiting for delivery: %w", q.ch.Name(), ctx.Err())
+	case <-q.closed:
+		return errors.New("channel queue closed while the alert was in flight")
 	}
 }
 

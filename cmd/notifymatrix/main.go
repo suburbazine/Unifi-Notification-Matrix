@@ -1,11 +1,12 @@
 // Command notifymatrix turns one-shot UniFi events into tracked incidents that
 // keep escalating until a human closes them.
 //
-// Scaffold: the incident lifecycle, the durable store, the escalation
-// scheduler, the secret store, the Protect source, the ntfy and email channels
-// and the service integration are real and tested. Config, the rule engine,
-// the ack surface and the web UI are not written, so `run` starts a daemon
-// that supervises itself correctly and has nothing yet to supervise.
+// The incident lifecycle, the durable store, the escalation scheduler, the
+// secret store, configuration, the Protect source, the ntfy and email channels
+// and the service integration are real and tested. The rule engine, the ack
+// surface and the web UI are not written -- so `run` supervises itself
+// correctly and delivers correctly, and nothing yet produces incidents for it
+// to deliver.
 package main
 
 import (
@@ -21,6 +22,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
@@ -160,7 +163,7 @@ Flags:
   --data-dir PATH   config, incident store and lock (default %s)
   --user NAME       Linux service account (default %s)
 
-Not yet implemented: config, rules, the ack surface, the web UI.
+Not yet implemented: rules, the ack surface, the web UI.
 `, version, service.DefaultDataDir(), "notifymatrix")
 }
 
@@ -191,27 +194,65 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		fmt.Fprintln(os.Stderr, "WARNING: "+service.CrashDetail(prev))
 	}
 
+	cfg, err := config.LoadOrCreate(dataDir)
+	if err != nil {
+		return err
+	}
+	// A credential pasted into the file by hand is accepted on purpose, but a
+	// key that sat readable on disk should be treated as exposed -- so say so,
+	// loudly, rather than quietly encrypting it and moving on.
+	if w := config.PlaintextWarning(cfg.PlaintextFields, config.Path(dataDir)); w != "" {
+		fmt.Fprintln(os.Stderr, w)
+		if err := config.Save(dataDir, cfg); err != nil {
+			fmt.Fprintln(os.Stderr, "         could not re-encrypt them:", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "         (now encrypted)")
+		}
+	}
+
 	db, err := store.Open(filepath.Join(dataDir, "incidents.db"))
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
-	// No channels are configured yet, so delivery refuses rather than
-	// pretending. A scheduler whose delivery silently succeeds would mark
-	// incidents as alerted that nobody was ever told about -- the exact
-	// failure DESIGN-RULES §5 exists to prevent.
-	deliver := func(_ context.Context, inc *incident.Incident, _ int, chans []string) error {
-		return fmt.Errorf("no channels configured (incident %s wanted %v)", inc.ID, chans)
+	// A delivery failure is reported as it lands: a channel that has started
+	// failing is itself something the operator needs to know, not only a field
+	// on an incident nobody is looking at.
+	delivery, err := config.BuildDelivery(cfg, func(r channel.Result) {
+		if r.Err != nil {
+			fmt.Fprintf(os.Stderr, "delivery failed on %s for incident %s: %v\n",
+				r.Channel, r.IncidentID, r.Err)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	defer delivery.Close()
+
+	built, err := cfg.BuildPolicies(delivery.Names())
+	if err != nil {
+		return err
+	}
+	policies := map[incident.Severity]escalate.Policy{}
+	for name, p := range built {
+		policies[incident.Severity(name)] = p
 	}
 
-	policies := escalate.DefaultPolicies()
-	if err := escalate.ValidateAgainstChannels(policies, nil); err != nil {
-		// Expected until config exists: every policy names channels that are
-		// not constructed yet. Reported, not fatal.
-		fmt.Fprintln(os.Stderr, "note: no channels are configured yet")
+	deliver := delivery.Deliver
+	if len(delivery.Names()) == 0 {
+		// Nothing enabled yet. Refuse rather than pretend: a scheduler whose
+		// delivery silently succeeds marks incidents as alerted that nobody
+		// was ever told about.
+		deliver = func(_ context.Context, inc *incident.Incident, _ int, chans []string) error {
+			return fmt.Errorf("no channels configured (incident %s wanted %v)", inc.ID, chans)
+		}
+		fmt.Fprintln(os.Stderr, "note: no channels are enabled, so nothing can be delivered yet")
+		fmt.Fprintf(os.Stderr, "      edit %s\n", config.Path(dataDir))
 	}
-	sched, err := escalate.NewScheduler(db, policies, deliver)
+
+	sched, err := escalate.NewScheduler(db, policies, deliver,
+		escalate.WithQuietHours(cfg.QuietHours))
 	if err != nil {
 		return err
 	}

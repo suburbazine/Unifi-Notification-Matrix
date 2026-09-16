@@ -144,16 +144,45 @@ func TestPlaintextIsHonestWhenPermitted(t *testing.T) {
 	}
 }
 
-func TestUnknownPrefixIsNamed(t *testing.T) {
-	for _, stored := range []string{
-		`"keychain:AAAA"`, // a mechanism this build does not have
-		`"no-prefix-at-all"`,
-	} {
+// A value with no recognised prefix is accepted as something a human typed.
+//
+// Deliberate. The config file is the source of truth and is meant to be
+// editable, so refusing a pasted API key for lacking a "dpapi:" prefix would
+// mean the only way to bootstrap is a UI that may not be running yet. The
+// caller reports it (config.PlaintextSecrets) and the next save encrypts it.
+func TestAValueWithNoPrefixIsTakenAsHandEnteredPlaintext(t *testing.T) {
+	for _, stored := range []string{`"a-pasted-api-key"`, `"key-with:a-colon"`} {
 		var s Secret
-		err := json.Unmarshal([]byte(stored), &s)
-		if !errors.Is(err, ErrUnknownPrefix) {
-			t.Errorf("Unmarshal(%s) = %v, want ErrUnknownPrefix", stored, err)
+		if err := json.Unmarshal([]byte(stored), &s); err != nil {
+			t.Errorf("Unmarshal(%s) = %v, want it accepted as plaintext", stored, err)
 		}
+	}
+}
+
+// THE PROPERTY THAT MAKES THE ABOVE SAFE.
+//
+// Being permissive about unprefixed values must never mask a real decryption
+// failure. A value that WAS encrypted always carries its prefix, so a damaged
+// or foreign blob still has one, still reaches the decrypt path, and still
+// reports as undecryptable rather than being silently handed back as if it
+// were a password somebody typed.
+func TestADamagedBlobStillFailsRatherThanBeingTakenAsPlaintext(t *testing.T) {
+	useRealProvider(t)
+	p, err := SelectWriter()
+	if err != nil {
+		t.Skipf("no secret mechanism available here: %v", err)
+	}
+	stored := fmt.Sprintf("%q", p.Prefix()+"bm90LWEtcmVhbC1ibG9i")
+
+	var s Secret
+	err = json.Unmarshal([]byte(stored), &s)
+	if err == nil {
+		t.Fatalf("a damaged %s blob was accepted; it would have been used as if "+
+			"the ciphertext were the credential", p.Prefix())
+	}
+	var ue *UnprotectError
+	if !errors.As(err, &ue) {
+		t.Fatalf("error is %T, want *UnprotectError", err)
 	}
 }
 

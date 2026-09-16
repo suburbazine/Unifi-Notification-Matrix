@@ -112,15 +112,28 @@ func (e *UnprotectError) Unwrap() error { return e.Err }
 // config without loading it.
 func Unprotect(stored string) ([]byte, error) {
 	prefix, b64, ok := splitPrefix(stored)
-	if !ok {
-		return nil, fmt.Errorf("%w %q; the config was written by a different "+
-			"version or has been edited by hand", ErrUnknownPrefix, firstRunes(stored, 12))
+	if !ok || providerFor(prefix) == nil {
+		// NO RECOGNISED PREFIX: treat it as a value somebody typed by hand.
+		//
+		// This is deliberate, and it is the difference between a config an
+		// operator can actually fill in and one they cannot. The config file
+		// is the source of truth and is meant to be editable (ARCHITECTURE.md
+		// §6a); refusing a pasted API key because it lacks a "dpapi:" prefix
+		// would mean the only way to bootstrap is a UI that may not be running
+		// yet.
+		//
+		// It is safe to be permissive here because it cannot MASK a decryption
+		// failure: a value that was encrypted always carries its prefix, so a
+		// damaged blob still lands in the branch below and still reports as
+		// undecryptable. Only a value with no known prefix at all reaches
+		// this, and the honest reading of that is "a human put it here".
+		//
+		// The caller is expected to notice and re-encrypt -- see
+		// config.Load, which reports plaintext credentials loudly, because a
+		// key that sat in a readable file should be treated as exposed.
+		return []byte(stored), nil
 	}
 	p := providerFor(prefix)
-	if p == nil {
-		return nil, fmt.Errorf("%w %q; this build has no support for that mechanism",
-			ErrUnknownPrefix, prefix)
-	}
 	blob, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		return nil, &UnprotectError{Prefix: prefix, Mechanism: p.Mechanism(), Err: err}

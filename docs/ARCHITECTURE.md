@@ -103,7 +103,7 @@ nothing about channels, and a channel knows nothing about UniFi.
   ·   pushover/  webhook/  voice/
   · ack/                HMAC token mint + verify, ack routes
   ✓ secret/             Secret type, the four-tier prefix chain
-  · config/             YAML, written by the web UI, source of truth
+  ✓ config/             YAML, source of truth; validation that refuses at startup
   ✓ service/            install/uninstall, recovery actions, single-instance (§9a)
   · selfcheck/          diagnostics for "it is running and nothing happens"
   · audit/              append-only record: every event, delivery, ack

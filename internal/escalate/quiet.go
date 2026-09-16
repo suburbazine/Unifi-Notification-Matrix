@@ -13,13 +13,13 @@ import (
 // That refusal is the important half of this feature — a quiet-hours control
 // that reached the top severity would be a mute button with a friendly name.
 type QuietHours struct {
-	Enabled bool
+	Enabled bool `json:"enabled"`
 
 	// Start and End are "HH:MM" in 24-hour form. A window may wrap midnight:
 	// Start "22:00", End "07:00" is the ordinary case and the one that is
 	// easiest to get wrong.
-	Start string
-	End   string
+	Start string `json:"start,omitempty"`
+	End   string `json:"end,omitempty"`
 
 	// Zone is an IANA name ("Europe/London"). Empty means the host's local
 	// time.
@@ -29,7 +29,7 @@ type QuietHours struct {
 	// watching is not. Quiet hours derived from the wrong zone are silent at
 	// the wrong times, and nobody notices until an alert they wanted did not
 	// arrive.
-	Zone string
+	Zone string `json:"zone,omitempty"`
 }
 
 var (
