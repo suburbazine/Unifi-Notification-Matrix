@@ -559,7 +559,7 @@ func (c *Channel) attempt(ctx context.Context, body []byte) (time.Duration, erro
 		// promises and Client.do implements by calling closeBody on exactly that
 		// path. A drain and Close here would read a closed body, achieve nothing,
 		// and teach the next channel a net/http failure mode that does not exist.
-		return 0, fmt.Errorf("webhook: posting to %s: %w", c.redacted(), scrubTransportError(err))
+		return 0, fmt.Errorf("webhook: posting to %s: %w", c.redacted(), channel.ScrubTransportError(err))
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBody))
@@ -617,22 +617,6 @@ type retryableError struct {
 
 func (e *retryableError) Error() string {
 	return fmt.Sprintf("webhook: %s could not accept the post: %s%s", e.endpoint, e.status, e.detail)
-}
-
-// scrubTransportError removes the URL that net/http puts in every error.
-//
-// http.Client.Do wraps failures in *url.Error, whose Error() prints the full
-// request URL, query string included. Since that URL is frequently the
-// receiver's only credential, and this error string is stored on the incident
-// and rendered in the UI, the wrapper has to go. Unwrapping keeps the cause --
-// connection refused, a TLS failure, our own redirect refusal -- and drops only
-// the part we already print redacted.
-func scrubTransportError(err error) error {
-	var ue *url.Error
-	if errors.As(err, &ue) && ue.Err != nil {
-		return ue.Err
-	}
-	return err
 }
 
 // redacted renders the endpoint as scheme, host and port. No path, no query, no

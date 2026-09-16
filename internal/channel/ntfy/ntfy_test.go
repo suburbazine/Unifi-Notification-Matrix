@@ -765,3 +765,39 @@ func TestAnUnauthorisedPublishSaysWhichWayToGo(t *testing.T) {
 		t.Errorf("advised clearing a token that was never set:\n%v", err)
 	}
 }
+
+// A DELIVERY ERROR IS PUBLISHED, so the topic must not be in it.
+//
+// The error from a failed publish is stored on the incident as
+// LastDeliveryError and served from /api/incidents, which does not require
+// signing in -- that is deliberate, so a wall display works. net/http wraps
+// transport failures in *url.Error, whose Error() prints the whole request
+// URL, and wrapping that alongside the carefully redacted one handed the topic
+// straight back. An ntfy topic is enough to read somebody's alarms and to
+// publish false ones.
+func TestATransportFailureDoesNotPublishTheTopic(t *testing.T) {
+	srv, _ := newServer(t, http.StatusOK, nil)
+	base := srv.URL
+	srv.Close() // nothing is listening now: the publish cannot connect
+
+	c, err := New(Config{ServerURL: base, Topic: "my-secret-topic"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = c.Send(context.Background(), channel.Alert{
+		IncidentID: "i1",
+		Title:      "Door forced",
+		Severity:   incident.SeverityCritical,
+	})
+	if err == nil {
+		t.Fatal("a publish to a closed server reported success")
+	}
+	if strings.Contains(err.Error(), "my-secret-topic") {
+		t.Errorf("the topic is in an error that gets published: %s", err)
+	}
+	// The cause still has to survive, or the operator is told nothing useful.
+	if !strings.Contains(err.Error(), "ntfy: publishing to") {
+		t.Errorf("the error lost its context: %s", err)
+	}
+}

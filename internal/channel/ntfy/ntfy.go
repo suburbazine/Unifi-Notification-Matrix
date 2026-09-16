@@ -242,8 +242,12 @@ func (c *Channel) attempt(ctx context.Context, u *url.URL, body []byte) (time.Du
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("ntfy: publishing to %s: %w%s", redact(u), err,
-			reachabilityNote(ctx, c.base))
+		// Scrubbed: the *url.Error net/http returns prints the full URL,
+		// topic and all, which undoes the redact() right next to it -- and
+		// this string ends up on the incident and is served from the
+		// sign-in-free /api/incidents.
+		return 0, fmt.Errorf("ntfy: publishing to %s: %w%s", redact(u),
+			channel.ScrubTransportError(err), reachabilityNote(ctx, c.base))
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBody))
