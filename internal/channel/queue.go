@@ -366,5 +366,24 @@ func (q *Queue) Test(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, q.timeout)
 	defer cancel()
-	return q.ch.Test(ctx)
+	err := q.ch.Test(ctx)
+
+	// A test that WORKS clears the failure backoff.
+	//
+	// The backoff exists because a channel that keeps failing should be asked
+	// less often, and the operator's way out of it is to fix the channel. But
+	// the test button bypassed the hold without clearing it, so the sequence
+	// that actually happens -- fix the topic, press Test, see it pass -- left
+	// real alerts held for up to another five minutes with a green tick on
+	// screen saying everything was fine. The button exists to remove exactly
+	// that kind of confusion.
+	//
+	// Only on success. A failed test is more evidence of the thing the backoff
+	// is already reacting to, and is deliberately NOT counted as another
+	// failure either: an operator pressing a diagnostic button should not push
+	// their own channel further down the ladder.
+	if err == nil {
+		q.recordOutcome(nil, time.Time{})
+	}
+	return err
 }

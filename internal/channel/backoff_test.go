@@ -134,3 +134,68 @@ func TestTheBackoffIsCapped(t *testing.T) {
 		t.Errorf("backoffFor(200) = %s, want the 5m cap", got)
 	}
 }
+
+// FIXING A CHANNEL AND PROVING IT WORKS HAS TO END THE HOLD.
+//
+// The way out of the backoff is to fix the channel, and the way an operator
+// confirms they have is the test button. But Test bypassed the hold without
+// clearing it, so the sequence that actually happens -- fix the topic, press
+// Test, watch it pass -- left real alerts held for up to another five minutes
+// behind a green tick saying everything was fine.
+func TestAPassingTestClearsTheBackoff(t *testing.T) {
+	ch := &countingChannel{name: "test"}
+	ch.fail.Store(true)
+	q := NewQueue(ch, 8, nil)
+	defer q.Close()
+
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		_ = q.SendAndWait(context.Background(), Alert{IncidentID: "i"}, now)
+	}
+	if q.Stats().BackingOffUntil.IsZero() {
+		t.Fatal("precondition: the channel should be backing off by now")
+	}
+
+	// The operator fixes it and presses Test.
+	ch.fail.Store(false)
+	if err := q.Test(context.Background()); err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+
+	if st := q.Stats(); !st.BackingOffUntil.IsZero() || st.ConsecutiveFails != 0 {
+		t.Errorf("a passing test left the channel held until %v after %d failures",
+			st.BackingOffUntil, st.ConsecutiveFails)
+	}
+
+	// And the next real alert is actually attempted.
+	before := ch.calls.Load()
+	if err := q.SendAndWait(context.Background(), Alert{IncidentID: "i"}, now); err != nil {
+		t.Errorf("the first alert after a passing test was refused: %v", err)
+	}
+	if ch.calls.Load() == before {
+		t.Error("the channel was not attempted after a passing test")
+	}
+}
+
+// A FAILING test must not push the channel further down the ladder. Pressing a
+// diagnostic button is not another delivery failure, and an operator should not
+// be able to make their own outage worse by investigating it.
+func TestAFailingTestDoesNotDeepenTheBackoff(t *testing.T) {
+	ch := &failingTestChannel{}
+	q := NewQueue(ch, 8, nil)
+	defer q.Close()
+
+	for i := 0; i < 3; i++ {
+		_ = q.Test(context.Background())
+	}
+	if st := q.Stats(); st.ConsecutiveFails != 0 || !st.BackingOffUntil.IsZero() {
+		t.Errorf("failed tests counted as delivery failures: %d fails, held until %v",
+			st.ConsecutiveFails, st.BackingOffUntil)
+	}
+}
+
+type failingTestChannel struct{}
+
+func (failingTestChannel) Name() string                      { return "test" }
+func (failingTestChannel) Send(context.Context, Alert) error { return nil }
+func (failingTestChannel) Test(context.Context) error        { return errors.New("still broken") }
