@@ -1,0 +1,282 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (must already exist)"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: 0
+
+jobs:
+  # Gate the release on the same checks CI runs. A signed broken binary is
+  # worse than an unsigned one, because the signature is what persuades
+  # somebody to run it.
+  verify:
+    name: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache: true
+      - run: go vet ./...
+      - run: go test -count=2 ./...
+
+  build:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+            ext: .exe
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache: true
+
+      - name: resolve version
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # Reproducibility is the point, not a bonus. For a source-available
+      # security tool, source nobody can check against the published binary
+      # buys very little -- so:
+      #   -trimpath      removes absolute build paths
+      #   -buildid=      removes the only remaining nondeterministic field
+      #   pinned Go      via .go-version, because the toolchain is an input
+      #   CGO_ENABLED=0  no host libc leaking in
+      # Given the same tag and the same Go version, anyone can rebuild this
+      # byte for byte and compare hashes. docs/RELEASING.md says how.
+      - name: build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          out="notifymatrix-${GOOS}-${GOARCH}${{ matrix.ext }}"
+          go build -trimpath \
+            -ldflags "-s -w -buildid= -X main.version=${{ steps.v.outputs.version }}" \
+            -o "dist/${out}" ./cmd/notifymatrix
+          sha256sum "dist/${out}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bin-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Windows Authenticode, via Azure Artifact Signing (formerly Trusted
+  # Signing). Authenticated with FEDERATED CREDENTIALS over OIDC -- there is no
+  # long-lived Azure secret in this repository. See docs/RELEASING.md for the
+  # one-time Azure-side setup.
+  sign-windows:
+    name: sign windows (Authenticode)
+    needs: build
+    runs-on: windows-latest
+    # The federated credential's subject is pinned to this environment, NOT to a
+    # tag: Entra ID federated credentials do not accept wildcards in the
+    # subject, so a tag-based subject would need a new credential for every
+    # release. An environment gives one stable subject -- and, if you enable
+    # required reviewers on it, a human approval gate in front of the signing
+    # key. See docs/RELEASING.md.
+    environment: release
+    permissions:
+      id-token: write # the OIDC token azure/login exchanges
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: bin-windows-amd64
+          path: dist
+
+      - name: azure login (OIDC, no secret)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: sign
+        uses: Azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_CERT_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # Timestamping is what makes the signature outlive the certificate. An
+      # untimestamped binary starts failing validation the day the cert
+      # expires, on machines that were happily running it yesterday.
+      - name: verify the signature and its timestamp
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature dist\notifymatrix-windows-amd64.exe
+          $sig | Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+          if ($sig.Status -ne 'Valid') { throw "Authenticode status is $($sig.Status)" }
+          if (-not $sig.TimeStamperCertificate) { throw "signature is not timestamped" }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signed-windows-amd64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: sign, attest and publish
+    needs: [build, sign-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+      id-token: write # cosign keyless + provenance attestation
+      attestations: write
+    env:
+      # The `secrets` context is NOT available in a step-level `if`, but it IS
+      # available in job-level `env`. Hoisting it here is what makes the
+      # optional GPG step actually skippable rather than silently always-on.
+      HAS_GPG: ${{ secrets.GPG_PRIVATE_KEY != '' && 'yes' || 'no' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: collect artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: staging
+
+      - name: assemble dist
+        run: |
+          mkdir -p dist
+          # The SIGNED Windows binary, not the unsigned one from build.
+          cp staging/signed-windows-amd64/* dist/
+          cp staging/bin-linux-amd64/* dist/
+          cp staging/bin-linux-arm64/* dist/
+          ls -l dist
+
+      - name: checksums
+        run: |
+          cd dist
+          sha256sum notifymatrix-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: sigstore/cosign-installer@v4.1.2
+
+      # Keyless: the signing identity is this workflow, proven by the OIDC
+      # token, and the certificate is logged to the public Rekor transparency
+      # log. Nothing to rotate, nothing to leak, and a verifier can check WHICH
+      # workflow in WHICH repository produced the binary -- which a bare
+      # detached signature cannot tell them.
+      - name: cosign sign (keyless)
+        env:
+          COSIGN_YES: "true"
+        run: |
+          cd dist
+          for f in notifymatrix-* SHA256SUMS; do
+            cosign sign-blob "$f" \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem"
+          done
+          ls -l
+
+      # Optional, and deliberately so. GPG needs a long-lived private key in
+      # repository secrets, which is a weaker posture than the keyless path
+      # above -- it exists only because distro packagers and long-time Linux
+      # users still expect a detached .asc. If no key is configured the release
+      # still ships, fully signed by cosign.
+      - name: gpg sign (optional)
+        if: env.HAS_GPG == 'yes'
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          cd dist
+          for f in notifymatrix-* SHA256SUMS; do
+            gpg --batch --yes --pinentry-mode loopback \
+                --passphrase "$GPG_PASSPHRASE" \
+                --armor --detach-sign --output "${f}.asc" "$f"
+          done
+
+      # SLSA build provenance: a signed statement of which source commit, which
+      # workflow and which runner produced these exact bytes. Verified with
+      # `gh attestation verify`.
+      - name: attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/notifymatrix-*
+
+      - name: publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          draft: true
+          generate_release_notes: true
+          files: |
+            dist/notifymatrix-*
+            dist/SHA256SUMS*
+          body: |
+            ## Verifying this release
+
+            Every binary is signed. Verification instructions, including how to
+            rebuild from source and compare hashes, are in
+            [docs/RELEASING.md](docs/RELEASING.md).
+
+            **Linux / macOS — cosign (keyless, no key to trust in advance):**
+
+            ```
+            cosign verify-blob notifymatrix-linux-amd64 \
+              --signature notifymatrix-linux-amd64.sig \
+              --certificate notifymatrix-linux-amd64.pem \
+              --certificate-identity-regexp '^https://github\.com/${{ github.repository }}/' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            ```
+
+            **Build provenance (any platform):**
+
+            ```
+            gh attestation verify notifymatrix-linux-amd64 --repo ${{ github.repository }}
+            ```
+
+            **Windows:** the `.exe` is Authenticode-signed and timestamped.
+            Right-click → Properties → Digital Signatures, or:
+
+            ```
+            Get-AuthenticodeSignature .\notifymatrix-windows-amd64.exe
+            ```
+
+            > This is **source-available** software under the
+            > [PolyForm Noncommercial License 1.0.0](LICENSE.md). Commercial use
+            > requires a licence: licensing@xtremission.com

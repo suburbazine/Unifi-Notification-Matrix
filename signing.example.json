@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy to signing.json (gitignored) for LOCAL signed builds via build.ps1. Releases are signed by .github/workflows/release.yml using federated credentials; see docs/RELEASING.md.",
+  "endpoint": "https://eus.codesigning.azure.net/",
+  "account": "<your Artifact Signing account name>",
+  "profile": "<your certificate profile name>",
+  "timestamp_url": "http://timestamp.acs.microsoft.com"
+}

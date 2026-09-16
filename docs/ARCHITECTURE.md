@@ -727,15 +727,30 @@ one config. That decision pays off here.
 - **Targets**: `windows/amd64`, `linux/amd64`, `linux/arm64`. arm64 is not
   optional; a large share of this audience runs on a Pi, a NAS, or a small
   UniFi-adjacent box.
-- **Windows signing**: Azure Trusted Signing, as already configured
-  (`eus.codesigning.azure.net`, `Xtremission-LLC`), moved from the current
-  workstation `az login` flow to **federated credentials (OIDC)** from GitHub
-  Actions so no long-lived secret sits in the repo.
+- **Windows signing**: Azure Artifact Signing (formerly Trusted Signing), moved
+  off the workstation `az login` flow to **federated credentials (OIDC)**, so no
+  long-lived Azure secret sits in the repository. The federated subject is
+  pinned to a GitHub **environment** rather than a tag, because Entra ID does
+  not accept wildcards in the subject and a tag-based subject would need a new
+  credential per release — and the environment doubles as an approval gate in
+  front of the signing key.
 - **Linux signing**: `cosign sign-blob` keyless via Actions OIDC, verifiable
-  against the Rekor transparency log, plus a detached GPG `.asc` because distro
-  packagers still expect one.
+  against the Rekor transparency log. A verifier can check *which workflow in
+  which repository* produced a binary, which a bare detached signature cannot
+  tell them. Detached GPG is **optional** and second choice: it needs a
+  long-lived private key in secrets, and exists only because distro packagers
+  expect an `.asc`.
 - **Both**: SLSA provenance via `actions/attest-build-provenance`, verifiable
   with `gh attestation verify`.
+- **Reproducible**: `-trimpath -ldflags "-s -w -buildid="` with the toolchain
+  pinned in `.go-version`. Verified: the same tag built from two different
+  working directories produces identical bytes, and differs without
+  `-trimpath`. Published source that cannot be checked against the published
+  binary loses most of the value of publishing it.
+- **The release is a draft.** Somebody looks at it before it is public.
+
+Implemented in `.github/workflows/`; the operator-facing half — how to verify a
+download, and the one-time Azure setup — is [RELEASING.md](RELEASING.md).
 - **Licence**: PolyForm Noncommercial 1.0.0. Source-available, not OSI open
   source — GitHub will label the repository "Other", which is expected rather
   than a problem to work around. The README states the restriction plainly at

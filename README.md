@@ -69,9 +69,36 @@ Builds are `CGO_ENABLED=0` by design — it produces static binaries that run
 anywhere including Alpine and Docker, and it keeps releases reproducible enough
 that you can verify a published binary matches its tag.
 
-Released binaries are signed: **Authenticode** via Azure Trusted Signing on
-Windows, **cosign** (keyless, verifiable against the Rekor transparency log)
-plus a detached GPG signature on Linux, with SLSA build provenance on both.
+Builds are reproducible: given the same tag and the Go version in
+`.go-version`, `go build -trimpath -ldflags "-s -w -buildid= -X main.version=…"`
+produces the released bytes exactly. That is the point of publishing source for
+a security tool — source nobody can check against the binary buys very little.
+
+## Verifying a download
+
+Released binaries are signed. The strongest check needs no key trusted in
+advance, and proves **which workflow in which repository** built the file:
+
+```bash
+cosign verify-blob notifymatrix-linux-amd64 \
+  --signature   notifymatrix-linux-amd64.sig \
+  --certificate notifymatrix-linux-amd64.pem \
+  --certificate-identity-regexp '^https://github\.com/suburbazine/Unifi-Notification-Matrix/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+```bash
+gh attestation verify notifymatrix-linux-amd64 --repo suburbazine/Unifi-Notification-Matrix
+```
+
+On Windows the `.exe` is Authenticode-signed and timestamped
+(`Get-AuthenticodeSignature`). Full instructions — including how to rebuild
+from source and compare hashes yourself — are in
+[docs/RELEASING.md](docs/RELEASING.md).
+
+> Do not drop `--certificate-identity-regexp`. Without an identity constraint
+> cosign verifies a signature from *anyone*, which proves nothing about who
+> built your binary.
 
 ---
 
