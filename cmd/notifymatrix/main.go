@@ -143,6 +143,30 @@ func typeableExeName() string {
 	return name
 }
 
+// channelPendingRestart reports whether name is enabled in the configuration
+// on disk but absent from the channel set this process is actually running.
+//
+// The two can disagree for exactly one reason and it is not a rare one: the
+// set is constructed once, at start, from the config as it was then. Every
+// save after that updates the file and leaves the running process alone.
+func channelPendingRestart(c *config.Config, live []string, name string) bool {
+	if c == nil {
+		return false
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, n := range live {
+		if strings.EqualFold(n, name) {
+			return false // it is running; whatever failed, it was not this
+		}
+	}
+	for _, n := range c.EnabledChannelNames() {
+		if strings.EqualFold(n, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // typedCommand renders a runnable command for whatever this executable is
 // actually called. Shares its rule with setup.Input.Command, so the checklist
 // and the control screen never disagree about what to type.
@@ -675,7 +699,30 @@ func runDaemon(ctx context.Context, dataDir string) error {
 				return nil
 			},
 			TestChannel: func(ctx context.Context, name string) error {
-				return delivery.Test(ctx, name)
+				err := delivery.Test(ctx, name)
+				if err == nil {
+					return nil
+				}
+				// "channel ntfy is not enabled" is a lie when the operator has
+				// just enabled it, saved, and pressed Test -- which is exactly
+				// the sequence that produces it. The channel set is built once
+				// at start and never rebuilt, so the config on disk says
+				// enabled while this process still knows nothing about it, and
+				// the message contradicts the screen they are looking at.
+				//
+				// Worse than the wording: the SAME stale set delivers real
+				// alarms, so this state is a channel that reads as configured
+				// and would not be told anything at 3am.
+				cfgMu.RLock()
+				c := current
+				cfgMu.RUnlock()
+				if channelPendingRestart(c, delivery.Names(), name) {
+					return fmt.Errorf("%s is enabled in the configuration, but this "+
+						"daemon started before that change and is still running without "+
+						"it -- real alarms would not reach it either. Restart to apply: %s",
+						name, typedCommand("stop")+" && "+typedCommand("start"))
+				}
+				return err
 			},
 			Checklist: func() setup.Input {
 				cfgMu.RLock()

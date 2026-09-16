@@ -5,6 +5,8 @@ import (
 	"flag"
 	"strings"
 	"testing"
+
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 )
 
 // The bug this exists for was silent, which is the worst kind. Go's flag
@@ -196,5 +198,38 @@ func TestTheSuggestedCommandNamesTheFileOnEverySeparator(t *testing.T) {
 		if got := executableName(tc.argv0); got != tc.want {
 			t.Errorf("executableName(%q) = %q, want %q", tc.argv0, got, tc.want)
 		}
+	}
+}
+
+// The channel set is built once at start and never rebuilt, so the config on
+// disk and the running process drift apart the moment anybody saves. Reported
+// as: ntfy enabled in the UI, and the audit log insisting it is "not enabled".
+// Both were telling the truth about different things.
+//
+// The wording was the visible half. The dangerous half is that the same stale
+// set delivers real alarms, so this is a channel that reads as configured and
+// would not be told anything at 3am.
+func TestAChannelEnabledSinceStartupIsRecognisedAsNeedingARestart(t *testing.T) {
+	enabled := &config.Config{Channels: config.Channels{
+		Ntfy: &config.Ntfy{Enabled: true},
+	}}
+
+	if !channelPendingRestart(enabled, nil, "ntfy") {
+		t.Error("enabled in config, absent from the running set: this is the reported bug and it was not detected")
+	}
+	if !channelPendingRestart(enabled, []string{"email"}, "NTFY") {
+		t.Error("the name comparison is case-sensitive; the UI and the config need not agree on case")
+	}
+	// Running already: whatever the test failed on, it was not staleness, and
+	// claiming otherwise would send somebody to restart a daemon for nothing.
+	if channelPendingRestart(enabled, []string{"ntfy"}, "ntfy") {
+		t.Error("a channel that IS running was reported as pending a restart")
+	}
+	// Genuinely not enabled anywhere: the original message is the correct one.
+	if channelPendingRestart(&config.Config{}, nil, "ntfy") {
+		t.Error("a channel enabled nowhere was reported as pending a restart")
+	}
+	if channelPendingRestart(nil, nil, "ntfy") {
+		t.Error("a nil config must not claim anything")
 	}
 }
