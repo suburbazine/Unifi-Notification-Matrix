@@ -86,6 +86,15 @@ h3:first-child{margin-top:4px}
 
 table{border-collapse:collapse;width:100%;font-size:13px}
 th,td{text-align:left;padding:5px 10px 5px 0;vertical-align:top}
+/* An audit detail can be an entire URL-encoded ntfy request: hundreds of
+   characters with no space anywhere to break at. Without an explicit rule the
+   cell simply runs off the page and takes the layout with it, and the audit
+   record is the one screen whose whole job is being readable after the fact. */
+td{overflow-wrap:anywhere;word-break:break-word}
+/* Audit only: its first three columns are short and fixed in shape and must
+   not be squeezed to nothing by a long fourth. Scoped, because the health
+   tables have their own shapes and would be wrecked by this. */
+table.audit td:nth-child(-n+3),table.audit th:nth-child(-n+3){white-space:nowrap;width:1%}
 th{color:var(--muted);font-weight:500;font-size:11px;letter-spacing:.07em;text-transform:uppercase}
 tr+tr td{border-top:1px solid var(--line)}
 

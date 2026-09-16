@@ -420,7 +420,7 @@ function renderSignIn(container) {
     card.appendChild(el("div", "note",
       "The daemon printed a one-time setup token to its console when it started. " +
       "It is the only way to set the first password, and it works once."));
-    var tok = el("input"); tok.type = "text"; tok.autocomplete = "off";
+    var tok = keepOutOfPasswordManagers(el("input")); tok.type = "text";
     card.appendChild(labelled("Setup token", tok));
     var pw = el("input"); pw.type = "password"; pw.autocomplete = "new-password";
     card.appendChild(labelled("New password (at least " + state.minPassword + " characters)", pw));
@@ -473,8 +473,39 @@ function refreshSettings() {
   });
 }
 
+// keepOutOfPasswordManagers marks a field that is NOT the operator's own
+// login, so a password manager does not stuff it.
+//
+// A settings page full of credentials is a page full of things that look like
+// a login form to a heuristic: an ntfy token, a console API key and a webhook
+// signing secret are all masked inputs sitting near a hostname. Filled with a
+// saved password they quietly replace a working credential with a wrong one,
+// and nothing fails until an alarm does.
+//
+// autocomplete="off" alone does not do it -- Chrome and Google Password
+// Manager deliberately ignore it on password fields, on the reasoning that
+// sites use it to be annoying. So this says the same thing four ways, one per
+// manager that documents an opt-out, and gives the field a name no heuristic
+// can match. The SIGN-IN and CHANGE-PASSWORD fields deliberately do not use
+// this: those genuinely are the operator's password and a manager should
+// offer to fill and save them.
+var noFillSeq = 0;
+function keepOutOfPasswordManagers(input) {
+  noFillSeq++;
+  // A name that is not "password", "token", "key" or anything else a filler
+  // looks for. Unique per field, so nothing can be remembered against it.
+  input.name = "f" + noFillSeq + "-" + Math.random().toString(36).slice(2, 8);
+  input.id = input.name;
+  input.setAttribute("autocomplete", "off");
+  input.setAttribute("data-lpignore", "true");   // LastPass
+  input.setAttribute("data-1p-ignore", "");      // 1Password
+  input.setAttribute("data-bwignore", "");       // Bitwarden
+  input.setAttribute("data-form-type", "other"); // Dashlane
+  return input;
+}
+
 function bind(obj, key, numeric) {
-  var i = el("input");
+  var i = keepOutOfPasswordManagers(el("input"));
   i.type = numeric ? "number" : "text";
   i.value = (obj[key] === undefined || obj[key] === null) ? "" : obj[key];
   i.addEventListener("input", function () {
@@ -483,7 +514,7 @@ function bind(obj, key, numeric) {
   return i;
 }
 function bindList(obj, key) {
-  var i = el("input");
+  var i = keepOutOfPasswordManagers(el("input"));
   i.type = "text";
   i.value = (obj[key] || []).join(", ");
   i.addEventListener("input", function () {
@@ -519,8 +550,8 @@ function secretRow(card, isSet, label, obj, key) {
   var r = el("div", "row");
   r.appendChild(badge(isSet ? label + " set" : label + " not set", isSet ? "on" : "off"));
   card.appendChild(r);
-  var i = el("input");
-  i.type = "password"; i.autocomplete = "off";
+  var i = keepOutOfPasswordManagers(el("input"));
+  i.type = "password";
   i.placeholder = "leave blank to keep what is stored";
   i.addEventListener("input", function () { obj[key] = i.value; });
   card.appendChild(labelled("Replace " + label, i));
@@ -779,6 +810,7 @@ function refreshAudit() {
     var entries = res.data.entries || [];
     if (!entries.length) { body.appendChild(el("div", "empty", "Nothing recorded yet.")); return; }
     var t = table(["When", "Kind", "Actor", "Summary"]);
+    t.className = "audit";
     entries.forEach(function (e) {
       var row = t.tBodies[0].insertRow();
       row.insertCell().textContent = stamp(e.at);
@@ -1210,7 +1242,7 @@ function filterLadder(p, live) {
 // durationField edits a Go duration string, and says what one looks like
 // rather than silently accepting "5" and meaning five nanoseconds.
 function durationField(obj, key, own) {
-  var i = el("input");
+  var i = keepOutOfPasswordManagers(el("input"));
   i.type = "text";
   i.placeholder = "30s, 5m, 2h";
   i.value = (obj[key] === undefined || obj[key] === null) ? "" : obj[key];
@@ -1376,7 +1408,7 @@ function selectInto(obj, key, choices) {
 
 // firstOf edits the first entry of a list as a plain text box.
 function firstOf(obj, key) {
-  var i = el("input");
+  var i = keepOutOfPasswordManagers(el("input"));
   i.type = "text";
   i.placeholder = "any";
   i.value = (obj[key] || [])[0] || "";
@@ -1683,8 +1715,8 @@ function outboundCard(h, idx, list, redraw) {
     clear(hp);
     Object.keys(hdrs).forEach(function (k) {
       var row = el("div", "row");
-      var kv = el("input"); kv.type = "text"; kv.value = k;
-      var vv = el("input"); vv.type = "text"; vv.value = hdrs[k];
+      var kv = keepOutOfPasswordManagers(el("input")); kv.type = "text"; kv.value = k;
+      var vv = keepOutOfPasswordManagers(el("input")); vv.type = "text"; vv.value = hdrs[k];
       kv.addEventListener("change", function () {
         var val = hdrs[k];
         delete hdrs[k];
