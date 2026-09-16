@@ -101,7 +101,7 @@ nothing about channels, and a channel knows nothing about UniFi.
   ✓   (root)            Alert, Channel interface, per-channel bounded queue
   ✓   ntfy/  email/
   ·   pushover/  webhook/  voice/
-  · ack/                HMAC token mint + verify, ack routes
+  ✓ ack/                HMAC token mint + verify, ack routes
   ✓ secret/             Secret type, the four-tier prefix chain
   ✓ config/             YAML, source of truth; validation that refuses at startup
   ✓ service/            install/uninstall, recovery actions, single-instance (§9a)

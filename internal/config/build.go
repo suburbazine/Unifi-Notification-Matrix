@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ack"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/email"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/ntfy"
@@ -20,11 +20,19 @@ import (
 type Delivery struct {
 	queues map[string]*channel.Queue
 	ackURL string
+	signer *ack.Signer
 }
 
 // BuildDelivery constructs every enabled channel and starts its queue.
 func BuildDelivery(c *Config, onResult func(channel.Result)) (*Delivery, error) {
 	d := &Delivery{queues: map[string]*channel.Queue{}, ackURL: c.Web.AckBaseURL}
+	if !c.Web.AckKey.IsZero() {
+		s, err := ack.NewSigner(c.Web.AckKey)
+		if err != nil {
+			return nil, fmt.Errorf("ack key: %w", err)
+		}
+		d.signer = s
+	}
 
 	if n := c.Channels.Ntfy; n != nil && n.Enabled {
 		ch, err := ntfy.New(ntfy.Config{
@@ -176,25 +184,19 @@ func (d *Delivery) alertFor(inc *incident.Incident, stage int) channel.Alert {
 	if inc.LastAlertAt != nil {
 		a.At = *inc.LastAlertAt
 	}
-	a.AckURL = d.AckURL(inc)
+	a.AckURL = d.AckURL(inc, "")
 	return a
 }
 
-// AckURL builds the acknowledgement link for an incident.
+// AckURL builds the signed acknowledgement link for an incident.
 //
-// Empty when no base URL is configured, which validation already refuses for
-// any config with an enabled channel -- an alert nobody can acknowledge from
-// the notification itself can only be stopped from the web UI, and nobody is
-// opening a web UI at 3am.
-//
-// TODO(ack): the token is minted by internal/ack, which is not written yet.
-// Until then this produces the incident path without one, which the ack
-// endpoint will reject -- deliberately: a link that silently acknowledged
-// without verification would be worse than a link that does not work.
-func (d *Delivery) AckURL(inc *incident.Incident) string {
-	if d.ackURL == "" {
+// Empty when there is no base URL or no key, which config validation already
+// refuses for any config with an enabled channel: an alert nobody can
+// acknowledge from the notification itself can only be stopped from a web UI,
+// and nobody is opening a web UI at 3am.
+func (d *Delivery) AckURL(inc *incident.Incident, via string) string {
+	if d.ackURL == "" || d.signer == nil {
 		return ""
 	}
-	base := strings.TrimRight(d.ackURL, "/")
-	return base + "/ack/" + url.PathEscape(inc.ID)
+	return d.signer.URL(d.ackURL, inc.ID, inc.OpenedAt, via)
 }

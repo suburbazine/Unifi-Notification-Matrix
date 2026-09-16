@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ack"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"sigs.k8s.io/yaml"
 )
@@ -133,6 +134,16 @@ func Save(dataDir string, cfg *Config) error {
 	}
 
 	cfg.Version = SchemaVersion
+	// Minted on first save rather than at install, so a config hand-written
+	// from scratch still gets one. Without a key no acknowledgement link can
+	// be signed, and every alert would repeat until the web UI stopped it.
+	if cfg.Web.AckKey.IsZero() {
+		k, err := ack.NewSecret()
+		if err != nil {
+			return err
+		}
+		cfg.Web.AckKey = k
+	}
 	cfg.Secrets.HostFingerprint = HostFingerprint()
 	if p, err := secret.SelectWriter(); err == nil {
 		cfg.Secrets.Mechanism = p.Prefix()

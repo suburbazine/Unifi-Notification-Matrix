@@ -2,10 +2,10 @@
 // keep escalating until a human closes them.
 //
 // The incident lifecycle, the durable store, the escalation scheduler, the
-// rule engine, the secret store, configuration, the Protect source, the ntfy
-// and email channels and the service integration are real and tested. The ack
-// surface and the web UI are not, so an alert currently carries an ack link
-// that nothing serves yet.
+// rule engine, the acknowledgement surface, the secret store, configuration,
+// the Protect source, the ntfy and email channels and the service integration
+// are real and tested. The web UI is not, so incidents are inspected with
+// `notifymatrix incidents` rather than in a browser.
 package main
 
 import (
@@ -13,6 +13,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -21,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ack"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
@@ -86,6 +89,7 @@ func main() {
 
 	fs := flag.NewFlagSet("notifymatrix", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "where config, the incident store and the lock live")
+	links := fs.Bool("links", false, "print acknowledgement links (they are credentials)")
 	user := fs.String("user", "", "account the Linux service runs as (default notifymatrix)")
 	fs.Usage = usage
 	if err := fs.Parse(flagArgs); err != nil {
@@ -111,10 +115,10 @@ func main() {
 		return
 	}
 
-	os.Exit(dispatch(cmd, dir, *user))
+	os.Exit(dispatch(cmd, dir, *user, *links))
 }
 
-func dispatch(cmd, dataDir, user string) int {
+func dispatch(cmd, dataDir, user string, showLinks bool) int {
 	switch cmd {
 	case "version":
 		fmt.Printf("notifymatrix %s (%s/%s, %s)\n", version, runtime.GOOS, runtime.GOARCH, runtime.Version())
@@ -133,7 +137,7 @@ func dispatch(cmd, dataDir, user string) int {
 		return selfcheck(dataDir)
 
 	case "incidents":
-		return listIncidents(dataDir)
+		return listIncidents(dataDir, showLinks)
 
 	case "install", "uninstall", "start", "stop", "status":
 		return serviceCmd(cmd, dataDir, user)
@@ -160,7 +164,7 @@ func usage() {
   notifymatrix uninstall    stop and remove the service
   notifymatrix start|stop   control the installed service
   notifymatrix status       report service state
-  notifymatrix incidents    list open incidents
+  notifymatrix incidents    list open incidents (--links for ack URLs)
   notifymatrix selfcheck    report what this machine can do
   notifymatrix version
 
@@ -168,7 +172,7 @@ Flags:
   --data-dir PATH   config, incident store and lock (default %s)
   --user NAME       Linux service account (default %s)
 
-Not yet implemented: the ack surface, the web UI.
+Not yet implemented: the web UI, the Access and Network sources.
 `, version, service.DefaultDataDir(), "notifymatrix")
 }
 
@@ -273,6 +277,77 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		escalate.WithQuietHours(cfg.QuietHours))
 	if err != nil {
 		return err
+	}
+
+	// Serve the acknowledgement endpoint.
+	//
+	// The full web UI is not built yet, but the ack surface cannot wait for
+	// it: until this is listening, every alert carries a link that goes
+	// nowhere, and "escalates until a human acknowledges" is a promise the
+	// product cannot keep.
+	if !cfg.Web.AckKey.IsZero() {
+		signer, err := ack.NewSigner(cfg.Web.AckKey)
+		if err != nil {
+			return err
+		}
+		ackHandler, err := ack.New(db, signer,
+			ack.WithAuditHook(func(inc *incident.Incident, via string) {
+				where := via
+				if where == "" {
+					where = "an unnamed channel"
+				}
+				fmt.Printf("incident %s acknowledged via %s\n", inc.ID, where)
+			}))
+		if err != nil {
+			return err
+		}
+
+		mux := http.NewServeMux()
+		mux.Handle("/ack/", ackHandler)
+
+		srv := &http.Server{
+			Addr:    cfg.Web.Listen,
+			Handler: mux,
+			// Bounded so a stalled client cannot hold a connection open
+			// indefinitely; this listens on a LAN that may include devices
+			// nobody is administering.
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		// Bind BEFORE declaring success, and fail startup if we cannot.
+		//
+		// ListenAndServe inside a goroutine reports a bind failure to stderr
+		// and leaves the daemon running, which is the worst outcome available:
+		// every alert then carries an acknowledgement link that goes nowhere
+		// -- or worse, to a different instance that happens to hold the port,
+		// where it reads as "that link is not valid". The operator taps it at
+		// 3am and has no way to stop the alert.
+		//
+		// An alarm daemon whose acknowledgement endpoint is not listening has
+		// not started. Say so.
+		ln, err := net.Listen("tcp", cfg.Web.Listen)
+		if err != nil {
+			return fmt.Errorf("cannot listen on %s for acknowledgements "+
+				"(another instance, or something else on that port?): %w",
+				cfg.Web.Listen, err)
+		}
+		go func() {
+			if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				fmt.Fprintf(os.Stderr, "the acknowledgement endpoint stopped: %v\n", err)
+			}
+		}()
+		defer func() {
+			shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdown)
+		}()
+		fmt.Printf("acknowledgement endpoint on http://%s/ack/\n", cfg.Web.Listen)
+		if cfg.Web.AckBaseURL == "" {
+			fmt.Fprintln(os.Stderr, "note: web.ack_base_url is unset, so alerts will "+
+				"carry no acknowledgement link")
+		}
 	}
 
 	fmt.Printf("notifymatrix %s running; data dir %s\n", version, dataDir)
@@ -405,7 +480,7 @@ WARNING: this service will NOT restart after a crash. Reinstall to fix it:
 // Opens the store READ-ONLY-ish and does not take the single-instance lock, so
 // it works while the daemon is running -- which is when somebody actually
 // wants to ask.
-func listIncidents(dataDir string) int {
+func listIncidents(dataDir string, links bool) int {
 	db, err := store.Open(filepath.Join(dataDir, "incidents.db"))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -417,6 +492,15 @@ func listIncidents(dataDir string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
+	}
+
+	var signer *ack.Signer
+	cfg, cfgErr := config.Load(dataDir)
+	if cfgErr == nil && !cfg.Web.AckKey.IsZero() {
+		signer, _ = ack.NewSigner(cfg.Web.AckKey)
+	}
+	if links && signer == nil {
+		fmt.Fprintln(os.Stderr, "note: no acknowledgement key is configured, so no links can be printed")
 	}
 	if len(active) == 0 {
 		fmt.Println("no open incidents")
@@ -433,6 +517,16 @@ func listIncidents(dataDir string) int {
 			fmt.Printf("\n           LAST DELIVERY FAILED: %s", inc.LastDeliveryError)
 		}
 		fmt.Println()
+		// Printed only on request. An acknowledgement link IS a credential --
+		// anyone holding it can silence that alarm -- so it does not appear in
+		// a listing somebody might paste into a support ticket.
+		if links && signer != nil {
+			base := cfg.Web.AckBaseURL
+			if base == "" {
+				base = "http://" + cfg.Web.Listen
+			}
+			fmt.Printf("           %s\n", signer.URL(base, inc.ID, inc.OpenedAt, "cli"))
+		}
 	}
 	return 0
 }

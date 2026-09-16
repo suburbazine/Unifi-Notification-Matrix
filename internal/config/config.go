@@ -163,6 +163,14 @@ type Web struct {
 	// (ARCHITECTURE.md §8a).
 	Listen string `json:"listen,omitempty"`
 
+	// AckKey signs acknowledgement links. Generated on first save; never
+	// entered by hand.
+	//
+	// Rotating it invalidates every link already sent, which for alerts still
+	// repeating means the only way left to acknowledge them is the web UI.
+	// That is a real cost, so it is not done automatically.
+	AckKey secret.Secret `json:"ack_key,omitempty"`
+
 	// AckBaseURL is the externally reachable base for acknowledgement links.
 	//
 	// Required once a channel embeds ack links, and it is the one setting
