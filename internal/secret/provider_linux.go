@@ -59,14 +59,20 @@ const execTimeout = 10 * time.Second
 
 // sdCredsProvider shells out to systemd-creds. No cgo, no Go binding, no D-Bus.
 //
-// --with-key=auto is a genuine structural analogue of DPAPI machine scope:
-// where a TPM exists it silently upgrades to host+tpm2 (stronger than anything
-// Windows offers); where it does not, host-key-only matches DPAPI machine
-// scope exactly, including its weakness -- both fall to a full disk image.
+// The key mode is chosen by probe() and is never "auto" -- see there for why.
+// What each mode is worth:
 //
-// --tpm2-pcrs defaults to EMPTY, which is what makes this usable unattended:
-// credentials survive reboots and firmware or kernel updates with no re-seal,
-// no prompt and no PIN.
+//	host+tpm2  strongest available; needs root AND a TPM
+//	host       matches DPAPI machine scope exactly, including its weakness:
+//	           both fall to a full disk image (credential.secret here, the
+//	           SYSTEM+SECURITY hives there). Needs root.
+//	tpm2       the key is derived from the TPM and never stored on disk, so a
+//	           stolen disk yields nothing. Needs only /dev/tpmrm0, which is the
+//	           mode an unprivileged service can actually reach.
+//
+// --tpm2-pcrs defaults to EMPTY, which is what makes any of this usable
+// unattended: credentials survive reboots and firmware or kernel updates with
+// no re-seal, no prompt and no PIN.
 type sdCredsProvider struct{}
 
 func (sdCredsProvider) Prefix() string     { return PrefixSDCreds }
@@ -83,17 +89,18 @@ const minSystemdVersion = 250
 // The probe spawns up to three helper processes, so its result is cached for
 // the life of the process. Rescan clears it.
 var (
-	sdMu     sync.Mutex
-	sdDone   bool
-	sdOK     bool
-	sdReason string
+	sdMu      sync.Mutex
+	sdDone    bool
+	sdOK      bool
+	sdReason  string
+	sdKeyMode string // "host+tpm2", "host" or "tpm2" -- never "auto"
 )
 
 func (p sdCredsProvider) Available() (bool, string) {
 	sdMu.Lock()
 	defer sdMu.Unlock()
 	if !sdDone {
-		sdOK, sdReason = p.probe()
+		sdOK, sdReason, sdKeyMode = p.probe()
 		sdDone = true
 	}
 	return sdOK, sdReason
@@ -105,9 +112,17 @@ func (sdCredsProvider) rescan() {
 	sdDone = false
 }
 
-func (sdCredsProvider) probe() (bool, string) {
+// keyMode reports the --with-key= value this machine can actually use.
+func (p sdCredsProvider) keyMode() string {
+	p.Available()
+	sdMu.Lock()
+	defer sdMu.Unlock()
+	return sdKeyMode
+}
+
+func (sdCredsProvider) probe() (ok bool, reason, keyMode string) {
 	if _, err := exec.LookPath("systemd-creds"); err != nil {
-		return false, "systemd-creds is not on PATH (needs systemd >= 250)"
+		return false, "systemd-creds is not on PATH (needs systemd >= 250)", ""
 	}
 
 	// THE CONTAINER TRAP.
@@ -124,26 +139,48 @@ func (sdCredsProvider) probe() (bool, string) {
 	// entire reason this probe exists.
 	if inContainer() {
 		return false, "running in a container: systemd-creds would bind to an " +
-			"ephemeral host key and silently lose every secret on restart"
+			"ephemeral host key and silently lose every secret on restart", ""
 	}
 
 	v, err := systemdVersion()
 	if err != nil {
-		return false, "could not determine the systemd version: " + err.Error()
+		return false, "could not determine the systemd version: " + err.Error(), ""
 	}
 	if v < minSystemdVersion {
 		return false, fmt.Sprintf("systemd %d is too old for systemd-creds (needs >= %d)",
-			v, minSystemdVersion)
+			v, minSystemdVersion), ""
 	}
 
-	// The host key is root-readable only. If we cannot read it and there is no
-	// TPM to fall back on, encryption will fail at write time -- so report it
-	// now, while a lower tier can still be chosen.
-	if !canReadHostKey() && !hasTPM() {
-		return false, "cannot read /var/lib/systemd/credential.secret (needs root) " +
-			"and no TPM is present"
+	// Choose the key mode EXPLICITLY rather than passing --with-key=auto.
+	//
+	// auto tries TPM2 and then falls back to the host key, and the host key
+	// lives in /var/lib/systemd/credential.secret, which is "only accessible
+	// to the root user". This service runs as User=notifymatrix, so that
+	// fallback is not available to it -- and relying on auto would make the
+	// outcome depend on a fallback order we cannot satisfy, failing at write
+	// time instead of at probe time.
+	//
+	// Deciding here means the tier below can be chosen while there is still
+	// something to choose.
+	host := canReadHostKey()
+	tpm := tpmUsable()
+	switch {
+	case host && tpm:
+		return true, "", "host+tpm2"
+	case host:
+		return true, "", "host"
+	case tpm:
+		// The ordinary case for an unprivileged service on a machine with a
+		// TPM: no host key, but SupplementaryGroups=tss grants /dev/tpmrm0.
+		// The key is derived from the TPM and never stored on disk, so this
+		// is machine-bound in the strongest sense available here.
+		return true, "", "tpm2"
+	default:
+		return false, "no usable key: /var/lib/systemd/credential.secret needs root " +
+			"(this service runs unprivileged) and the TPM is absent or not " +
+			"readable -- add SupplementaryGroups=tss to the unit if this " +
+			"machine has a TPM", ""
 	}
-	return true, ""
 }
 
 func inContainer() bool {
@@ -190,17 +227,29 @@ func canReadHostKey() bool {
 	return true
 }
 
-func hasTPM() bool {
+// tpmUsable opens the TPM rather than stat-ing it.
+//
+// Presence is not access. /dev/tpmrm0 is typically root:tss mode 0660, so an
+// unprivileged service sees the device exist and still cannot use it unless
+// the unit grants SupplementaryGroups=tss. Stat would report a TPM tier that
+// fails on first write; opening it answers the question actually being asked.
+func tpmUsable() bool {
 	for _, p := range []string{"/dev/tpmrm0", "/dev/tpm0"} {
-		if _, err := os.Stat(p); err == nil {
+		f, err := os.OpenFile(p, os.O_RDWR, 0)
+		if err == nil {
+			_ = f.Close()
 			return true
 		}
 	}
 	return false
 }
 
-func (sdCredsProvider) Protect(plaintext []byte) ([]byte, error) {
-	return runCreds("encrypt", plaintext, "--with-key=auto")
+func (p sdCredsProvider) Protect(plaintext []byte) ([]byte, error) {
+	mode := p.keyMode()
+	if mode == "" {
+		return nil, errors.New("systemd-creds has no usable key on this machine")
+	}
+	return runCreds("encrypt", plaintext, "--with-key="+mode)
 }
 
 func (sdCredsProvider) Unprotect(blob []byte) ([]byte, error) {
@@ -253,8 +302,8 @@ func (tpm2Provider) Mechanism() string  { return "TPM2 sealed (direct)" }
 func (tpm2Provider) MachineBound() bool { return true }
 
 func (tpm2Provider) Available() (bool, string) {
-	if !hasTPM() {
-		return false, "no TPM device present"
+	if !tpmUsable() {
+		return false, "no usable TPM device (absent, or the unit needs SupplementaryGroups=tss)"
 	}
 	return false, "not yet implemented in this build"
 }

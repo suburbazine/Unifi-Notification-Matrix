@@ -287,9 +287,26 @@ user. It is the wrong one for a daemon, and the difference is easy to miss
 because the API is identical in both cases — it simply never returns.
 
 **Primary: `systemd-creds`, shelled out** — no cgo, no Go binding, no D-Bus.
-`--with-key=auto --name=<n>`, stored base64 behind an `sdcreds:` prefix exactly
-parallel to `dpapi:`. Honour `$CREDENTIALS_DIRECTORY` on the read path when the
-operator has wired `LoadCredentialEncrypted=`.
+Stored base64 behind an `sdcreds:` prefix exactly parallel to `dpapi:`.
+
+**The key mode is chosen explicitly and is never `auto`.** `auto` tries TPM2 and
+then falls back to the host key — and the host key lives in
+`/var/lib/systemd/credential.secret`, which is *"only accessible to the root
+user"*. Since the service runs as `notifymatrix` (§9a), that fallback is not
+available to it, so `auto` would make the outcome depend on a path we cannot
+take and fail at *write* time rather than at probe time. The probe decides
+while a lower tier can still be chosen:
+
+| Mode | Needs | Worth |
+|---|---|---|
+| `host+tpm2` | root **and** a TPM | strongest available |
+| `host` | root | matches DPAPI machine scope exactly, including its weakness — both fall to a full disk image |
+| `tpm2` | `/dev/tpmrm0` only | key derived from the TPM, never on disk, so a stolen disk yields nothing. **The mode an unprivileged service can actually reach** |
+
+Which means the unit needs `SupplementaryGroups=tss` on any machine with a TPM,
+and the probe **opens** the device rather than stat-ing it: `/dev/tpmrm0` is
+typically `root:tss` mode 0660, so presence is not access, and stat would
+report a tier that fails on first write.
 
 It is the right primary because it is the only option that is simultaneously
 OS-native (already present on Debian 12, RHEL 9, Ubuntu 24.04 — zero install
@@ -638,17 +655,41 @@ the executable, so two installations with separate configs remain legal.
   must be able to get from "downloaded a file" to "it is running and will keep
   running" without being told to open a terminal.
 
-### One decision this forces
+### The account: `User=notifymatrix`, decided
 
-**Which account the Linux service runs as** — ARCHITECTURE.md §11 item 4 — stops
-being deferrable here, because the unit file has to say. Running as root makes
-secret tier 1 work directly; running as `User=notifymatrix` needs either a root
-helper for the write path or a fall to tier 2, with reads coming from
-`LoadCredentialEncrypted=`.
+Least privilege, which is the idiomatic systemd answer and matches the
+tighter-than-DPAPI posture already recorded in §6. It has one real consequence
+and it is worth stating plainly rather than discovering later.
+
+**The daemon can read a host-key credential but can never write one.** The host
+key is root-only, so an unprivileged process cannot encrypt against it. This
+splits credential handling into two paths that are complementary rather than
+redundant:
+
+| Path | Who writes it | Binding | Rotatable from the UI |
+|---|---|---|---|
+| `LoadCredentialEncrypted=` | an administrator, once, with privilege | `host+tpm2` — the strongest on the machine | **No** — rerun `systemd-creds encrypt` |
+| Provider chain (§6) | the daemon, from the web UI | `tpm2`, else key file | Yes |
+
+systemd decrypts the first as **root at unit start**, before dropping
+privileges, and places the plaintext in a directory owned by the service user.
+So a credential provisioned that way gets a binding the consuming process could
+never have produced for itself.
+
+**The provisioned path wins when both are present.** An administrator who went
+to the trouble of seeding a credential has stated an intent, and silently
+preferring one the UI happened to write would override it. Diagnostics must say
+which path a secret came from, because "my change in the UI did nothing" is
+otherwise baffling.
+
+The cost is honest: on a machine with **no TPM**, an unprivileged daemon
+storing a key from the web UI falls to the key-file tier, which is not
+machine-bound. The alternatives were running as root, or refusing to accept
+keys from the UI at all. Neither is better.
 
 Windows has no equivalent problem: DPAPI **machine** scope (§6) was chosen
-precisely so that the `LocalSystem` service and the operator's browser session
-share one config. That decision pays off here.
+precisely so the `LocalSystem` service and the operator's browser session share
+one config. That decision pays off here.
 
 - **`CGO_ENABLED=0`, always.** Load-bearing three times over: it produces static
   Linux binaries that run anywhere including Alpine and Docker, it makes builds
@@ -695,10 +736,9 @@ see §6, §7, §8, §8a and [SOURCES.md](SOURCES.md). What remains:
    action-availability table says Webhook is Network & Protect only; community
    reports describe an Access-side Delivery URL. A direct contradiction in the
    sources. Needs one look at a live console.
-4. **Does the Linux service run as root?** §6 — decides whether secret tier 1
-   needs a root helper. **No longer deferrable**: §9a means the systemd unit
-   file has to name an account, and changing it later costs a migration of
-   every stored secret.
+4. ~~Which account the Linux service runs as.~~ **Decided**: `User=notifymatrix`
+   with `LoadCredentialEncrypted=` for administrator-provisioned secrets and
+   the provider chain for UI-managed ones. See §9a.
 5. **Is power loss a Protect trigger, or only a Network one?** Ubiquiti
    documents Power (PoE issues, power loss) under *Network* triggers. If it is
    Network-only, that is a second console app to configure and a second webhook
