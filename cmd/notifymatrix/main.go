@@ -2,11 +2,10 @@
 // keep escalating until a human closes them.
 //
 // The incident lifecycle, the durable store, the escalation scheduler, the
-// secret store, configuration, the Protect source, the ntfy and email channels
-// and the service integration are real and tested. The rule engine, the ack
-// surface and the web UI are not written -- so `run` supervises itself
-// correctly and delivers correctly, and nothing yet produces incidents for it
-// to deliver.
+// rule engine, the secret store, configuration, the Protect source, the ntfy
+// and email channels and the service integration are real and tested. The ack
+// surface and the web UI are not, so an alert currently carries an ack link
+// that nothing serves yet.
 package main
 
 import (
@@ -25,7 +24,9 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/rule"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/service"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/store"
@@ -131,6 +132,9 @@ func dispatch(cmd, dataDir, user string) int {
 	case "selfcheck":
 		return selfcheck(dataDir)
 
+	case "incidents":
+		return listIncidents(dataDir)
+
 	case "install", "uninstall", "start", "stop", "status":
 		return serviceCmd(cmd, dataDir, user)
 
@@ -156,6 +160,7 @@ func usage() {
   notifymatrix uninstall    stop and remove the service
   notifymatrix start|stop   control the installed service
   notifymatrix status       report service state
+  notifymatrix incidents    list open incidents
   notifymatrix selfcheck    report what this machine can do
   notifymatrix version
 
@@ -163,7 +168,7 @@ Flags:
   --data-dir PATH   config, incident store and lock (default %s)
   --user NAME       Linux service account (default %s)
 
-Not yet implemented: rules, the ack surface, the web UI.
+Not yet implemented: the ack surface, the web UI.
 `, version, service.DefaultDataDir(), "notifymatrix")
 }
 
@@ -182,16 +187,6 @@ func runDaemon(ctx context.Context, dataDir string) error {
 	marker, prev, err := service.Begin(dataDir, version, started)
 	if err != nil {
 		return err
-	}
-
-	if prev != nil {
-		// TODO(incident-pipeline): raise this through escalate rather than
-		// only printing it. ARCHITECTURE.md §9a requires a crash to become an
-		// incident; until the rule engine exists there is nothing to raise it
-		// through, and printing it is the honest interim -- the marker is
-		// already doing the part that cannot be retrofitted, which is
-		// noticing.
-		fmt.Fprintln(os.Stderr, "WARNING: "+service.CrashDetail(prev))
 	}
 
 	cfg, err := config.LoadOrCreate(dataDir)
@@ -249,6 +244,29 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		}
 		fmt.Fprintln(os.Stderr, "note: no channels are enabled, so nothing can be delivered yet")
 		fmt.Fprintf(os.Stderr, "      edit %s\n", config.Path(dataDir))
+	}
+
+	engine, err := rule.New(db, cfg.Rules)
+	if err != nil {
+		return err
+	}
+
+	// ARCHITECTURE.md §9a: a crash is itself an incident. Raised through the
+	// ordinary machinery so it escalates like anything else -- without this a
+	// crash loop is invisible, because the service restarts, the UI looks
+	// healthy, and the only evidence is a gap in the history nobody reads.
+	//
+	// RaiseInternal deliberately bypasses the rule set: an operator ignore
+	// aimed at a noisy camera must not be able to silence the product
+	// reporting its own failure.
+	if prev != nil {
+		fmt.Fprintln(os.Stderr, "WARNING: "+service.CrashDetail(prev))
+		if _, err := engine.RaiseInternal(ctx, event.ConditionUncleanShutdown,
+			incident.SeverityHigh,
+			"NotifyMatrix did not shut down cleanly",
+			service.CrashDetail(prev)); err != nil {
+			fmt.Fprintln(os.Stderr, "         could not raise it as an incident:", err)
+		}
 	}
 
 	sched, err := escalate.NewScheduler(db, policies, deliver,
@@ -379,6 +397,43 @@ WARNING: this service will NOT restart after a crash. Reinstall to fix it:
 
 	fmt.Printf("\nData directory: %s\n", dataDir)
 	fmt.Println("Run `notifymatrix selfcheck` to see what this machine can do.")
+	return 0
+}
+
+// listIncidents answers "what is open right now?" without a web UI.
+//
+// Opens the store READ-ONLY-ish and does not take the single-instance lock, so
+// it works while the daemon is running -- which is when somebody actually
+// wants to ask.
+func listIncidents(dataDir string) int {
+	db, err := store.Open(filepath.Join(dataDir, "incidents.db"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	defer db.Close()
+
+	active, err := db.Active(context.Background())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	if len(active) == 0 {
+		fmt.Println("no open incidents")
+		return 0
+	}
+	for _, inc := range active {
+		fmt.Printf("%-10s %-8s %-12s %s\n",
+			inc.ID[:min(10, len(inc.ID))], inc.Severity, inc.State(), inc.Title)
+		fmt.Printf("           opened %s", inc.OpenedAt.UTC().Format(time.RFC3339))
+		if inc.AlertCount > 0 {
+			fmt.Printf(", alerted %d time(s)", inc.AlertCount)
+		}
+		if inc.LastDeliveryError != "" {
+			fmt.Printf("\n           LAST DELIVERY FAILED: %s", inc.LastDeliveryError)
+		}
+		fmt.Println()
+	}
 	return 0
 }
 

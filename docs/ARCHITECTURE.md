@@ -84,7 +84,7 @@ nothing about channels, and a channel knows nothing about UniFi.
 `✓` exists and is tested; `·` is not written yet.
 
 ```
-✓ cmd/notifymatrix/     run, install/uninstall/start/stop/status, selfcheck
+✓ cmd/notifymatrix/     run, install/…/status, incidents, selfcheck
   internal/
   ✓ unifi/              shared per-console pacing, backoff, TLS + cert pinning
     source/
@@ -93,7 +93,7 @@ nothing about channels, and a channel knows nothing about UniFi.
   ·   network/          Network ingest: poll + Alarm Manager webhook
   ·   inbound/          generic webhook receiver (Alarm Manager, other apps)
   ✓ event/              Event, Entity, the shared condition vocabulary
-  · rule/               matching, severity mapping, dedup-key assignment
+  ✓ rule/               matching, severity mapping, event → incident
   ✓ incident/           lifecycle (state derived, not stored) + Store interface
   ✓ store/              SQLite implementation of incident.Store
   ✓ escalate/           policies, the scheduler, re-alert timing

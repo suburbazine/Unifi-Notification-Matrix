@@ -52,6 +52,13 @@ func (c Config) Validate() error {
 		p = append(p, err.Error())
 	}
 
+	// A rule set that cannot be expressed is refused at startup like anything
+	// else here -- a blanket ignore would leave the service running, looking
+	// healthy, and monitoring nothing.
+	if err := c.Rules.Validate(); err != nil {
+		p = append(p, err.Error())
+	}
+
 	p = append(p, c.validatePolicies()...)
 
 	if len(p) > 0 {

@@ -13,6 +13,15 @@ var ErrNotFound = errors.New("incident not found")
 // the write was refused rather than applied on top of somebody else's change.
 var ErrConflict = errors.New("incident changed concurrently")
 
+// ErrActiveExists means a non-terminal incident already exists for that dedup
+// key, so this write was refused.
+//
+// Part of the Store CONTRACT rather than of any one implementation: the rule
+// engine has to distinguish "I lost a race, fold into the winner" from a real
+// failure, and a caller that had to import a specific store package -- or
+// match on an error string -- would be coupled to the wrong thing.
+var ErrActiveExists = errors.New("an active incident already exists for this dedup key")
+
 // Store is the durable home of incidents.
 //
 // This interface exists because durability is not negotiable here: the store
@@ -61,6 +70,16 @@ type Store interface {
 	// rather than trusting callers, because two goroutines ingesting the same
 	// flapping camera will otherwise both find nothing and both create one.
 	OpenByDedupKey(ctx context.Context, key string) (*Incident, error)
+
+	// LatestByDedupKey returns the most recently updated incident for this key,
+	// TERMINAL ONES INCLUDED, or ErrNotFound.
+	//
+	// This exists for recurrence. A condition that cleared and came back is a
+	// NEW incident linked to its predecessor, never a revival -- reviving would
+	// carry an old acknowledgement onto an event the acknowledger never saw.
+	// Building that link needs the closed incident, which OpenByDedupKey
+	// deliberately will not return.
+	LatestByDedupKey(ctx context.Context, key string) (*Incident, error)
 
 	// Active returns every non-terminal incident. Used by the scheduler to
 	// rebuild its schedule at start, and by the UI for the live board.

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/rule"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 )
 
@@ -37,6 +38,10 @@ type Config struct {
 	// Policies overrides the shipped defaults, keyed by severity. Absent means
 	// escalate.DefaultPolicies().
 	Policies map[string]Policy `json:"policies,omitempty"`
+
+	// Rules adjust severity and silence noise. Ordered: last match wins for
+	// severity, and an ignore by any rule wins outright.
+	Rules rule.Set `json:"rules,omitempty"`
 
 	QuietHours escalate.QuietHours `json:"quiet_hours,omitempty"`
 	Web        Web                 `json:"web,omitempty"`

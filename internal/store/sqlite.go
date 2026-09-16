@@ -30,7 +30,9 @@ import (
 // ingests, not a bug: the flapping camera opened its incident on the first
 // one. The caller re-reads with OpenByDedupKey and updates that incident
 // instead of creating a second.
-var ErrActiveExists = errors.New("an active incident already exists for this dedup key")
+// ErrActiveExists is an alias for the contract-level sentinel, kept so this
+// package reads naturally; errors.Is matches either spelling.
+var ErrActiveExists = incident.ErrActiveExists
 
 // SQLite extended result codes we act on. Declared here rather than imported
 // from modernc.org/sqlite/lib so that the dependency surface stays at the
@@ -409,6 +411,23 @@ func (s *SQLite) OpenByDedupKey(ctx context.Context, key string) (*incident.Inci
 	}
 	if err != nil {
 		return nil, fmt.Errorf("store: open incident for %s: %w", key, err)
+	}
+	return inc, nil
+}
+
+// LatestByDedupKey returns the most recently updated incident for a key,
+// TERMINAL ONES INCLUDED. Used to link a recurrence to its predecessor, which
+// OpenByDedupKey deliberately cannot do because it only returns live ones.
+func (s *SQLite) LatestByDedupKey(ctx context.Context, key string) (*incident.Incident, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+incidentColumns+` FROM incidents WHERE dedup_key = ?
+		 ORDER BY updated_at DESC, id DESC LIMIT 1`, key)
+	inc, err := scanIncident(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("store: latest %s: %w", key, incident.ErrNotFound)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: latest %s: %w", key, err)
 	}
 	return inc, nil
 }

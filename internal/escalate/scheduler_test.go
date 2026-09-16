@@ -122,6 +122,24 @@ func (f *fakeStore) OpenByDedupKey(_ context.Context, key string) (*incident.Inc
 	return nil, incident.ErrNotFound
 }
 
+func (f *fakeStore) LatestByDedupKey(_ context.Context, key string) (*incident.Incident, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var best *incident.Incident
+	for _, inc := range f.byID {
+		if inc.DedupKey != key {
+			continue
+		}
+		if best == nil || inc.UpdatedAt.After(best.UpdatedAt) {
+			best = clone(&inc)
+		}
+	}
+	if best == nil {
+		return nil, incident.ErrNotFound
+	}
+	return best, nil
+}
+
 func (f *fakeStore) Active(_ context.Context) ([]*incident.Incident, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
