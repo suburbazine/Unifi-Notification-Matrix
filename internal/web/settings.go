@@ -30,6 +30,7 @@ import (
 type settingsView struct {
 	Consoles   []consoleView            `json:"consoles"`
 	Channels   channelsView             `json:"channels"`
+	Hooks      []hookView               `json:"hooks"`
 	Policies   map[string]config.Policy `json:"policies,omitempty"`
 	Rules      rule.Set                 `json:"rules"`
 	QuietHours escalate.QuietHours      `json:"quiet_hours"`
@@ -44,6 +45,15 @@ type settingsView struct {
 	// only. A key that sat in a readable file should be treated as exposed,
 	// and the UI says so loudly.
 	PlaintextFields []string `json:"plaintext_fields,omitempty"`
+
+	// HookConditions is what an inbound hook may be told it means.
+	//
+	// Served rather than written into the page, so the dropdown cannot drift
+	// from the list the validator enforces. A condition becomes part of a
+	// stored dedup key, so an unrecognised one is not a cosmetic mistake: the
+	// same alarm would never merge with itself and would nag separately for
+	// ever.
+	HookConditions []string `json:"hook_conditions,omitempty"`
 }
 
 type consoleView struct {
@@ -105,6 +115,24 @@ type emailView struct {
 	LogoPath    string   `json:"logo_path,omitempty"`
 }
 
+// hookView is one inbound webhook, WITHOUT its credentials.
+//
+// The URL carries the token and the header carries the bearer, and both are
+// shown on the setup checklist, gated behind a session. They are deliberately
+// not repeated here: a credential with two ways out has two ways to leak, and
+// the checklist is the surface already designed and tested for it. This one
+// manages what a hook MEANS.
+type hookView struct {
+	Name      string `json:"name"`
+	Product   string `json:"product,omitempty"`
+	Condition string `json:"condition,omitempty"`
+	Severity  string `json:"severity,omitempty"`
+	Entity    string `json:"entity,omitempty"`
+
+	TokenSet  bool `json:"token_set"`
+	BearerSet bool `json:"bearer_set"`
+}
+
 type webView struct {
 	Listen     string `json:"listen"`
 	AckBaseURL string `json:"ack_base_url,omitempty"`
@@ -118,6 +146,11 @@ type settingsUpdate struct {
 	Consoles []consoleUpdate `json:"consoles"`
 	Channels channelsUpdate  `json:"channels"`
 	Rules    rule.Set        `json:"rules"`
+
+	// Hooks are the inbound webhook endpoints. A pointer, so a client that
+	// does not mention them leaves them alone rather than deleting every
+	// Alarm Manager endpoint the site depends on.
+	Hooks *[]hookUpdate `json:"hooks"`
 
 	// Policies are the escalation ladders, keyed by severity.
 	//
@@ -188,6 +221,23 @@ type emailUpdate struct {
 	LogoPath    string   `json:"logo_path"`
 }
 
+type hookUpdate struct {
+	Name      string `json:"name"`
+	Product   string `json:"product"`
+	Condition string `json:"condition"`
+	Severity  string `json:"severity"`
+	Entity    string `json:"entity"`
+
+	// Regenerate mints a new token and bearer for this hook.
+	//
+	// It BREAKS the Alarm Manager rule pointing at the old URL, immediately and
+	// silently -- the console keeps posting and this end keeps refusing. That
+	// is the right behaviour for a credential believed to be exposed, and it
+	// is why it is a deliberate per-hook action rather than something a save
+	// does on its own.
+	Regenerate bool `json:"regenerate"`
+}
+
 type webUpdate struct {
 	Listen     string `json:"listen"`
 	AckBaseURL string `json:"ack_base_url"`
@@ -214,6 +264,17 @@ func viewSettings(c *config.Config) settingsView {
 			AckListen:  c.Web.AckListen,
 			AckKeySet:  !c.Web.AckKey.IsZero(),
 		},
+	}
+	v.HookConditions = config.KnownConditions
+	for _, h := range c.Hooks {
+		v.Hooks = append(v.Hooks, hookView{
+			Name: h.Name, Product: h.Product, Condition: h.Condition,
+			Severity: h.Severity, Entity: h.Entity,
+			TokenSet: !h.Token.IsZero(), BearerSet: !h.Bearer.IsZero(),
+		})
+	}
+	if v.Hooks == nil {
+		v.Hooks = []hookView{}
 	}
 	if v.Rules == nil {
 		v.Rules = rule.Set{}
@@ -456,6 +517,40 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 	next.Rules = upd.Rules
 	next.QuietHours = upd.QuietHours
 
+	if upd.Hooks != nil {
+		// Credentials are carried across by NAME, because that is the only
+		// stable handle the browser has -- it is never sent the token, so it
+		// cannot send one back. Renaming a hook therefore mints new
+		// credentials and breaks its Alarm Manager rule, which is stated in
+		// the interface rather than discovered at 3am.
+		byName := map[string]config.Hook{}
+		for _, h := range cur.Hooks {
+			byName[h.Name] = h
+		}
+		next.Hooks = nil
+		for _, in := range *upd.Hooks {
+			name := strings.TrimSpace(in.Name)
+			prev := byName[name]
+			h := config.Hook{
+				Name:      name,
+				Product:   strings.TrimSpace(in.Product),
+				Condition: strings.TrimSpace(in.Condition),
+				Severity:  strings.TrimSpace(in.Severity),
+				Entity:    strings.TrimSpace(in.Entity),
+				Token:     prev.Token,
+				Bearer:    prev.Bearer,
+			}
+			if in.Regenerate {
+				// Cleared rather than minted here: config.Save mints what is
+				// missing, so there is one place that decides how long a hook
+				// credential is and what it is made of.
+				h.Token, h.Bearer = "", ""
+				touched = append(touched, "hook "+name+" credentials")
+			}
+			next.Hooks = append(next.Hooks, h)
+		}
+	}
+
 	if upd.Policies != nil {
 		// An empty map means "use the shipped defaults for everything", which
 		// is a real thing to want and is how the config starts out. Stored as
@@ -508,6 +603,9 @@ func changedSections(before, after settingsView, touched []string) []string {
 	}
 	if !reflect.DeepEqual(before.Rules, after.Rules) {
 		out = append(out, "rules")
+	}
+	if !reflect.DeepEqual(before.Hooks, after.Hooks) {
+		out = append(out, "hooks")
 	}
 	if !reflect.DeepEqual(before.Policies, after.Policies) {
 		out = append(out, "policies")

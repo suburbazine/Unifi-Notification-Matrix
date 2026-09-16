@@ -692,6 +692,9 @@ function renderSettings(body, s) {
     "A listen address change takes effect when the service restarts."));
   body.appendChild(wc);
 
+  body.appendChild(el("h3", null, "Inbound hooks"));
+  renderHooks(body, draft, s.hook_conditions || []);
+
   body.appendChild(el("h3", null, "Escalation"));
   renderPolicies(body, draft);
 
@@ -1347,4 +1350,134 @@ function firstOf(obj, key) {
     obj[key] = v === "" ? [] : [v];
   });
   return i;
+}
+
+// ---------- inbound hooks ----------
+//
+// One endpoint per UniFi Alarm Manager rule. Alarm Manager rules can only be
+// made in the UniFi UI -- no API creates them -- so this end cannot set them
+// up; what it can do is own the endpoint each one posts to, and say what an
+// arrival there MEANS.
+//
+// The URL and the Authorization header are not here. They are credentials, and
+// they are shown on the Setup tab behind a session: a credential with two ways
+// out has two ways to leak, and Setup is the surface already designed and
+// tested for showing them.
+
+var HOOK_PRODUCTS = ["network", "protect", "access"];
+var HOOK_SEVERITIES = ["", "critical", "high", "medium", "low", "info"];
+
+function renderHooks(body, draft, conditions) {
+  var hooks = draft.hooks || (draft.hooks = []);
+  var card = el("div", "card");
+  card.appendChild(el("div", "muted small",
+    "One endpoint per Alarm Manager rule. Add it here, then paste its URL and " +
+    "header into the rule -- both are on the Setup tab."));
+
+  var panel = el("div");
+  card.appendChild(panel);
+
+  var draw = function () {
+    clear(panel);
+    if (!hooks.length) {
+      panel.appendChild(el("div", "empty",
+        "No inbound hooks. Network alarms have no other way in: the Integration " +
+        "API publishes no events at all, so anything from Alarm Manager arrives " +
+        "here or not at all."));
+    }
+    hooks.forEach(function (h, idx) {
+      panel.appendChild(hookCard(h, idx, hooks, conditions, draw));
+    });
+    var bar = el("div", "formbar");
+    var add = el("button", "act primary", "Add a hook");
+    add.addEventListener("click", function () {
+      hooks.push({ name: "", product: "network", condition: conditions[0] || "" });
+      draw();
+    });
+    bar.appendChild(add);
+    panel.appendChild(bar);
+  };
+  draw();
+  body.appendChild(card);
+}
+
+function hookCard(h, idx, hooks, conditions, redraw) {
+  var c = el("div", "card");
+
+  var f = el("div", "fields");
+  f.appendChild(labelled("Name (match the Alarm Manager rule)", bind(h, "name")));
+  f.appendChild(labelled("UniFi application", pick(h, "product", HOOK_PRODUCTS, null)));
+  f.appendChild(labelled("What an arrival here means", pick(h, "condition", conditions, null)));
+  f.appendChild(labelled("How loud", pick(h, "severity", HOOK_SEVERITIES, "high (default)")));
+  f.appendChild(labelled("What it is about (blank = the rule's name)", bind(h, "entity")));
+  c.appendChild(f);
+
+  var r = el("div", "row");
+  var ready = h.token_set && h.bearer_set;
+  r.appendChild(badge(ready ? "endpoint live" : "endpoint not created yet", ready ? "on" : "off"));
+  c.appendChild(r);
+
+  if (!ready) {
+    c.appendChild(el("div", "note",
+      "Its URL and header are created when you save, and appear on the Setup tab."));
+  }
+
+  // Regenerating is destructive in a way that is easy not to see coming: the
+  // console keeps posting to the old URL and this end keeps refusing, so the
+  // rule looks fine at the UniFi end and silently delivers nothing.
+  var reg = el("input");
+  reg.type = "checkbox";
+  reg.style.width = "auto";
+  reg.checked = !!h.regenerate;
+  reg.addEventListener("change", function () { h.regenerate = reg.checked; redraw(); });
+  var rr = el("div", "row");
+  rr.appendChild(labelled("Replace its URL and header on save", reg));
+  c.appendChild(rr);
+  if (h.regenerate) {
+    c.appendChild(el("div", "delivery-error",
+      "This breaks the Alarm Manager rule pointing at the old URL. The console " +
+      "will keep posting and this end will keep refusing, which looks like " +
+      "nothing happening rather than like an error. Re-paste the new URL and " +
+      "header from the Setup tab afterwards."));
+  }
+
+  var bar = el("div", "formbar");
+  var rm = el("button", "act", "Remove");
+  rm.addEventListener("click", function () { hooks.splice(idx, 1); redraw(); });
+  bar.appendChild(rm);
+  c.appendChild(bar);
+  if (ready) {
+    c.appendChild(el("div", "note",
+      "Removing this stops accepting anything at its URL. The Alarm Manager rule " +
+      "will keep posting into a refusal until you delete it in UniFi too."));
+  }
+  return c;
+}
+
+// pick is a dropdown over a fixed list, with an optional label for the empty
+// choice. A fixed list because these values become part of a stored dedup key:
+// a typo would make an alarm that never merges with itself and nags separately
+// for ever.
+function pick(obj, key, choices, emptyLabel) {
+  var sel = el("select");
+  var cur = obj[key] || "";
+  var seen = false;
+  choices.forEach(function (s) {
+    var o = document.createElement("option");
+    o.value = s;
+    o.textContent = s === "" ? (emptyLabel || "any") : s;
+    if (cur === s) { o.selected = true; seen = true; }
+    sel.appendChild(o);
+  });
+  // A value the server offered but this page does not know about must still be
+  // visible, or opening the form would silently change it on the next save.
+  if (!seen && cur !== "") {
+    var o2 = document.createElement("option");
+    o2.value = cur;
+    o2.textContent = cur + " (from the configuration)";
+    o2.selected = true;
+    sel.appendChild(o2);
+  }
+  sel.addEventListener("change", function () { obj[key] = sel.value; });
+  return sel;
 }
