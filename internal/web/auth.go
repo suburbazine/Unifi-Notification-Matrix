@@ -548,6 +548,27 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	peer := peerOf(r)
+	// Throttled like every other place a password is checked.
+	//
+	// This one recorded its failures but never consulted them, so the current
+	// password could be guessed at full speed. Being behind requireAuth is not
+	// the protection it looks like: sessions die when the daemon restarts, so
+	// the value in brute-forcing this is turning a captured session -- there
+	// is no TLS listener, and the cookie is not Secure -- into the password
+	// itself, which does not die, and which locks the operator out of their
+	// own installation.
+	if ok, wait := s.auth.allow(peer); !ok {
+		s.record(r, audit.Entry{
+			Kind: audit.KindAuth, Actor: "web",
+			Summary: "password change refused: too many failed attempts",
+			Fields:  map[string]string{"client": peer},
+		})
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		writeJSON(w, http.StatusTooManyRequests,
+			errorBody(fmt.Sprintf("too many failed attempts; try again in %s", roundWait(wait))))
+		return
+	}
+
 	var creds credentials
 	if err := readJSON(r, &creds); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorBody("that request could not be read"))
