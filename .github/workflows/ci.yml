@@ -64,6 +64,22 @@ jobs:
             exit 1
           fi
 
+      # Two files name the toolchain: .go-version (what CI installs) and
+      # go.mod's `toolchain` line (what a developer's go command fetches
+      # automatically). They must agree, or a release is built with one version
+      # and reproduced by a verifier with another -- which looks exactly like a
+      # tampered binary.
+      - name: the two toolchain pins agree
+        shell: bash
+        run: |
+          pinned=$(tr -d '[:space:]' < .go-version)
+          declared=$(awk '/^toolchain /{print $2}' go.mod | sed 's/^go//')
+          echo ".go-version=$pinned  go.mod toolchain=$declared"
+          if [ "$pinned" != "$declared" ]; then
+            echo "::error::.go-version ($pinned) and go.mod toolchain ($declared) disagree"
+            exit 1
+          fi
+
   race:
     name: race detector
     runs-on: ubuntu-latest
