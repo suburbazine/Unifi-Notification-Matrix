@@ -667,6 +667,17 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 	if next.Web.Listen == "" {
 		next.Web.Listen = cur.Web.Listen
 	}
+
+	// The same defaults the load path applies.
+	//
+	// They only ran on load, so a field left blank in the interface was
+	// refused while the identical field left blank in the file was filled in.
+	// A brand-new email channel posted tls:"" and came back with "tls "" is
+	// not auto, starttls, implicit or none" -- which reads as a typo rather
+	// than as a field the form never asked for -- and a blank port saved as 0
+	// and then displayed as 0.
+	next.ApplyDefaults()
+
 	return &next, touched
 }
 

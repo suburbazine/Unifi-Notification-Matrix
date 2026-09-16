@@ -112,7 +112,7 @@ func Load(dataDir string) (*Config, error) {
 		return nil, fmt.Errorf("config: reading %s: %w", path, err)
 	}
 
-	cfg.applyDefaults()
+	cfg.ApplyDefaults()
 	cfg.PlaintextFields = PlaintextSecrets(b)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config: %s is not usable: %w", path, err)
@@ -121,7 +121,16 @@ func Load(dataDir string) (*Config, error) {
 }
 
 // applyDefaults fills in what the operator left out.
-func (c *Config) applyDefaults() {
+// ApplyDefaults fills in every field whose blank value means "the usual one".
+//
+// Exported because it has to run on the SAVE path as well as the load path.
+// It only ran on load, so "leave it blank for the default" -- the convention
+// the file's own instructions describe, and the one ntfy's server_url already
+// followed -- worked when you edited the file by hand and not when you used
+// the interface: a brand-new email channel posted tls:"" and was refused with
+// "tls \"\" is not auto, starttls, implicit or none", which reads like the
+// operator typed something wrong rather than nothing at all.
+func (c *Config) ApplyDefaults() {
 	if c.Version == 0 {
 		c.Version = SchemaVersion
 	}

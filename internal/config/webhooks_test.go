@@ -42,7 +42,7 @@ func TestSeveralOutboundWebhooksAreEachAddressableByName(t *testing.T) {
 func TestTheOriginalSingleWebhookBecomesTheOneCalledWebhook(t *testing.T) {
 	c := Default()
 	c.Channels.Webhook = &Webhook{Enabled: true, URL: "https://example.com/hook"}
-	c.applyDefaults()
+	c.ApplyDefaults()
 
 	if c.Channels.Webhook != nil {
 		t.Error("the singular field survived the migration, so it would be written back")

@@ -74,3 +74,36 @@ func TestASaveThatMentionsASectionCanStillEmptyIt(t *testing.T) {
 		t.Errorf("an explicitly cleared ack_base_url was ignored: %q", next.Web.AckBaseURL)
 	}
 }
+
+// "LEAVE IT BLANK FOR THE DEFAULT" HAS TO MEAN THAT IN THE INTERFACE TOO.
+//
+// The defaults only ran on the load path, so a field left blank in the file
+// was filled in and the identical field left blank in the form was refused. A
+// brand-new email channel posted tls:"" and came back with `tls "" is not
+// auto, starttls, implicit or none`, which reads as a typo rather than as a
+// field the form never asked about -- and a blank port saved as 0.
+func TestANewEmailChannelSavesWithoutTypingTheDefaults(t *testing.T) {
+	cur := testConfig()
+	cur.Channels.Email = nil
+
+	const payload = `{"channels":{"email":{"enabled":true,"host":"smtp.example.com",` +
+		`"from":"alerts@example.com","recipients":["operator@example.com"]}}}`
+	var upd settingsUpdate
+	if err := json.Unmarshal([]byte(payload), &upd); err != nil {
+		t.Fatal(err)
+	}
+	next, _ := applyUpdate(cur, upd)
+
+	if next.Channels.Email == nil {
+		t.Fatal("the email channel did not survive the save")
+	}
+	if got := next.Channels.Email.TLS; got != "auto" {
+		t.Errorf("tls = %q, want the default %q", got, "auto")
+	}
+	if got := next.Channels.Email.Port; got != 587 {
+		t.Errorf("port = %d, want the default 587", got)
+	}
+	if err := next.Validate(); err != nil {
+		t.Errorf("a complete email channel with the defaults left blank was refused: %v", err)
+	}
+}

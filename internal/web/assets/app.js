@@ -1002,12 +1002,18 @@ var CHANNEL_NAMES = ["ntfy", "email", "pushover"];
 // does not override can still be SHOWN. Displayed as "default" rather than
 // written into the file: materialising every default the first time somebody
 // opens this page would freeze today's defaults into the installation for ever.
+// Keys are quoted so this table is valid JSON and a Go test can parse it and
+// compare it against escalate.DefaultPolicies directly. It drifted once: info
+// omitted give_up_after, so the card promised "keep going" for a default that
+// actually gives up after an hour -- and the first edit of that card wrote a
+// policy that really did keep going. A change of behaviour from opening a page
+// and pressing save.
 var DEFAULT_LADDERS = {
-  critical: { stages: [{ after: "0s", channels: ["ntfy"] }, { after: "2m", channels: ["ntfy", "email"] }], repeat_every: "5m", give_up_after: "never" },
-  high: { stages: [{ after: "0s", channels: ["ntfy"] }, { after: "15m", channels: ["ntfy", "email"] }], repeat_every: "30m", give_up_after: "4h" },
-  medium: { stages: [{ after: "0s", channels: ["ntfy"] }], repeat_every: "2h", give_up_after: "12h" },
-  low: { stages: [{ after: "0s", channels: ["ntfy"] }], give_up_after: "24h", respect_quiet_hours: true },
-  info: { stages: [{ after: "0s", channels: ["ntfy"] }], respect_quiet_hours: true }
+  "critical": { "stages": [{ "after": "0s", "channels": ["ntfy"] }, { "after": "2m", "channels": ["ntfy", "email"] }], "repeat_every": "5m", "give_up_after": "never" },
+  "high": { "stages": [{ "after": "0s", "channels": ["ntfy"] }, { "after": "15m", "channels": ["ntfy", "email"] }], "repeat_every": "30m", "give_up_after": "4h" },
+  "medium": { "stages": [{ "after": "0s", "channels": ["ntfy"] }], "repeat_every": "2h", "give_up_after": "12h" },
+  "low": { "stages": [{ "after": "0s", "channels": ["ntfy"] }], "give_up_after": "24h", "respect_quiet_hours": true },
+  "info": { "stages": [{ "after": "0s", "channels": ["ntfy"] }], "give_up_after": "1h", "respect_quiet_hours": true }
 };
 
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -1473,6 +1479,20 @@ function hookCard(h, idx, hooks, conditions, redraw) {
 
   var f = el("div", "fields");
   f.appendChild(labelled("Name (match the Alarm Manager rule)", bind(h, "name")));
+  // The name is the handle the credentials are carried by -- the browser is
+  // never sent a token, so it cannot send one back, and a renamed hook is
+  // indistinguishable from a new one. It therefore gets fresh credentials and
+  // its old URL stops working, which the console will not tell anybody: the
+  // rule keeps posting to a dead endpoint and the alarms it carried simply
+  // stop arriving. Said here because the server-side comment claimed it was,
+  // and it was not said anywhere at all.
+  if (h.token_set || h.bearer_set) {
+    f.appendChild(el("div", "note",
+      "Renaming this hook issues new credentials and its current URL stops " +
+      "working. The Alarm Manager rule would keep posting to the old one and " +
+      "those alarms would stop arriving, silently. Re-paste both from the " +
+      "Setup tab afterwards."));
+  }
   f.appendChild(labelled("UniFi application", pick(h, "product", HOOK_PRODUCTS, null)));
   f.appendChild(labelled("What an arrival here means", pick(h, "condition", conditions, null)));
   f.appendChild(labelled("How loud", pick(h, "severity", HOOK_SEVERITIES, "high (default)")));
@@ -1692,6 +1712,12 @@ function outboundCard(h, idx, list, redraw) {
   var c = el("div", "card");
   var f = el("div", "fields");
   f.appendChild(labelled("Name (an escalation rung refers to this)", bind(h, "name")));
+  if (h.secret_set) {
+    f.appendChild(el("div", "note",
+      "Renaming this endpoint drops its signing secret, because the secret is " +
+      "carried across by name. A receiver that checks signatures would start " +
+      "rejecting real alarms. Set it again below if you rename it."));
+  }
   f.appendChild(labelled("URL", bind(h, "url")));
   c.appendChild(f);
 

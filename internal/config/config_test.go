@@ -24,7 +24,7 @@ func workable() Config {
 	}}
 	c.Channels.Ntfy = &Ntfy{Enabled: true, ServerURL: "https://ntfy.sh", Topic: "alarms"}
 	c.Web.AckBaseURL = "https://nm.example.com"
-	c.applyDefaults()
+	c.ApplyDefaults()
 	return c
 }
 
