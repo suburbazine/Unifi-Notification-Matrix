@@ -135,6 +135,22 @@ jobs:
       id-token: write # the OIDC token azure/login exchanges
       contents: read
     steps:
+      # BEFORE the artefact is downloaded, deliberately.
+      #
+      # actions/checkout clears its destination when that destination is not
+      # already a git repository, and `clean: false` does not stop it -- that
+      # flag only governs `git clean` inside an EXISTING checkout. Running it
+      # after the download deleted dist/ between signing the binary and
+      # uploading it, which is how the first attempt at this lost a
+      # successfully signed artefact.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache: true
+
       - uses: actions/download-artifact@v8
         with:
           name: bin-windows-amd64
@@ -179,18 +195,6 @@ jobs:
       # guards self-update is exercised on the exact bytes being shipped. A
       # verifier that had quietly stopped working would otherwise be discovered
       # by an operator, on the day it let something through.
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-          # clean: false is load-bearing. The default runs `git clean -ffdx`,
-          # which deletes ignored files -- and dist/ is ignored, so a default
-          # checkout here would destroy the signed artefact this job exists to
-          # produce, between signing it and uploading it.
-          clean: false
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: .go-version
-          cache: true
       - name: exercise the update verifier against the signed artefact
         env:
           NOTIFYMATRIX_SIGNED_FIXTURE: ${{ github.workspace }}\dist\notifymatrix-windows-amd64.exe

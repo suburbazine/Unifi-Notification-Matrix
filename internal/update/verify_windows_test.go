@@ -16,10 +16,20 @@ func signedFixture(t *testing.T) string {
 	t.Helper()
 	p := os.Getenv("NOTIFYMATRIX_SIGNED_FIXTURE")
 	if p == "" {
+		// Nobody asked for these to run. Skipping is right on a developer
+		// machine with no signed binary to hand.
 		t.Skip("set NOTIFYMATRIX_SIGNED_FIXTURE to a signed release binary")
 	}
+	// But once a fixture HAS been named, a missing one is a failure, not a
+	// skip. The release workflow points this at the artefact it just signed,
+	// and the first time it ran the path was wrong: every test skipped, the
+	// step reported success, and the check that guards self-update verified
+	// nothing at all while looking green. That is the exact shape of failure
+	// this test exists to prevent in the product, so it does not get to
+	// happen to the test.
 	if _, err := os.Stat(p); err != nil {
-		t.Skipf("fixture %s: %v", p, err)
+		t.Fatalf("NOTIFYMATRIX_SIGNED_FIXTURE is set to %s, which cannot be read: %v\n"+
+			"These tests were asked for and did not run.", p, err)
 	}
 	return p
 }
