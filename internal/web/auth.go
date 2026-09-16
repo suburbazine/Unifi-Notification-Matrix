@@ -425,7 +425,9 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 		// THERE IS NO "no password means everyone is in" PATH. A fresh install
 		// is unusable until the setup token is spent.
 		writeJSON(w, http.StatusConflict,
-			errorBody("no password is set yet; use the setup token the daemon printed at start"))
+			errorBody("no password is set yet; use the setup token the daemon printed at start, "+
+				"or run `notifymatrix set-password` on the machine it runs on -- "+
+				"which is the only way when it runs as a service, because a service has no console to print to"))
 		return
 	}
 

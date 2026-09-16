@@ -226,6 +226,9 @@ func dispatch(cmd, dataDir, user string, showLinks, showAll, interactive bool) i
 	case "incidents":
 		return listIncidents(dataDir, showLinks)
 
+	case "set-password":
+		return setPassword(dataDir, interactive)
+
 	case "install", "uninstall", "start", "stop", "status":
 		return serviceCmd(cmd, dataDir, user)
 
@@ -252,6 +255,7 @@ func usage() {
   notifymatrix start|stop   control the installed service
   notifymatrix status       report service state
   notifymatrix incidents    list open incidents (--links for ack URLs)
+  notifymatrix set-password set the settings password (works with the service installed)
   notifymatrix setup        what is left to do, step by step (--all for everything)
   notifymatrix selfcheck    report what this machine can do
   notifymatrix probe        ask a console what it exposes (local networks only)
@@ -683,6 +687,10 @@ and enter this one-time setup token:
     %s
 
 It works once, and a new one is printed each time this starts.
+
+You are seeing this because the daemon has a console. Installed as a
+service it has none, and this token goes nowhere -- so from then on the
+way to set a password is:  notifymatrix set-password
 
 `, tok)
 		}

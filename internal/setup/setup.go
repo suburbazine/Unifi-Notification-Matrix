@@ -449,17 +449,45 @@ func passwordStep(in Input) Step {
 			"-- it makes a wall display useful -- but changing settings, " +
 			"acknowledging alarms and reading the audit record must not be open " +
 			"to everyone.",
-		How: []string{
+	}
+
+	// Which route works depends entirely on whether this is already a service,
+	// and only one of them is possible at a time.
+	//
+	// The token is printed to the daemon's stdout. A service HAS no stdout --
+	// on Windows it is not redirected anywhere, it does not exist -- so once
+	// installed, the token is minted into a void and no amount of restarting
+	// will show it to anybody. Telling an operator in that position to "enter
+	// the token the daemon printed" is telling them to find something that was
+	// never displayed, and it was the only instruction here.
+	if in.ServiceInstalled {
+		s.How = []string{
+			"Run: notifymatrix set-password",
+			"It asks twice, does not echo, and writes the password straight to " +
+				"the configuration.",
+			"It offers to restart the service afterwards, which is required: a " +
+				"running daemon is still holding the old configuration.",
+			"Then open http://" + listenOr(in.Listen) + "/ and sign in.",
+		}
+	} else {
+		s.How = []string{
 			"Open http://" + listenOr(in.Listen) + "/ in a browser.",
 			"The daemon prints a one-time setup token each time it starts. Enter it.",
 			"Choose a password. The token then stops working.",
-		},
+			"Or, if you would rather not use the token: notifymatrix set-password",
+		}
 	}
+
 	if in.PasswordSet {
 		s.Status, s.State = Done, "set"
 		return s
 	}
-	s.Status, s.State = Todo, "not set -- the settings page is waiting for a setup token"
+	s.Status = Todo
+	if in.ServiceInstalled {
+		s.State = "not set -- and the setup token is not reachable while it runs as a service"
+	} else {
+		s.State = "not set -- the settings page is waiting for a setup token"
+	}
 	return s
 }
 

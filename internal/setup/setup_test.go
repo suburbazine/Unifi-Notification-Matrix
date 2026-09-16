@@ -343,3 +343,48 @@ func TestTheOffSiteInstructionsLeadWithTheVPN(t *testing.T) {
 		}
 	}
 }
+
+// The setup token is printed to the daemon's STDOUT. A Windows service has no
+// stdout, so once installed the token is minted into a void and no restart
+// will ever show it. The checklist's only instruction was "enter the token the
+// daemon printed" -- which, for the majority of installs, is an instruction to
+// go and find something that was never displayed.
+func TestThePasswordStepDoesNotSendAServiceInstallLookingForATokenItCannotSee(t *testing.T) {
+	in := Input{Listen: "127.0.0.1:8322", PasswordSet: false, ServiceInstalled: true}
+	s := passwordStep(in)
+
+	how := strings.Join(s.How, " ")
+	if !strings.Contains(how, "set-password") {
+		t.Errorf("an installed service is not told about set-password, which is its only route:\n  %s", how)
+	}
+	if strings.Contains(how, "setup token") {
+		t.Errorf("an installed service is still told to use the setup token, which it can never see:\n  %s", how)
+	}
+	if !strings.Contains(s.State, "not reachable") {
+		t.Errorf("the state does not say why the usual route is unavailable: %q", s.State)
+	}
+	// Setting it while the daemon holds the old config in memory does nothing
+	// until it restarts, and saying so is the difference between "it worked"
+	// and "I set it and still cannot log in".
+	if !strings.Contains(how, "restart") {
+		t.Errorf("nothing says the service has to be restarted:\n  %s", how)
+	}
+}
+
+// Before it is a service, the token route is the right one and still works --
+// this must not have been traded away for the fix above.
+func TestThePasswordStepStillOffersTheTokenBeforeInstall(t *testing.T) {
+	in := Input{Listen: "127.0.0.1:8322", PasswordSet: false, ServiceInstalled: false}
+	s := passwordStep(in)
+
+	how := strings.Join(s.How, " ")
+	if !strings.Contains(how, "setup token") {
+		t.Errorf("the console route disappeared:\n  %s", how)
+	}
+	if !strings.Contains(how, "set-password") {
+		t.Errorf("the alternative is not mentioned at all:\n  %s", how)
+	}
+	if s.Status != Todo {
+		t.Errorf("status = %v, want Todo", s.Status)
+	}
+}
