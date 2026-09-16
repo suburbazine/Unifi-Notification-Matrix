@@ -106,7 +106,8 @@ nothing about channels, and a channel knows nothing about UniFi.
   ✓ config/             YAML, source of truth; validation that refuses at startup
   ✓ service/            install/uninstall, recovery actions, single-instance (§9a)
   · selfcheck/          diagnostics for "it is running and nothing happens"
-  · audit/              append-only record: every event, delivery, ack
+  ✓ audit/              append-only record: every event, delivery, ack
+  ~ probe/              capability discovery (local-network guard built)
   · web/                local UI: setup, live incidents, ack
 ```
 
@@ -788,7 +789,36 @@ irreversible endpoint, credentials taken from the environment or prompted
 without echo and never written to the report, and credential-bearing stream
 URLs redacted out of the output. Start from that, not from scratch.
 
-**What it does NOT do is the part this needs.** Its reports redact
+A second, earlier probe targeted **Access specifically**, and it carries the
+one design insight that decides whether a capability probe works at all:
+
+> **Per-event-type buckets.** The notifications stream is dominated by repeated
+> state-sync messages, so a flat capture of the first N messages is filled
+> entirely by those and crowds out the rare message class you are probing for.
+> Counting every message but storing only the first samples of EACH type makes
+> a one-in-a-thousand event type impossible to miss.
+
+That is not a refinement, it is the difference between a probe that discovers
+something and one that confirms what you already knew. It also pairs with an
+operator-in-the-loop window — the probe tells the operator to trigger the
+action they want captured *now*, during the listen — because some event classes
+only exist when somebody does something.
+
+It is also read-only, never raises, bounds both its listen time and its message
+count, applies the same certificate-pin check as the main client ("no reason to
+talk to an impostor either"), and tells the operator to review the bundle
+before sharing it.
+
+> **This reframes a finding in SOURCES.md.** That document records that only
+> **two** Access notification message shapes have ever been captured, and reads
+> it as a limit of the hardware. The probe's own notes say an earlier capture
+> hit a flat 50-message cap on state-sync spam — which is exactly the failure
+> the bucketed version was built to fix. So "two shapes" may be partly an
+> artifact of how the capture was taken, not a fact about the console. That
+> makes running a bucketed probe against a real Access hub more valuable than
+> it looked, not less.
+
+**What neither probe does is the part this needs.** Its reports redact
 *credentials* but keep *identity* — real camera names and device ids sit in
 the field-data files. For a local diagnostic pasted into a support thread with
 a known party, that is a reasonable line. For a submission published to a
@@ -797,6 +827,42 @@ name is a door name.
 
 So the probe is inherited; the **pseudonymisation layer is new**, and it is the
 only genuinely new engineering here.
+
+### Local networks only, enforced in the dialer — *built*
+
+**A probe is a scanner.** Pointed at an address the operator does not own it is
+an unauthorised port and endpoint scan against somebody else's infrastructure,
+run from their machine and their IP. Shipping that is shipping a liability with
+a friendly CLI.
+
+So the probe may reach RFC 1918 space, loopback, link-local, IPv6 ULA, and
+RFC 6598 (included because it is Tailscale's range, and Tailscale is a common
+and legitimate way to reach a console remotely). Nothing else.
+
+**Enforced in the dialer's `Control` hook, not in a pre-flight check.** That
+distinction is the whole design: `Control` runs after DNS resolution and before
+connect, with the ACTUAL socket address, so it catches what a check on the
+hostname cannot —
+
+- a name that resolved to a private address when checked and a public one when
+  dialled (DNS rebinding),
+- a redirect to a public host,
+- a second address on a multi-homed name.
+
+A pre-flight `CheckHost` exists as well, but only to give a clear error at the
+CLI. It is not the protection.
+
+Also: **no proxy is consulted** (a proxy makes the connection go to the proxy —
+possibly local — while the request reaches anything beyond it), and redirects
+are refused outright rather than followed and re-checked.
+
+**There is no override flag, deliberately.** An escape hatch named something
+like `--allow-remote` is a flag that ends up in a forum post, and the
+protection is then one copied command line away from being off. A test asserts
+the range list can never contain a default route, so widening this is a
+deliberate act with a test to delete.
+
+`internal/probe` implements this; the probe that uses it is still to be built.
 
 ### The constraint that decides the design
 
