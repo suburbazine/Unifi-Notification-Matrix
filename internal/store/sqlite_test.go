@@ -762,3 +762,106 @@ func setUserVersion(t *testing.T, path string, v int) {
 		t.Fatalf("set user_version: %v", err)
 	}
 }
+
+// PutIfUnchanged against the real database, not the scheduler's fake. The two
+// could otherwise drift, and the fake is the one every scheduler test trusts.
+func TestPutIfUnchangedComparesAndSwaps(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	opened := ts(t, "2026-09-15T03:00:00Z")
+
+	inc := incident.Open("i1", "access/front-door/forced-open",
+		incident.SeverityCritical, "access", "Door forced open", "", opened)
+	mustPut(t, s, inc)
+
+	t.Run("writes when unchanged", func(t *testing.T) {
+		cur, err := s.Get(ctx, "i1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		expect := cur.UpdatedAt
+		cur.Title = "updated"
+		cur.UpdatedAt = opened.Add(time.Minute)
+		if err := s.PutIfUnchanged(ctx, cur, expect); err != nil {
+			t.Fatalf("PutIfUnchanged: %v", err)
+		}
+		got, _ := s.Get(ctx, "i1")
+		if got.Title != "updated" {
+			t.Errorf("Title = %q, want %q", got.Title, "updated")
+		}
+	})
+
+	t.Run("refuses a stale expect and changes nothing", func(t *testing.T) {
+		cur, err := s.Get(ctx, "i1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale := *cur
+		stale.Title = "written from a stale read"
+		stale.UpdatedAt = opened.Add(2 * time.Minute)
+
+		err = s.PutIfUnchanged(ctx, &stale, opened) // the ORIGINAL updated_at
+		if !errors.Is(err, incident.ErrConflict) {
+			t.Fatalf("PutIfUnchanged with a stale expect = %v, want ErrConflict", err)
+		}
+		got, _ := s.Get(ctx, "i1")
+		if got.Title == "written from a stale read" {
+			t.Fatal("the refused write was applied anyway")
+		}
+	})
+
+	t.Run("a deleted row is ErrNotFound, never a resurrection", func(t *testing.T) {
+		// It cannot INSERT: resurrecting a deleted incident would also
+		// resurrect whatever acknowledgement was on the caller's copy.
+		gone := incident.Open("does-not-exist", "k", incident.SeverityHigh,
+			"network", "x", "", opened)
+		err := s.PutIfUnchanged(ctx, gone, opened)
+		if !errors.Is(err, incident.ErrNotFound) {
+			t.Fatalf("PutIfUnchanged on a missing row = %v, want ErrNotFound", err)
+		}
+		if _, err := s.Get(ctx, "does-not-exist"); !errors.Is(err, incident.ErrNotFound) {
+			t.Fatal("PutIfUnchanged created a row it should have refused")
+		}
+	})
+
+	t.Run("exactly one of two racing writers wins", func(t *testing.T) {
+		cur, err := s.Get(ctx, "i1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		expect := cur.UpdatedAt
+
+		var wg sync.WaitGroup
+		results := make([]error, 8)
+		for i := range results {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				c := *cur
+				c.Title = fmt.Sprintf("writer-%d", i)
+				c.UpdatedAt = expect.Add(time.Duration(i+1) * time.Second)
+				results[i] = s.PutIfUnchanged(ctx, &c, expect)
+			}(i)
+		}
+		wg.Wait()
+
+		var won, conflicted int
+		for _, err := range results {
+			switch {
+			case err == nil:
+				won++
+			case errors.Is(err, incident.ErrConflict):
+				conflicted++
+			default:
+				t.Errorf("unexpected error: %v", err)
+			}
+		}
+		if won != 1 {
+			t.Errorf("%d writers won, want exactly 1 -- the compare-and-swap "+
+				"is what stops an acknowledgement being overwritten", won)
+		}
+		if conflicted != len(results)-1 {
+			t.Errorf("%d conflicts, want %d", conflicted, len(results)-1)
+		}
+	})
+}

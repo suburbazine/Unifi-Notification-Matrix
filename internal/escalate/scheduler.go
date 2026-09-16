@@ -47,6 +47,7 @@ type Scheduler struct {
 	now      func() time.Time
 	interval time.Duration
 	onError  func(error)
+	quiet    QuietHours
 
 	mu    sync.Mutex
 	stats Stats
@@ -56,10 +57,18 @@ type Scheduler struct {
 // architecture: a security product that silently stops working is worse than
 // no product, so the counters exist to be shown rather than only logged.
 type Stats struct {
-	Ticks      int
-	Delivered  int
-	Failed     int
-	GaveUp     int
+	Ticks     int
+	Delivered int
+	Failed    int
+	GaveUp    int
+
+	// Held counts alerts withheld by quiet hours. Counted separately from
+	// Failed because they are not failures and must not read as breakage --
+	// but counted at all, and surfaced, because "it was quiet hours" is the
+	// answer to "why did I not get paged" and an operator must be able to
+	// find it without reading the config.
+	Held int
+
 	Errors     int
 	LastTickAt time.Time
 }
@@ -121,6 +130,13 @@ func NewScheduler(store incident.Store, policies map[incident.Severity]Policy, d
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	// Validated after the options, since that is where the window arrives. A
+	// malformed quiet-hours window must refuse at startup: the failure mode of
+	// accepting it is alerts going silent at times nobody chose, which is
+	// invisible until an alert someone needed did not arrive.
+	if err := s.quiet.Validate(); err != nil {
+		return nil, fmt.Errorf("escalate: %w", err)
 	}
 	return s, nil
 }
@@ -242,6 +258,22 @@ func (s *Scheduler) process(ctx context.Context, inc *incident.Incident, now tim
 		return nil
 	}
 
+	// Quiet hours: hold, do not drop.
+	//
+	// The incident stays exactly as it is -- LastAlertAt untouched, no failure
+	// recorded -- so NextDue still returns a time in the past and it is due on
+	// the first tick after the window ends. A held alert is deferred, never
+	// cancelled.
+	//
+	// Critical cannot reach this branch: Policy.Validate refuses a critical
+	// policy with RespectQuietHours set, and NewScheduler validates every
+	// policy at construction. The guard is still written as a policy check
+	// rather than a severity check, so the rule lives in one place.
+	if pol.RespectQuietHours && s.quiet.Contains(now) {
+		s.count(func(st *Stats) { st.Held++ })
+		return nil
+	}
+
 	derr := s.deliver(ctx, inc, stage, channels)
 
 	if derr != nil {
@@ -280,36 +312,79 @@ func (s *Scheduler) process(ctx context.Context, inc *incident.Incident, now tim
 	return nil
 }
 
-// commit re-reads the incident and applies mutate to the FRESH copy before
-// writing it back.
+// commitAttempts bounds the compare-and-swap retry.
 //
-// Not a nicety. incident.Store.Put replaces the row wholesale, and delivery
-// takes real time -- an SMTP handshake, a voice call being placed. An ack that
-// arrives during that window lands in the store, and writing back the copy we
-// scanned before delivery would erase it and keep paging a human who already
-// responded, which is the single worst thing this product can do.
+// A conflict means somebody else wrote between our read and our write, and the
+// overwhelmingly likely somebody is a human acknowledging the alert we just
+// sent. Re-reading picks up their change, and the re-run of mutate then
+// usually decides there is nothing to do — so this converges in one extra
+// pass. The bound exists so a pathological writer cannot spin the tick.
+const commitAttempts = 3
+
+// commit applies mutate to a FRESH copy of the incident under a
+// compare-and-swap, retrying if the row moved under us.
 //
-// This narrows the window to the gap between the re-read and the write; it
-// does not close it. Closing it wants a compare-and-swap on the Store
-// interface (put-if-unchanged-since UpdatedAt), which is a change to a
-// published interface and not made here.
+// Not a nicety. Delivery takes real time — an SMTP handshake, a voice call
+// being placed — and an acknowledgement arrives precisely during that window,
+// because the alert that prompted it has just gone out. Writing back the copy
+// we scanned before delivery would erase the ack and keep paging a human who
+// already responded.
+//
+// Re-reading alone narrows that window but does not close it: an ack landing
+// between the re-read and the write is still lost. incident.Store.Put is
+// last-write-wins, so the fix is PutIfUnchanged — the comparison happens inside
+// the UPDATE's WHERE clause, while SQLite holds the write lock, leaving no gap
+// for anything to land in.
+//
+// mutate MUST be idempotent and must re-derive its decision from the copy it is
+// handed, because on a conflict it runs again against newer state. That is the
+// point: on the second pass it sees the ack and declines to record the alert.
 func (s *Scheduler) commit(ctx context.Context, id string, mutate func(*incident.Incident) (bool, error)) (bool, error) {
-	fresh, err := s.store.Get(ctx, id)
-	if err != nil {
-		if errors.Is(err, incident.ErrNotFound) {
-			// Removed under us. Nothing to record, and nothing wrong.
-			return false, nil
+	for attempt := 0; attempt < commitAttempts; attempt++ {
+		fresh, err := s.store.Get(ctx, id)
+		if err != nil {
+			if errors.Is(err, incident.ErrNotFound) {
+				// Removed under us. Nothing to record, and nothing wrong.
+				return false, nil
+			}
+			return false, fmt.Errorf("escalate: reload incident %s: %w", id, err)
 		}
-		return false, fmt.Errorf("escalate: reload incident %s: %w", id, err)
+		// Captured BEFORE mutate, which advances UpdatedAt on the copy.
+		expect := fresh.UpdatedAt
+
+		changed, err := mutate(fresh)
+		if err != nil || !changed {
+			return false, err
+		}
+
+		err = s.store.PutIfUnchanged(ctx, fresh, expect)
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, incident.ErrConflict):
+			continue // somebody wrote; re-read and let mutate decide again
+		case errors.Is(err, incident.ErrNotFound):
+			// Deleted between our read and our write. Not an error, and
+			// explicitly not something to recreate: resurrecting a deleted
+			// incident would also resurrect its acknowledgement.
+			return false, nil
+		default:
+			return false, fmt.Errorf("escalate: persist incident %s: %w", id, err)
+		}
 	}
-	changed, err := mutate(fresh)
-	if err != nil || !changed {
-		return false, err
-	}
-	if err := s.store.Put(ctx, fresh); err != nil {
-		return false, fmt.Errorf("escalate: persist incident %s: %w", id, err)
-	}
-	return true, nil
+	// Persistent contention. Reported rather than swallowed, but not fatal:
+	// the incident is still in the store and the next tick will try again.
+	return false, fmt.Errorf("escalate: incident %s changed under every one of %d write attempts: %w",
+		id, commitAttempts, incident.ErrConflict)
+}
+
+// WithQuietHours holds non-critical alerts during a window.
+//
+// It cannot mute critical: Policy.Validate refuses RespectQuietHours on a
+// critical policy, so there is no configuration in which this silences an
+// alarm.
+func WithQuietHours(q QuietHours) Option {
+	return func(s *Scheduler) { s.quiet = q }
 }
 
 // Stats returns a snapshot of the counters.

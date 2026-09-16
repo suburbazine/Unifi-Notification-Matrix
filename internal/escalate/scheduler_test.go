@@ -29,6 +29,12 @@ type fakeStore struct {
 	// incident after delivering. It is how a test stages an acknowledgement
 	// that arrives while the SMTP handshake is still going.
 	beforeGet func(id string)
+
+	// beforePut runs inside the write, AFTER the scheduler has re-read and
+	// mutated its copy. This is the narrower race, and the only one a
+	// compare-and-swap is needed for: an ack landing here is invisible to the
+	// re-read, so a last-write-wins Put erases it.
+	beforePut func(id string)
 }
 
 func newFakeStore(incs ...*incident.Incident) *fakeStore {
@@ -60,10 +66,33 @@ func clone(in *incident.Incident) *incident.Incident {
 }
 
 func (f *fakeStore) Put(_ context.Context, inc *incident.Incident) error {
+	if f.beforePut != nil {
+		f.beforePut(inc.ID)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.putErr != nil {
 		return f.putErr
+	}
+	f.byID[inc.ID] = *clone(inc)
+	return nil
+}
+
+func (f *fakeStore) PutIfUnchanged(_ context.Context, inc *incident.Incident, expect time.Time) error {
+	if f.beforePut != nil {
+		f.beforePut(inc.ID)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.putErr != nil {
+		return f.putErr
+	}
+	cur, ok := f.byID[inc.ID]
+	if !ok {
+		return incident.ErrNotFound
+	}
+	if !cur.UpdatedAt.Equal(expect) {
+		return incident.ErrConflict
 	}
 	f.byID[inc.ID] = *clone(inc)
 	return nil
@@ -739,5 +768,102 @@ func TestPersistFailureLeavesTheIncidentDue(t *testing.T) {
 	}
 	if got := st.must(t, "inc-1").LastAlertAt; got != nil {
 		t.Errorf("LastAlertAt = %v, want nil (the write failed)", *got)
+	}
+}
+
+// An acknowledgement that lands DURING delivery must survive the write that
+// follows it.
+//
+// This is the race PutIfUnchanged exists for. The scheduler reads the
+// incident, spends real time delivering it, then writes back the fact that it
+// alerted -- and the ack arrives precisely in that window, because the alert
+// that prompted it has just gone out. With a last-write-wins Put the ack is
+// erased and the operator watches the alert keep arriving after they tapped
+// the button.
+func TestAckLandingDuringDeliveryIsNotOverwritten(t *testing.T) {
+	st := newFakeStore()
+	inc := incident.Open("i1", "access/front-door/forced-open",
+		incident.SeverityCritical, "access", "Door forced open", "", t0)
+	if err := st.Put(t.Context(), inc); err != nil {
+		t.Fatal(err)
+	}
+
+	clk := t0
+	ackAt := t0.Add(3 * time.Second)
+
+	// Fire the ack in the narrow window the CAS exists for: AFTER the
+	// scheduler re-read and mutated its copy, BEFORE it writes. The re-read
+	// cannot see this ack, so only the compare-and-swap can save it.
+	var once sync.Once
+	st.beforePut = func(id string) {
+		once.Do(func() {
+			st.mu.Lock()
+			cur := st.byID[id]
+			acked := ackAt
+			cur.AckedAt = &acked
+			cur.AckVia = "ntfy"
+			cur.UpdatedAt = ackAt
+			st.byID[id] = cur
+			st.mu.Unlock()
+		})
+	}
+
+	s, err := NewScheduler(st, DefaultPolicies(),
+		func(context.Context, *incident.Incident, int, []string) error { return nil },
+		WithClock(func() time.Time { return clk }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	got := st.must(t, "i1")
+	if !got.Acknowledged() {
+		t.Fatal("the acknowledgement was overwritten by the alert write -- " +
+			"the operator tapped the button and the product kept paging them")
+	}
+	if got.AckVia != "ntfy" {
+		t.Errorf("AckVia = %q, want %q", got.AckVia, "ntfy")
+	}
+	// The alert genuinely was delivered before the ack arrived, so recording
+	// it is accurate history and is NOT suppressed. What must be true is that
+	// the incident stops nagging.
+	if due, _, _ := DefaultPolicies()[incident.SeverityCritical].DueNow(got, clk.Add(time.Hour)); due {
+		t.Error("still scheduled to alert an hour after being acknowledged")
+	}
+	// UpdatedAt must not have gone backwards over the ack: the alert write
+	// carries the tick's `now`, which is EARLIER than the ack that landed
+	// during delivery, and the store's compare-and-swap is built on this
+	// value.
+	if got.UpdatedAt.Before(ackAt) {
+		t.Errorf("UpdatedAt = %v, moved backwards over an ack at %v",
+			got.UpdatedAt, ackAt)
+	}
+}
+
+// A stale expect must be refused rather than silently applied.
+func TestCommitRefusesToWriteOverANewerRow(t *testing.T) {
+	st := newFakeStore()
+	inc := incident.Open("i1", "k", incident.SeverityHigh, "network", "WAN down", "", t0)
+	if err := st.Put(t.Context(), inc); err != nil {
+		t.Fatal(err)
+	}
+	stale := clone(inc)
+	stale.Title = "written from a stale read"
+
+	// Somebody else writes first.
+	cur := st.must(t, "i1")
+	cur.UpdatedAt = t0.Add(time.Minute)
+	if err := st.Put(t.Context(), cur); err != nil {
+		t.Fatal(err)
+	}
+
+	err := st.PutIfUnchanged(t.Context(), stale, t0)
+	if !errors.Is(err, incident.ErrConflict) {
+		t.Fatalf("PutIfUnchanged with a stale expect = %v, want ErrConflict", err)
+	}
+	if st.must(t, "i1").Title == "written from a stale read" {
+		t.Error("the stale write was applied anyway")
 	}
 }

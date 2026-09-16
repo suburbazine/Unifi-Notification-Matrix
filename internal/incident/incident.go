@@ -159,6 +159,21 @@ var (
 	ErrClosed = errors.New("incident is closed")
 )
 
+// touch advances UpdatedAt, and never moves it backwards.
+//
+// Monotonicity is not tidiness here, it is what the store's compare-and-swap
+// is built on. The scheduler captures `now` at the start of a tick, spends
+// real time delivering, and only then records the alert -- so an
+// acknowledgement landing mid-delivery is stamped LATER than the `now` the
+// alert write carries. A plain assignment would then move UpdatedAt backwards
+// over the ack, which both misorders the history view and hands the next
+// reader an expect value that has already been superseded.
+func (i *Incident) touch(at time.Time) {
+	if at.After(i.UpdatedAt) {
+		i.UpdatedAt = at
+	}
+}
+
 // Open creates an incident in the Open state.
 func Open(id, dedupKey string, sev Severity, source, title, detail string, now time.Time) *Incident {
 	return &Incident{
@@ -194,7 +209,7 @@ func (i *Incident) RecordAlert(at time.Time, stage int) error {
 		i.Stage = stage
 	}
 	i.LastDeliveryError = ""
-	i.UpdatedAt = at
+	i.touch(at)
 	return nil
 }
 
@@ -202,7 +217,7 @@ func (i *Incident) RecordAlert(at time.Time, stage int) error {
 // NOT touch LastAlertAt -- see RecordAlert.
 func (i *Incident) RecordDeliveryFailure(at time.Time, err string) {
 	i.LastDeliveryError = err
-	i.UpdatedAt = at
+	i.touch(at)
 }
 
 // Acknowledge records that a person responded, through the named channel.
@@ -223,7 +238,7 @@ func (i *Incident) Acknowledge(at time.Time, via string) error {
 	t := at
 	i.AckedAt = &t
 	i.AckVia = via
-	i.UpdatedAt = at
+	i.touch(at)
 	return nil
 }
 
@@ -240,7 +255,7 @@ func (i *Incident) Resolve(at time.Time) error {
 	}
 	t := at
 	i.ResolvedAt = &t
-	i.UpdatedAt = at
+	i.touch(at)
 	return nil
 }
 
@@ -254,7 +269,7 @@ func (i *Incident) Close(at time.Time, reason string) {
 	t := at
 	i.ClosedAt = &t
 	i.CloseReason = reason
-	i.UpdatedAt = at
+	i.touch(at)
 }
 
 // Recur builds the successor for a condition that cleared and came back.

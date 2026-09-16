@@ -144,14 +144,25 @@ func (p Policy) ShouldGiveUp(inc *incident.Incident, now time.Time) bool {
 // DefaultPolicies is the shipped starting point. Critical never gives up and
 // ignores quiet hours; the operator can change the intervals but the default
 // will not choose silence for them.
+//
+// EVERY CHANNEL NAMED HERE MUST EXIST. The ladders are deliberately shorter
+// than the eventual design because only ntfy and email are implemented, and a
+// default that named "voice" or "pushover" today would ship a stage that
+// silently delivers nothing — which ValidateAgainstChannels now refuses to
+// start with, and rightly. The rungs go back in when the channels land:
+//
+//	critical  +10m → add voice, once internal/channel/voice exists
+//	critical  +2m  → add pushover
+//	info           → webhook, once internal/channel/webhook exists
+//
+// TestDefaultPoliciesNameOnlyImplementedChannels fails if this drifts.
 func DefaultPolicies() map[incident.Severity]Policy {
 	return map[incident.Severity]Policy{
 		incident.SeverityCritical: {
 			Name: "critical",
 			Stages: []Stage{
-				{After: 0, Channels: []string{"ntfy", "email"}},
-				{After: 2 * time.Minute, Channels: []string{"ntfy", "email", "pushover"}},
-				{After: 10 * time.Minute, Channels: []string{"ntfy", "email", "pushover", "voice"}},
+				{After: 0, Channels: []string{"ntfy"}},
+				{After: 2 * time.Minute, Channels: []string{"ntfy", "email"}},
 			},
 			RepeatEvery: 5 * time.Minute,
 			GiveUpAfter: 0, // never
@@ -179,9 +190,15 @@ func DefaultPolicies() map[incident.Severity]Policy {
 		},
 		incident.SeverityInfo: {
 			Name:              "info",
-			Stages:            []Stage{{After: 0, Channels: []string{"webhook"}}},
+			Stages:            []Stage{{After: 0, Channels: []string{"ntfy"}}},
 			RespectQuietHours: true,
 			GiveUpAfter:       time.Hour,
 		},
 	}
 }
+
+// ImplementedChannels is the set of channels this build can actually deliver
+// through. Kept next to DefaultPolicies so the two cannot drift apart
+// unnoticed; the real startup path passes the channels it actually
+// constructed, not this list.
+func ImplementedChannels() []string { return []string{"email", "ntfy"} }

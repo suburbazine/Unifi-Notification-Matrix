@@ -287,6 +287,97 @@ ON CONFLICT(id) DO UPDATE SET
 	return nil
 }
 
+// PutIfUnchanged writes only if the stored row's updated_at still equals
+// expect, and returns incident.ErrConflict otherwise.
+//
+// The compare and the write are ONE statement -- the comparison is the UPDATE's
+// own WHERE clause, evaluated by SQLite while it holds the write lock. Reading
+// updated_at first and then writing would reintroduce, inside the store, the
+// very gap the method exists to close.
+//
+// Note the deliberate absence of an INSERT path: this cannot create a row. A
+// caller that reached here believing it was updating an incident which has
+// since been deleted should be told so, not silently handed a fresh incident
+// with a resurrected acknowledgement on it.
+func (s *SQLite) PutIfUnchanged(ctx context.Context, inc *incident.Incident, expect time.Time) error {
+	if inc == nil {
+		return errors.New("store: put nil incident")
+	}
+	if inc.ID == "" {
+		return errors.New("store: incident has no id")
+	}
+	if inc.DedupKey == "" {
+		return fmt.Errorf("store: incident %s has no dedup key", inc.ID)
+	}
+	if inc.OpenedAt.IsZero() {
+		return fmt.Errorf("store: incident %s has no opened_at", inc.ID)
+	}
+
+	const q = `
+UPDATE incidents SET
+	dedup_key           = ?,
+	severity            = ?,
+	source              = ?,
+	title               = ?,
+	detail              = ?,
+	opened_at           = ?,
+	first_alert_at      = ?,
+	last_alert_at       = ?,
+	alert_count         = ?,
+	stage               = ?,
+	acked_at            = ?,
+	ack_via             = ?,
+	resolved_at         = ?,
+	closed_at           = ?,
+	close_reason        = ?,
+	predecessor_id      = ?,
+	last_delivery_error = ?,
+	updated_at          = ?
+WHERE id = ? AND updated_at = ?`
+
+	s.writeMu.Lock()
+	res, err := s.db.ExecContext(ctx, q,
+		inc.DedupKey, string(inc.Severity), inc.Source, inc.Title, inc.Detail,
+		encTime(inc.OpenedAt),
+		encTimePtr(inc.FirstAlertAt), encTimePtr(inc.LastAlertAt),
+		inc.AlertCount, inc.Stage,
+		encTimePtr(inc.AckedAt), inc.AckVia, encTimePtr(inc.ResolvedAt),
+		encTimePtr(inc.ClosedAt), inc.CloseReason,
+		inc.PredecessorID, inc.LastDeliveryError,
+		encTime(inc.UpdatedAt),
+		inc.ID, encTime(expect),
+	)
+	s.writeMu.Unlock()
+
+	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("store: put %s (%s): %w", inc.ID, inc.DedupKey, ErrActiveExists)
+		}
+		return fmt.Errorf("store: put %s: %w", inc.ID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: put %s: %w", inc.ID, err)
+	}
+	if n == 1 {
+		return nil
+	}
+
+	// Nothing matched. Distinguish "somebody else wrote it" from "it is gone",
+	// because the two want different handling: the caller retries the first and
+	// must not retry the second.
+	var exists int
+	switch err := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM incidents WHERE id = ?`, inc.ID).Scan(&exists); {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("store: put %s: %w", inc.ID, incident.ErrNotFound)
+	case err != nil:
+		return fmt.Errorf("store: put %s: %w", inc.ID, err)
+	default:
+		return fmt.Errorf("store: put %s: %w", inc.ID, incident.ErrConflict)
+	}
+}
+
 // Get returns one incident by id, or incident.ErrNotFound.
 func (s *SQLite) Get(ctx context.Context, id string) (*incident.Incident, error) {
 	row := s.db.QueryRowContext(ctx,
