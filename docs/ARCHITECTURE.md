@@ -84,7 +84,7 @@ nothing about channels, and a channel knows nothing about UniFi.
 `✓` exists and is tested; `·` is not written yet.
 
 ```
-✓ cmd/notifymatrix/     main; CLI verbs (version, selfcheck)
+✓ cmd/notifymatrix/     run, install/uninstall/start/stop/status, selfcheck
   internal/
   ✓ unifi/              shared per-console pacing, backoff, TLS + cert pinning
     source/
@@ -104,7 +104,7 @@ nothing about channels, and a channel knows nothing about UniFi.
   · ack/                HMAC token mint + verify, ack routes
   ✓ secret/             Secret type, the four-tier prefix chain
   · config/             YAML, written by the web UI, source of truth
-  · service/            install/uninstall, recovery actions, single-instance (§9a)
+  ✓ service/            install/uninstall, recovery actions, single-instance (§9a)
   · selfcheck/          diagnostics for "it is running and nothing happens"
   · audit/              append-only record: every event, delivery, ack
   · web/                local UI: setup, live incidents, ack
