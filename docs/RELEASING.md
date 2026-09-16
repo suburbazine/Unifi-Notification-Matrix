@@ -110,36 +110,79 @@ hashes.
 
 ## 2. One-time setup
 
-### 2a. GitHub
+### 2a. What has to exist, in order
 
-Create an environment named **`release`** (Settings → Environments). The
-Windows signing job is pinned to it. Optionally add required reviewers, which
-puts a human approval in front of the code-signing key.
+Four things, and they have to happen in this order — each one needs the one
+before it:
 
-**Repository variables** (Settings → Variables — not secrets, none of these are
-sensitive):
+| # | Where | What | Time |
+|---|---|---|---|
+| §2b | Azure | a Trusted Signing account, identity validation, a certificate profile | **days** (validation) |
+| §2c | Entra ID | an app registration, a federated credential, **and a role assignment** | minutes |
+| §2d | GitHub | three secrets, three variables, the `release` environment | minutes |
+| §3 | — | tag and watch | minutes |
 
-| Variable | Value |
-|---|---|
-| `AZURE_SIGNING_ENDPOINT` | `https://eus.codesigning.azure.net/` |
-| `AZURE_SIGNING_ACCOUNT` | `Xtremission-LLC` |
-| `AZURE_CERT_PROFILE` | `Xtremission-LLC` |
+The two that catch people out, both of which fail long after the step that
+caused them:
 
-**Repository secrets:**
+- **A federated credential authenticates; it does not authorize.** The role
+  assignment in §2c is a separate action, and skipping it produces a 403 at
+  signing time, after `azure/login` has reported success.
+- **Identity validation takes business days.** Nothing else here does.
 
-| Secret | Value |
-|---|---|
-| `AZURE_CLIENT_ID` | App registration (client) ID — §2b |
-| `AZURE_TENANT_ID` | Entra tenant ID |
-| `AZURE_SUBSCRIPTION_ID` | Subscription holding the signing account |
-| `GPG_PRIVATE_KEY` | *Optional* — §4 |
-| `GPG_PASSPHRASE` | *Optional* — §4 |
+None of the six GitHub values is a credential that can sign anything on its
+own. They are identifiers; authentication happens through a short-lived OIDC
+token minted per run, and there is no long-lived Azure secret in the
+repository at all.
 
-None of these is a credential that can sign anything on its own. The Azure
-values are **identifiers**; authentication happens through a short-lived OIDC
-token minted per run.
+### 2b. Azure — the signing account itself
 
-### 2b. Azure — federated credentials, no stored secret
+**Do this part first.** The federated credential in §2c authenticates an app;
+it cannot authenticate it to something that does not exist yet.
+
+**Budget days, not minutes.** Identity validation for a public-trust
+certificate is a real legal-entity check against Xtremission LLC, and Microsoft
+takes business days over it. Everything else here is minutes. Start the
+validation before you need the release.
+
+1. **Register the resource provider**, once per subscription. Without this the
+   portal will not offer Trusted Signing at all, and the error it gives does
+   not say so:
+
+   ```bash
+   az provider register --namespace Microsoft.CodeSigning
+   az provider show --namespace Microsoft.CodeSigning --query registrationState
+   ```
+
+2. **Create a Trusted Signing account** (the portal may still call it
+   *Azure Trusted Signing*; the GitHub Action calls it Artifact Signing — same
+   thing). **The region you choose decides the endpoint** you will put in
+   `AZURE_SIGNING_ENDPOINT`, and there is no redirect between regions:
+
+   | Account region | Endpoint |
+   |---|---|
+   | East US | `https://eus.codesigning.azure.net/` |
+   | West US 2 | `https://wus2.codesigning.azure.net/` |
+   | West Central US | `https://wcus.codesigning.azure.net/` |
+   | North Europe | `https://neu.codesigning.azure.net/` |
+   | West Europe | `https://weu.codesigning.azure.net/` |
+
+   Read it back rather than trusting the table:
+
+   ```bash
+   az rest --method get --url "https://management.azure.com/subscriptions/<SUB>/resourceGroups/<RG>/providers/Microsoft.CodeSigning/codeSigningAccounts/<ACCOUNT>?api-version=2024-09-30-preview" --query "properties.accountUri"
+   ```
+
+3. **Complete identity validation**, under the account. Public Trust requires
+   the legal-entity check. A *Test* certificate profile skips it and is useful
+   for proving the pipeline works — but a binary signed with a test profile is
+   **not trusted by Windows**, and SmartScreen will still warn. Use it to prove
+   the plumbing, not to ship.
+
+4. **Create a certificate profile** once validation succeeds. Its name is
+   `AZURE_CERT_PROFILE`; the account name is `AZURE_SIGNING_ACCOUNT`.
+
+### 2c. Azure — federated credentials, no stored secret
 
 In **Entra ID → App registrations**, create an app (e.g.
 `notifymatrix-release-signing`), then under **Certificates & secrets →
@@ -153,7 +196,9 @@ resources*:
 | Entity type | **Environment** |
 | Environment name | `release` |
 
-which produces the subject:
+which must produce exactly this subject — check it in the app's federated
+credential list afterwards, because a typo here fails as `AADSTS70021`, which
+does not mention the subject:
 
 ```
 repo:suburbazine/Unifi-Notification-Matrix:environment:release
@@ -164,13 +209,55 @@ wildcards in the subject, so `ref:refs/tags/v*` is not expressible — a
 tag-based subject would need a new federated credential for every release.
 The environment subject is stable and doubles as the approval gate.
 
-Then grant the app permission to sign: on the Artifact Signing account, **Access
+**A federated credential authenticates. It does not authorize.** This is the
+step most often missed, and it fails as a 403 from the signing endpoint long
+after the login step has reported success. On the signing account, **Access
 control (IAM) → Add role assignment → Trusted Signing Certificate Profile
-Signer**, assigned to that app registration.
+Signer**, assigned to that app registration:
+
+```bash
+az role assignment create   --role "Trusted Signing Certificate Profile Signer"   --assignee <APP_CLIENT_ID>   --scope "/subscriptions/<SUB>/resourceGroups/<RG>/providers/Microsoft.CodeSigning/codeSigningAccounts/<ACCOUNT>"
+```
+
+Role assignments take a minute or two to propagate. A 403 immediately after
+creating one is not necessarily wrong yet.
 
 **Nothing in this flow puts a long-lived Azure credential in the repository.**
-That is the point of moving off the workstation `az login` flow, where the
-credential is whatever the person running the build happens to be holding.
+
+### 2d. Tell GitHub about it
+
+None of these six values is a signing credential. Three are identifiers that
+happen to live in `secrets` because that is the context `azure/login` reads;
+three are plain variables.
+
+```bash
+gh secret set AZURE_CLIENT_ID        --body "<app registration client ID>"
+gh secret set AZURE_TENANT_ID        --body "<Entra tenant ID>"
+gh secret set AZURE_SUBSCRIPTION_ID  --body "<subscription ID>"
+
+gh variable set AZURE_SIGNING_ENDPOINT --body "https://eus.codesigning.azure.net/"
+gh variable set AZURE_SIGNING_ACCOUNT  --body "<account name>"
+gh variable set AZURE_CERT_PROFILE     --body "<certificate profile name>"
+```
+
+Then create the environment the credential's subject is pinned to. GitHub will
+create it implicitly on the first run, but making it yourself is what lets you
+put a human in front of the signing key:
+
+```bash
+gh api -X PUT repos/suburbazine/Unifi-Notification-Matrix/environments/release
+```
+
+Check it before you tag anything:
+
+```bash
+gh secret list && gh variable list
+gh api repos/suburbazine/Unifi-Notification-Matrix/environments --jq '.environments[].name'
+```
+
+If `gh secret list` is empty, the workflow will fail at `azure/login` with an
+empty client id — which reads like a broken action rather than a missing
+setting.
 
 ---
 
@@ -202,7 +289,19 @@ recovery path when a signing step fails midway.
   match. It must be exactly `repo:OWNER/REPO:environment:release`, and the job
   must actually declare `environment: release`.
 - **403 from the signing endpoint** — the app registration is missing the
-  *Trusted Signing Certificate Profile Signer* role on the account.
+  *Trusted Signing Certificate Profile Signer* role on the account (§2c), or
+  the assignment has not propagated yet. Authentication succeeding tells you
+  nothing about authorization; they are separate steps and they fail at
+  different points in the run.
+- **`azure/login` fails with an empty client id** — the repository secrets are
+  not set. `gh secret list` returning nothing is the whole diagnosis (§2d).
+- **The endpoint rejects the account** — `AZURE_SIGNING_ENDPOINT` is for a
+  different region than the account. There is no redirect between regions
+  (§2b).
+- **Identity validation still pending** — a certificate profile cannot be
+  created until it completes, and it takes business days. A *Test* profile
+  proves the pipeline without waiting, but Windows does not trust what it
+  signs.
 - **"signature is not timestamped"** — the timestamp server was unreachable.
   Re-run; never ship the binary untimestamped, because it starts failing
   validation on the day the certificate expires, on machines that ran it
