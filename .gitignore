@@ -51,3 +51,8 @@ desktop.ini
 *.test
 *.out
 !/docs/**/*.out
+
+# Probe reports. Redacted by construction, but a report is still a description
+# of somebody's console and there is no reason for one to reach a commit by
+# accident just because it was written into the working tree.
+probe-*.jsonl

@@ -107,7 +107,7 @@ nothing about channels, and a channel knows nothing about UniFi.
   ✓ service/            install/uninstall, recovery actions, single-instance (§9a)
   ~ selfcheck/          folded into the CLI and the UI's health view
   ✓ audit/              append-only record: every event, delivery, ack
-  ~ probe/              capability discovery (local-network guard built)
+  ✓ probe/              capability discovery, pseudonymised, local networks only
   ✓ web/                local UI: status public, changes gated
 ```
 
@@ -798,7 +798,7 @@ download, and the one-time Azure setup — is [RELEASING.md](RELEASING.md).
 
 ---
 
-## 10a. Capability probe and community submissions — *planned*
+## 10a. Capability probe and community submissions — *built*
 
 The problem this solves is already recorded in [SOURCES.md](SOURCES.md) and it
 is not going away: **the surfaces this product reads are version-gated and
@@ -816,7 +816,12 @@ observing real consoles, which means the operators who run them.
 fields are present — and writes a JSONL capability report. Diffed against what
 this build knows, it produces two useful things locally (what this console has
 that we do not handle, and what we expect that this console does not) and one
-useful thing collectively: a file the operator may choose to contribute.
+useful thing collectively: a file the operator may choose to contribute with
+`notifymatrix probe submit`.
+
+The two local findings are marked in the summary as `NEW` (a path this build
+does not use, answering) and `GONE` (a path this build depends on, absent).
+They mean opposite things and neither is an error.
 
 ### There is prior art, and it is most of the way there
 
@@ -863,10 +868,19 @@ a known party, that is a reasonable line. For a submission published to a
 public repository it is not, because a camera name is a room name and a door
 name is a door name.
 
-So the probe is inherited; the **pseudonymisation layer is new**, and it is the
-only genuinely new engineering here.
+So the probe is inherited; the **pseudonymisation layer is new**, and it was
+the only genuinely new engineering here. It is described below.
 
-### Local networks only, enforced in the dialer — *built*
+One more thing the inherited designs did not have to worry about: bucketing on
+a single field is enough for Access, whose type lives in a top-level `event`,
+but not for Protect, which carries a frame verb (`add`, `update`) at the top
+level and the actual event type underneath at `item.type`. Bucketing on the top
+level alone collapses every event into two buckets and reproduces exactly the
+crowding-out that bucketing exists to prevent. The key is therefore a composite
+of whichever discriminator paths are present, which covers both products
+without either one's parser.
+
+### Local networks only, enforced in the dialer
 
 **A probe is a scanner.** Pointed at an address the operator does not own it is
 an unauthorised port and endpoint scan against somebody else's infrastructure,
@@ -900,7 +914,11 @@ protection is then one copied command line away from being off. A test asserts
 the range list can never contain a default route, so widening this is a
 deliberate act with a test to delete.
 
-`internal/probe` implements this; the probe that uses it is still to be built.
+`internal/probe` implements this, on both the HTTP client and the WebSocket
+dialer. The socket half needed saying separately: gorilla's dialer carries its
+own default `net.Dial`, so a deleted `NetDialContext` still compiles and still
+connects — it just silently stops being restricted. A test dials a public
+address through the capture dialer and requires `ErrNotLocal`.
 
 ### The constraint that decides the design
 
@@ -913,20 +931,106 @@ feature, and it would be entirely our fault.
 So the pipeline is **capture → redact → SHOW THE OPERATOR → submit**, and
 never fewer steps than that:
 
-- **Redaction is not optional and not a flag.** Names, MACs, IPs, serials and
-  ids are replaced with stable pseudonyms at capture time. What a schema
-  contribution needs is *shapes and vocabulary* — field names, enum values,
-  types, which endpoints exist at which firmware version — and none of that
-  requires a real camera name.
-- **The operator reads the exact bytes before anything leaves.** Not a summary
-  of them. The submission file is written to disk, the CLI prints it, and
-  contributing is a separate deliberate act.
-- **Submission is never automatic and there is no phone-home.** ARCHITECTURE §1
-  says nothing phones home; a probe that uploaded on its own would make that
-  false.
+- **Redaction is not optional and not a flag.** It happens at capture time,
+  before anything is retained — there is no code path in `internal/probe` that
+  stores a raw frame and redacts later, because a report written from a crash
+  dump or a future refactor would then carry real data.
+- **The operator reads the exact bytes before anything leaves.**
+  `notifymatrix probe submit` prints the whole file and then explains how to
+  contribute it. It is a separate command precisely so the printing cannot be
+  skipped.
+- **Submission is never automatic and there is no phone-home.** The submit
+  command uploads nothing; it prints an issue URL.
 - **Firmware version and model are the payload.** A report that cannot say
   which console produced a shape is not worth having, so those are kept — and
   they are also the only identifying facts that genuinely need to be.
+
+### How the redaction actually works
+
+Three decisions carry it, and each is a deliberate rejection of the obvious
+alternative.
+
+**1. It is an allowlist, not a denylist.** Every string is replaced unless
+something specific says to keep it. A denylist — "redact fields called `name`,
+`mac`, `email`" — fails on the field nobody anticipated, and *finding fields
+nobody anticipated is the entire purpose of a probe*. The failure mode of an
+allowlist is a less informative report; the failure mode of a denylist is a
+published address book.
+
+What survives is **field names** (they are the schema), **structure** (nesting
+and array lengths), **types**, **booleans**, **small non-negative integers**,
+and the values of a short list of **vocabulary fields** — `type`, `modelKey`,
+`state`, `alarmType`, `version` and a handful more. Those name no person, room
+or device; they are chosen by Ubiquiti.
+
+Three fields were considered for that list and deliberately left off. `code`
+can be a door PIN. `reason` and `result` carry prose far more often than they
+carry an enum. A field whose values are *usually* safe is not a field whose
+values may be published.
+
+Even an allowlisted field is checked: a value that is MAC-, UUID-, IP-, email-
+or token-shaped is replaced regardless of what it arrived in, and so is
+anything longer than 64 characters or wordier than four words. A field name is
+evidence about a value, never proof — and length alone does not separate
+`UVC G6 PTZ` from `Front Door forced open by Jane`.
+
+**2. Pseudonyms are counters, not hashes.** A hash of a MAC is not an
+anonymisation: the MAC space is small and camera names come from a small
+dictionary, so a hash of either is recoverable by brute force in seconds. A
+counter discloses nothing, because there is nothing to grind against.
+
+**3. They do not survive the report.** Counters restart for every run, so two
+submissions from one site share no label and cannot be linked to each other.
+Within a report the mapping is stable, which preserves the genuinely useful
+fact that two fields held the same value.
+
+Numbers get the same treatment as strings: small integers are enum ordinals,
+ports and counts and are kept; epoch-shaped integers are replaced with
+`<epoch_ms>` or `<epoch_s>`, because *when* something happened at a site is
+exactly what a published file must not carry; and non-integers become
+`<float>`, because a latitude is an address.
+
+The thing that is easy to miss, and was missed until the probe was run against
+a dead port: **the redaction has to cover what this process says about the
+console, not only what the console says.** A refused connection produces
+`dial tcp 192.168.1.1:443: ...`, and that was being written into the report as
+the stream status. Error strings are scrubbed of addresses now, with a test.
+
+### The report is a schema summary, not a pile of samples
+
+Each endpoint and each message type carries a **field summary**: for every
+dotted path, the types seen, how many times it appeared, how many *distinct*
+values it held, and the values that were publishable. That, not the three
+retained samples, is the payload.
+
+It also degrades well. A field whose values were all replaced still reports
+that it exists, what type it is, and that it held (say) four distinct values —
+which reads as "probably an enum worth asking about" while disclosing none of
+the four. Cardinality is safe to publish; the values are not.
+
+A field that is a string on one firmware and an array on another shows up as a
+path with two types. That is the exact trap that silently drops every bulk
+`devices` envelope, so it is worth surfacing on its own.
+
+### What it refuses
+
+- **Anything that is not a GET.** Checked in the request path, not merely
+  implied by the catalogue, because the table that only contains safe entries
+  is one hurried edit from not.
+- **`disable-mic-permanently`**, which needs a factory reset to undo. The
+  inherited probe refused this in prose and by not writing the call; here it is
+  a rule the code checks.
+- **Rosters and credentials** — `/users`, `/credentials`, `/visitors`,
+  `/nfc_cards`, `/pin_codes`, `/clients`. Pseudonymisation would reduce them to
+  a row count, so fetching them buys the schema nothing, and pulling a
+  credential table into a process that writes files is a bad shape even when
+  the writing is safe.
+- **Redirects**, and **proxies** are never consulted.
+
+The catalogue deliberately includes paths this build does *not* use. A probe
+that only asks about what is already handled can only confirm what is already
+known, and the whole reason this exists is that Protect's vocabulary grew from
+16 types to 39 without anybody here noticing.
 
 ## 11. Open items
 

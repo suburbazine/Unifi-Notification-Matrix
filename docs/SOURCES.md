@@ -192,7 +192,9 @@ came from a single hub model.
 > messages — so a flat capture fills with those and crowds out anything rare.
 > A capture that counts every message but samples each TYPE separately
 > (ARCHITECTURE.md §10a) may well find more. "Two shapes" describes what one
-> capture method saw, not what the console emits. Treat the vocabulary as unestablished: other
+> capture method saw, not what the console emits. **That bucketed capture now
+> exists** — `notifymatrix probe --products access` — so this number is
+> testable against real hardware rather than merely doubted. Treat the vocabulary as unestablished: other
 hardware may emit shapes nobody has captured, which is the reasoning behind the
 connected-but-silent detection in ARCHITECTURE.md §7.
 

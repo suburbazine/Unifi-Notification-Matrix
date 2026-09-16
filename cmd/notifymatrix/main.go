@@ -3,9 +3,11 @@
 //
 // The incident lifecycle, the durable store, the escalation scheduler, the
 // rule engine, the acknowledgement surface, the secret store, configuration,
-// the Protect source, the ntfy and email channels and the service integration
-// are real and tested. The web UI is not, so incidents are inspected with
-// `notifymatrix incidents` rather than in a browser.
+// the Protect source, the ntfy and email channels, the audit record, the web
+// UI, the capability probe and the service integration are real and tested.
+// The Access and Network sources are not, so two of the three products in the
+// name do not ingest yet -- `notifymatrix probe` is how a console's Access and
+// Network surfaces get described before they do.
 package main
 
 import (
@@ -90,6 +92,13 @@ func isFlagExpectingValue(arg string) bool {
 func main() {
 	cmd, flagArgs := splitCommand(os.Args[1:])
 
+	// The probe owns its own flag set: it has flags nothing else wants, and
+	// the shared set below is ExitOnError, so routing them through it would
+	// refuse the command rather than run it.
+	if cmd == "probe" {
+		os.Exit(probeCommand(service.DefaultDataDir(), flagArgs))
+	}
+
 	fs := flag.NewFlagSet("notifymatrix", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "where config, the incident store and the lock live")
 	links := fs.Bool("links", false, "print acknowledgement links (they are credentials)")
@@ -169,13 +178,16 @@ func usage() {
   notifymatrix status       report service state
   notifymatrix incidents    list open incidents (--links for ack URLs)
   notifymatrix selfcheck    report what this machine can do
+  notifymatrix probe        ask a console what it exposes (local networks only)
   notifymatrix version
 
 Flags:
   --data-dir PATH   config, incident store and lock (default %s)
   --user NAME       Linux service account (default %s)
 
-Not yet implemented: the web UI, the Access and Network sources.
+Run "notifymatrix probe -h" for its own flags.
+
+Not yet implemented: the Access and Network sources.
 `, version, service.DefaultDataDir(), "notifymatrix")
 }
 

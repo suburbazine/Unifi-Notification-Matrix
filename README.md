@@ -1,10 +1,12 @@
 # UniFi Notification Matrix
 
-> **Status: early development — not usable yet.** The architecture is settled
-> and the foundations are built and tested: the incident lifecycle, the
-> escalation policy, and the secret store. Ingest, channels, the durable store
-> and the web UI are not written. The only working commands are `version` and
-> `selfcheck`.
+> **Status: usable against UniFi Protect; not yet against Access or Network.**
+> Built and tested: the incident lifecycle, the durable store, the escalation
+> scheduler, the rule engine, acknowledgement, the secret store, configuration,
+> the Protect source, the ntfy and email channels, the audit record, the local
+> web UI, the capability probe, and Windows-service / systemd integration.
+> **The Access and Network sources are not written**, so two of the three
+> products in the name do not ingest yet.
 
 UniFi tells you a thing happened. Once.
 
@@ -16,13 +18,19 @@ camera that went dark an hour before a break-in, it is the whole failure.
 **This turns a one-shot UniFi event into a tracked incident that keeps
 escalating until a human closes it.**
 
-- Ingests from UniFi **Protect**, **Access** and **Network** — API where one
-  exists, inbound webhook as a fallback.
+- Ingests from UniFi **Protect** today; **Access** and **Network** are
+  designed and researched but not yet written.
 - Escalates on a policy ladder that widens over time: push, then email, then
   (later) an automated phone call.
 - **Acknowledgement works from a phone with one tap**, no login and no VPN.
-- Fans out to **ntfy**, **Pushover**, **email**, and generic **JSON webhooks**,
-  so it slots into whatever you already run.
+- Fans out to **ntfy** and **email** today; Pushover, generic JSON webhooks and
+  voice are planned.
+- A **local web UI**: status is visible to anyone on the LAN so it works as a
+  wall display, and every change requires a password.
+- An **append-only audit record** in plain JSONL — including the events a rule
+  *silenced*, because "why was I not paged" is the hard question.
+- A **capability probe** that asks your console what it actually exposes, so
+  firmware revisions nobody here has seen can still be described. See below.
 - Runs as a Windows service or a systemd unit. Single static binary, no runtime
   to install.
 - API keys are encrypted at rest — **DPAPI** on Windows, and a machine-bound
@@ -32,6 +40,51 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design,
 [docs/SOURCES.md](docs/SOURCES.md) for what each UniFi application actually
 exposes, and [docs/DESIGN-RULES.md](docs/DESIGN-RULES.md) for the rules the
 code follows and why.
+
+---
+
+## The capability probe
+
+UniFi's surfaces are version-gated and under-observed. Protect's event
+vocabulary went from 16 types to 39 between firmware revisions; Network's alarm
+payload has spelled its message field four different ways. Documentation does
+not fix that — observing real consoles does.
+
+```bash
+notifymatrix probe --host 192.168.1.1
+```
+
+It asks your console which endpoints answer and listens on each push socket,
+then writes a JSONL report saying what this build does not handle (`NEW`) and
+what it expects that your firmware does not have (`GONE`). It is useful on its
+own, and you may choose to contribute it.
+
+**Three things about it are worth knowing before you run it.**
+
+**It only talks to local networks.** RFC 1918, loopback, link-local, IPv6 ULA
+and Tailscale's range. Nothing else, enforced in the dialer against the actual
+socket address rather than the hostname, on both the HTTP and WebSocket paths.
+There is no flag to widen it — a probe pointed at an address you do not own is
+an unauthorised scan run from your machine and your address.
+
+**Nothing identifying reaches the file.** A raw probe of a UniFi console is a
+map of your building: camera names are room names, door names are door names.
+So names, MACs, IPs, ids, tokens and timestamps are replaced with meaningless
+per-report counters *at capture time*, before anything is written. What
+survives is field names, structure, types, UniFi's own vocabulary
+(`smartDetectZone`, `CONNECTED`) and your firmware version — which is all a
+schema contribution needs.
+
+**Nothing is uploaded.** Contributing is a separate command that prints the
+entire file first, so you read the exact bytes before deciding:
+
+```bash
+notifymatrix probe submit
+```
+
+If anything in that output identifies your site, that is a bug in this tool and
+reporting it matters more than the contribution does.
+
 
 ---
 

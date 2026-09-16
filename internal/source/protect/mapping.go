@@ -1,6 +1,7 @@
 package protect
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
@@ -242,4 +243,19 @@ func normaliseState(s string) string {
 	default:
 		return ""
 	}
+}
+
+// KnownEventTypes is the event vocabulary this build maps, sorted.
+//
+// Exported for the capability probe, which needs to say which types a console
+// emitted that this build would silently ignore. That question is only
+// answerable against the real table -- a second hand-maintained list would
+// drift, and a drifted list reports a covered hazard as uncovered, or worse.
+func KnownEventTypes() []string {
+	out := make([]string, 0, len(baseMappings))
+	for k := range baseMappings {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
