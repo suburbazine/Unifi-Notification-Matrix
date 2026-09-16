@@ -185,6 +185,14 @@ function renderHealth(h) {
       var e = row.insertCell();
       e.textContent = c.last_error || "—";
       if (c.last_error) e.className = "err";
+      // Held back is a third state, and it must not look like either of the
+      // other two: it is not delivering, and it is not being attempted.
+      if (c.backing_off_until && new Date(c.backing_off_until) > new Date()) {
+        e.className = "err";
+        e.appendChild(el("div", "small",
+          "held back after " + c.consecutive_fails + " failures in a row; " +
+          "next attempt " + stamp(c.backing_off_until)));
+      }
     });
     chs.appendChild(wrap(ct));
   }

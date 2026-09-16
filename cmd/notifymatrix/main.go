@@ -696,6 +696,10 @@ func runDaemon(ctx context.Context, dataDir string) error {
 						Name: st.Channel, Enabled: true, Depth: st.Depth,
 						Pending: st.Pending, Dropped: st.Dropped,
 						InFlight: st.InFlight,
+						// A channel being held back after repeated failures is
+						// not being attempted, and must not read as healthy.
+						ConsecutiveFails: st.ConsecutiveFails,
+						BackingOffUntil:  st.BackingOffUntil,
 					})
 				}
 				_ = c

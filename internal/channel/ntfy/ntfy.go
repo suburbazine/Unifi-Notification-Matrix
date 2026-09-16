@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -241,7 +242,8 @@ func (c *Channel) attempt(ctx context.Context, u *url.URL, body []byte) (time.Du
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("ntfy: publishing to %s: %w", redact(u), err)
+		return 0, fmt.Errorf("ntfy: publishing to %s: %w%s", redact(u), err,
+			reachabilityNote(ctx, c.base))
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBody))
@@ -283,6 +285,60 @@ func unauthorisedAdvice(hadToken bool) string {
 		"public topic, clearing the token is the fix. Otherwise the token has " +
 		"expired, or lacks write access to this topic."
 }
+
+// reachabilityNote says whether the server can be connected to at all.
+//
+// Go reports a dial that timed out and a server that accepted the connection
+// and never answered with the SAME text -- "Client.Timeout exceeded while
+// awaiting headers" -- because the client deadline covers both. Those are
+// different faults with different fixes: one is DNS, a firewall or a blocked
+// address, the other is a service that is up and struggling. Telling them
+// apart matters enough to spend one short TCP dial on it.
+//
+// Observed: a machine whose firewall was dropping traffic to ntfy.sh reported
+// a timeout indistinguishable from the public service being slow, and the
+// operator went looking for a better token.
+func reachabilityNote(ctx context.Context, base *url.URL) string {
+	host := hostPortOf(base)
+	if host == "" {
+		return ""
+	}
+	// Short, and bounded separately from the request that already failed --
+	// this runs on a path where something has just gone wrong and must not
+	// become a second thing that hangs.
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reachabilityProbe)
+	defer cancel()
+
+	var d net.Dialer
+	conn, err := d.DialContext(probeCtx, "tcp", host)
+	if err != nil {
+		return "\n       Could not open a connection to " + host + " at all, so " +
+			"this is not a credentials or topic problem: the address is " +
+			"unreachable from this machine. Check DNS, the outbound firewall, " +
+			"and whether anything on the network is blocking that host."
+	}
+	_ = conn.Close()
+	return "\n       The connection itself succeeded, so " + host + " is reachable " +
+		"and did not answer in time -- the server is up and slow, or the request " +
+		"was refused without a reply."
+}
+
+// hostPortOf turns the server URL into a dialable host:port.
+func hostPortOf(u *url.URL) string {
+	if u == nil || u.Host == "" {
+		return ""
+	}
+	if u.Port() != "" {
+		return u.Host
+	}
+	if strings.EqualFold(u.Scheme, "http") {
+		return u.Hostname() + ":80"
+	}
+	return u.Hostname() + ":443"
+}
+
+// reachabilityProbe bounds the diagnostic dial.
+const reachabilityProbe = 3 * time.Second
 
 // rateLimitedError marks the one status worth retrying.
 type rateLimitedError struct {

@@ -71,6 +71,73 @@ type Queue struct {
 	mu       sync.Mutex
 	dropped  int
 	inflight bool
+
+	// consecutiveFails and notBefore are the failure backoff.
+	//
+	// Without one, a channel that is failing is retried at whatever cadence
+	// the escalation ladder repeats at -- and a ladder doing its job repeats
+	// often. Observed: a broken ntfy configuration republished every twenty
+	// seconds for hours and got the installation BANNED by the service, which
+	// turned a misconfigured channel into no channel at all, including for the
+	// alarms that would otherwise have gone through once it was fixed.
+	//
+	// So repeated failure widens the gap between attempts. It is not a circuit
+	// breaker that gives up: every attempt still happens eventually, and the
+	// incident stays due the whole time, because an alarm nobody has been told
+	// about must not be marked as delivered.
+	consecutiveFails int
+	notBefore        time.Time
+	lastBackoff      time.Duration
+}
+
+// failureBackoff is the ladder applied to consecutive failures.
+//
+// Deliberately short at the start and hard-capped: a channel that failed once
+// is usually about to succeed, and a channel that has failed twenty times is
+// not going to be fixed by being asked again in thirty seconds. Five minutes
+// is the ceiling because that is roughly the longest an operator will accept
+// between fixing a channel and seeing it recover.
+var failureBackoff = []time.Duration{
+	0, // the first failure costs nothing: try again immediately
+	15 * time.Second,
+	30 * time.Second,
+	time.Minute,
+	2 * time.Minute,
+	5 * time.Minute,
+}
+
+// backoffFor is the wait after n consecutive failures.
+// n is the count of consecutive failures, so the FIRST failure is n=1 and
+// reads the first rung. Indexing by n rather than n-1 skipped that rung and
+// charged a fifteen-second delay for a single blip.
+func backoffFor(n int) time.Duration {
+	if n <= 0 {
+		return 0
+	}
+	if n > len(failureBackoff) {
+		return failureBackoff[len(failureBackoff)-1]
+	}
+	return failureBackoff[n-1]
+}
+
+// ErrBackingOff is returned instead of attempting a send that is being held
+// back after repeated failures.
+//
+// An error rather than a silent skip, and it carries when the next attempt is:
+// the caller is the escalation scheduler, which must keep the incident DUE. A
+// skip reported as success would mark an alarm delivered that nobody received,
+// which is the one lie this product cannot tell.
+type ErrBackingOff struct {
+	Channel string
+	Until   time.Time
+	Fails   int
+}
+
+func (e *ErrBackingOff) Error() string {
+	return fmt.Sprintf("%s has failed %d times in a row, so delivery is being "+
+		"held back until %s to avoid being rate-limited or blocked by the service; "+
+		"the incident stays open and will be retried",
+		e.Channel, e.Fails, e.Until.Format(time.RFC3339))
 }
 
 type job struct {
@@ -144,10 +211,22 @@ func (q *Queue) deliver(j job) {
 		q.mu.Unlock()
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), q.timeout)
-	defer cancel()
+	// Held back? Then this attempt does not happen, and the reason is reported
+	// rather than swallowed.
+	q.mu.Lock()
+	holding := !q.notBefore.IsZero() && j.now.Before(q.notBefore)
+	held := &ErrBackingOff{Channel: q.ch.Name(), Until: q.notBefore, Fails: q.consecutiveFails}
+	q.mu.Unlock()
 
-	err := q.ch.Send(ctx, j.alert)
+	var err error
+	if holding {
+		err = held
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), q.timeout)
+		err = q.ch.Send(ctx, j.alert)
+		cancel()
+		q.recordOutcome(err, j.now)
+	}
 	if j.result != nil {
 		// Buffered by the sender, so this never blocks even if the caller has
 		// already timed out and walked away.
@@ -216,6 +295,35 @@ type Stats struct {
 	Pending  int
 	Dropped  int
 	InFlight bool
+
+	// ConsecutiveFails and BackingOffUntil make the backoff visible.
+	//
+	// A channel quietly not being attempted is indistinguishable from one that
+	// is fine, and this product's whole argument is against states like that.
+	ConsecutiveFails int
+	BackingOffUntil  time.Time
+}
+
+// recordOutcome advances or clears the failure backoff.
+func (q *Queue) recordOutcome(err error, now time.Time) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err == nil {
+		// One success clears the whole ladder. A channel that just worked is
+		// working, and making it climb back down would keep punishing it for
+		// an outage that is over.
+		q.consecutiveFails = 0
+		q.notBefore = time.Time{}
+		q.lastBackoff = 0
+		return
+	}
+	q.consecutiveFails++
+	q.lastBackoff = backoffFor(q.consecutiveFails)
+	if q.lastBackoff > 0 {
+		q.notBefore = now.Add(q.lastBackoff)
+	} else {
+		q.notBefore = time.Time{}
+	}
 }
 
 func (q *Queue) Stats() Stats {
@@ -227,6 +335,9 @@ func (q *Queue) Stats() Stats {
 		Pending:  len(q.in),
 		Dropped:  q.dropped,
 		InFlight: q.inflight,
+
+		ConsecutiveFails: q.consecutiveFails,
+		BackingOffUntil:  q.notBefore,
 	}
 }
 

@@ -167,6 +167,15 @@ type ChannelHealth struct {
 	InFlight  bool      `json:"in_flight"`
 	LastError string    `json:"last_error,omitempty"`
 	LastSent  time.Time `json:"last_sent"`
+
+	// ConsecutiveFails and BackingOffUntil report the failure backoff.
+	//
+	// A channel that is being held back is not being attempted, and a channel
+	// that is not being attempted must not look like one that is fine. This
+	// product's whole argument is against states that read as healthy and are
+	// not.
+	ConsecutiveFails int       `json:"consecutive_fails,omitempty"`
+	BackingOffUntil  time.Time `json:"backing_off_until,omitempty"`
 }
 
 // ServiceHealth answers "will this come back on its own".
