@@ -677,7 +677,13 @@ function renderSettings(body, s) {
   var wf = el("div", "fields");
   wf.appendChild(labelled("Listen address", bind(w, "listen")));
   wf.appendChild(labelled("Acknowledgement base URL", bind(w, "ack_base_url")));
+  wf.appendChild(labelled("Acknowledgement-only listener (blank = none)", bind(w, "ack_listen")));
   wc.appendChild(wf);
+  wc.appendChild(el("div", "note",
+    "The acknowledgement-only listener is the one to forward a port to. A NAT " +
+    "forward cannot pick a path, so forwarding to the main listen address " +
+    "publishes the whole status page along with it; this one serves /ack/ and " +
+    "nothing else."));
   var wr = el("div", "row");
   wr.appendChild(badge(w.ack_key_set ? "ack signing key set" : "ack signing key not set",
     w.ack_key_set ? "on" : "off"));
@@ -686,15 +692,11 @@ function renderSettings(body, s) {
     "A listen address change takes effect when the service restarts."));
   body.appendChild(wc);
 
+  body.appendChild(el("h3", null, "Escalation"));
+  renderPolicies(body, draft);
+
   body.appendChild(el("h3", null, "Rules"));
-  var rc = el("div", "card");
-  var ta = document.createElement("textarea");
-  ta.value = JSON.stringify(draft.rules || [], null, 2);
-  ta.spellcheck = false;
-  rc.appendChild(labelled("Rules (JSON list; the YAML on disk stays the source of truth)", ta));
-  rc.appendChild(el("div", "note",
-    "An ignore rule must narrow what it silences, or the save is refused."));
-  body.appendChild(rc);
+  renderRules(body, draft);
 
   if ((draft.plaintext_fields || []).length) {
     var pc = el("div", "card");
@@ -709,12 +711,6 @@ function renderSettings(body, s) {
   var save = el("button", "act primary", "Save settings");
   save.addEventListener("click", function () {
     msg.className = "msg"; msg.textContent = "";
-    try { draft.rules = JSON.parse(ta.value || "[]"); }
-    catch (e) {
-      msg.className = "msg err";
-      msg.textContent = "Rules are not valid JSON: " + e.message;
-      return;
-    }
     save.disabled = true;
     api("POST", "api/settings", draft).then(function (res) {
       save.disabled = false;
@@ -924,3 +920,431 @@ document.addEventListener("DOMContentLoaded", function () {
     if (state.tab === "incidents") refreshIncidents();
   }, REFRESH_MS);
 });
+
+// ---------- escalation policies ----------
+//
+// Escalation was readable and not editable: the only way to change the ladder
+// that decides whether anybody is told a SECOND time was to hand-edit YAML.
+//
+// Two views over the same data. The guided one asks the question people
+// actually have -- who gets told, how often does it keep asking, when does it
+// give up -- and edits a single-stage ladder. The advanced one exposes the
+// ladder itself, because "ntfy now, ntfy and email after fifteen minutes" is
+// the whole point of the feature and cannot be said any other way.
+
+var SEVERITIES = ["critical", "high", "medium", "low", "info"];
+var CHANNEL_NAMES = ["ntfy", "email", "pushover", "webhook"];
+
+// DEFAULT_LADDERS mirrors escalate.DefaultPolicies, so a severity the config
+// does not override can still be SHOWN. Displayed as "default" rather than
+// written into the file: materialising every default the first time somebody
+// opens this page would freeze today's defaults into the installation for ever.
+var DEFAULT_LADDERS = {
+  critical: { stages: [{ after: "0s", channels: ["ntfy"] }, { after: "2m", channels: ["ntfy", "email"] }], repeat_every: "5m", give_up_after: "never" },
+  high: { stages: [{ after: "0s", channels: ["ntfy"] }, { after: "15m", channels: ["ntfy", "email"] }], repeat_every: "30m", give_up_after: "4h" },
+  medium: { stages: [{ after: "0s", channels: ["ntfy"] }], repeat_every: "2h", give_up_after: "12h" },
+  low: { stages: [{ after: "0s", channels: ["ntfy"] }], give_up_after: "24h", respect_quiet_hours: true },
+  info: { stages: [{ after: "0s", channels: ["ntfy"] }], respect_quiet_hours: true }
+};
+
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+function boxFor(list, name, onChange) {
+  var i = el("input");
+  i.type = "checkbox";
+  i.style.width = "auto";
+  i.checked = (list || []).indexOf(name) >= 0;
+  i.addEventListener("change", function () { onChange(i.checked); });
+  return i;
+}
+
+function toggleIn(list, name, on) {
+  var at = list.indexOf(name);
+  if (on && at < 0) list.push(name);
+  if (!on && at >= 0) list.splice(at, 1);
+}
+
+// enabledChannels reads the channel section of the draft being edited, not the
+// saved config: someone who enables ntfy and then edits escalation in the same
+// visit is entitled to put ntfy on a rung.
+function enabledChannels(draft) {
+  var ch = draft.channels || {};
+  return CHANNEL_NAMES.filter(function (n) { return ch[n] && ch[n].enabled; });
+}
+
+function renderPolicies(body, draft) {
+  var pols = draft.policies || (draft.policies = {});
+  var card = el("div", "card");
+  card.appendChild(el("div", "muted small",
+    "What happens after an alarm is raised, and how long it keeps asking."));
+
+  var live = enabledChannels(draft);
+  if (!live.length) {
+    card.appendChild(el("div", "note",
+      "No channel is enabled, so there is nothing to escalate ON to. Enable one " +
+      "above and save, then come back."));
+  }
+
+  var advanced = el("input");
+  advanced.type = "checkbox";
+  advanced.style.width = "auto";
+  advanced.checked = policiesNeedAdvanced(pols);
+  var advRow = el("div", "row");
+  advRow.appendChild(labelled("Advanced: edit the escalation ladder itself", advanced));
+  card.appendChild(advRow);
+
+  var panel = el("div");
+  card.appendChild(panel);
+  body.appendChild(card);
+
+  var draw = function () {
+    clear(panel);
+    SEVERITIES.forEach(function (sev) {
+      panel.appendChild(policyCard(sev, pols, advanced.checked, draw, live));
+    });
+  };
+  advanced.addEventListener("change", draw);
+  draw();
+}
+
+// policiesNeedAdvanced reports whether anything configured cannot be shown in
+// the guided form. Opening the simple view over a multi-stage ladder and then
+// saving would silently flatten it, so the editor opens in whichever mode can
+// represent what is already there.
+function policiesNeedAdvanced(pols) {
+  for (var sev in pols) {
+    if (!Object.prototype.hasOwnProperty.call(pols, sev)) continue;
+    var p = pols[sev];
+    if (p && p.stages && p.stages.length > 1) return true;
+  }
+  return false;
+}
+
+function policyCard(sev, pols, advanced, redraw, live) {
+  var overridden = Object.prototype.hasOwnProperty.call(pols, sev);
+  var p = overridden ? pols[sev] : DEFAULT_LADDERS[sev];
+
+  var c = el("div", "card");
+  var head = el("div", "row");
+  head.appendChild(badge(sev, "sev-" + sev));
+  head.appendChild(el("div", "grow"));
+  head.appendChild(badge(overridden ? "customised" : "default", overridden ? "on" : ""));
+  c.appendChild(head);
+
+  // Editing a default must turn it into an override FIRST, or the edit lands
+  // on the shared template object and changes every severity at once.
+  // Materialising a default has to filter it to channels that are actually
+  // enabled, exactly as config.filterToEnabled does when the daemon builds the
+  // shipped defaults at runtime.
+  //
+  // Without that, ticking one box in the simple view wrote out the two-stage
+  // default verbatim -- including a second rung naming a channel this
+  // installation does not have -- and the save was refused citing "stage 1",
+  // a thing the simple view never showed and gave no way to fix.
+  // Materialises WITHOUT redrawing.
+  //
+  // Redrawing here re-rendered the panel before the caller had applied its
+  // change, so the freshly drawn checkbox showed the pre-change model and the
+  // model then moved underneath it: the box read ticked while the stage it
+  // stood for had no channels, and the save was refused for a state the screen
+  // said was not there. Callers that need the card redrawn do it AFTER their
+  // mutation, which is the only order in which the two can agree.
+  var own = function () {
+    if (!overridden) {
+      pols[sev] = filterLadder(clone(DEFAULT_LADDERS[sev]), live);
+      overridden = true;
+    }
+    return pols[sev];
+  };
+
+  if (!advanced) {
+    var stages = (p.stages && p.stages.length) ? p.stages : [{ after: "0s", channels: [] }];
+    var first = stages[0];
+    c.appendChild(el("div", "label", "Tell me on"));
+    var chRow = el("div", "row");
+    (live.length ? live : []).forEach(function (name) {
+      chRow.appendChild(labelled(name, boxFor(first.channels, name, function (on) {
+        var t = own();
+        if (!t.stages || !t.stages.length) t.stages = [{ after: "0s", channels: [] }];
+        toggleIn(t.stages[0].channels || (t.stages[0].channels = []), name, on);
+        redraw();
+      })));
+    });
+    c.appendChild(chRow);
+
+    var f = el("div", "fields");
+    f.appendChild(labelled("Keep asking every (blank = ask once)",
+      durationField(p, "repeat_every", own)));
+    f.appendChild(labelled("Give up after (never = keep going)",
+      durationField(p, "give_up_after", own)));
+    c.appendChild(f);
+
+    if (stages.length > 1) {
+      c.appendChild(el("div", "note",
+        "This severity has " + stages.length + " stages. The simple view edits the " +
+        "first; tick Advanced to see the rest."));
+    }
+  } else {
+    (p.stages || []).forEach(function (st, idx) {
+      var sc = el("div", "card");
+      var sf = el("div", "fields");
+      sf.appendChild(labelled(idx === 0 ? "Straight away (0s)" : "After",
+        durationField(st, "after", own)));
+      sc.appendChild(sf);
+      var r = el("div", "row");
+      (live.length ? live : []).forEach(function (name) {
+        r.appendChild(labelled(name, boxFor(st.channels, name, function (on) {
+          own();
+          toggleIn(st.channels || (st.channels = []), name, on);
+          redraw();
+        })));
+      });
+      sc.appendChild(r);
+      var rm = el("button", "act", "Remove this stage");
+      rm.addEventListener("click", function () {
+        own().stages.splice(idx, 1);
+        redraw();
+      });
+      var rb = el("div", "formbar"); rb.appendChild(rm);
+      sc.appendChild(rb);
+      c.appendChild(sc);
+    });
+
+    var addBar = el("div", "formbar");
+    var add = el("button", "act", "Add a stage");
+    add.addEventListener("click", function () {
+      var t = own();
+      t.stages = t.stages || [];
+      t.stages.push({ after: "15m", channels: [] });
+      redraw();
+    });
+    addBar.appendChild(add);
+    c.appendChild(addBar);
+
+    var af = el("div", "fields");
+    af.appendChild(labelled("Repeat every", durationField(p, "repeat_every", own)));
+    af.appendChild(labelled("Give up after", durationField(p, "give_up_after", own)));
+    c.appendChild(af);
+  }
+
+  var q = el("input");
+  q.type = "checkbox";
+  q.style.width = "auto";
+  q.checked = !!p.respect_quiet_hours;
+  q.disabled = (sev === "critical");
+  q.addEventListener("change", function () {
+    own().respect_quiet_hours = q.checked;
+    redraw();
+  });
+  var qr = el("div", "row");
+  qr.appendChild(labelled("Respect quiet hours", q));
+  if (sev === "critical") {
+    qr.appendChild(el("span", "muted small",
+      "Quiet hours never apply to critical. That control does not exist."));
+  }
+  c.appendChild(qr);
+
+  if (overridden) {
+    var reset = el("button", "act", "Back to the default");
+    reset.addEventListener("click", function () { delete pols[sev]; redraw(); });
+    var rb2 = el("div", "formbar"); rb2.appendChild(reset);
+    c.appendChild(rb2);
+  }
+  return c;
+}
+
+// filterLadder drops rungs that point at channels this installation does not
+// have, and drops a rung left with nothing to deliver to.
+//
+// Stage delays are kept as they are: a ladder whose first rung was dropped now
+// starts later than zero, which is correct, because the rung that would have
+// fired immediately had nowhere to send anything.
+function filterLadder(p, live) {
+  var out = [];
+  (p.stages || []).forEach(function (st) {
+    var keep = (st.channels || []).filter(function (c) { return live.indexOf(c) >= 0; });
+    if (keep.length) out.push({ after: st.after, channels: keep });
+  });
+  p.stages = out.length ? out : [{ after: "0s", channels: [] }];
+  return p;
+}
+
+// durationField edits a Go duration string, and says what one looks like
+// rather than silently accepting "5" and meaning five nanoseconds.
+function durationField(obj, key, own) {
+  var i = el("input");
+  i.type = "text";
+  i.placeholder = "30s, 5m, 2h";
+  i.value = (obj[key] === undefined || obj[key] === null) ? "" : obj[key];
+  i.addEventListener("input", function () { own()[key] = i.value.trim(); });
+  return i;
+}
+
+// ---------- rules ----------
+//
+// Rules were a textarea of raw JSON, which is hand-editing YAML with different
+// punctuation. The guided form covers what a rule almost always is: one
+// source, one thing that happened, and either silence it or change how loudly
+// it is treated. Advanced exposes the full pattern lists, which do a thing the
+// simple form cannot -- match several values, with trailing-* prefixes.
+
+var SOURCE_NAMES = ["protect", "access", "network", "internal"];
+var SEVERITY_CHOICES = ["", "critical", "high", "medium", "low", "info"];
+
+function renderRules(body, draft) {
+  var rules = draft.rules || (draft.rules = []);
+  var card = el("div", "card");
+  card.appendChild(el("div", "muted small",
+    "Change how loudly something is treated, or silence it. Rules are applied " +
+    "in order, and the first match wins."));
+
+  var advanced = el("input");
+  advanced.type = "checkbox";
+  advanced.style.width = "auto";
+  advanced.checked = rulesNeedAdvanced(rules);
+  var ar = el("div", "row");
+  ar.appendChild(labelled("Advanced: match several values, and use * prefixes", advanced));
+  card.appendChild(ar);
+
+  var panel = el("div");
+  card.appendChild(panel);
+
+  var draw = function () {
+    clear(panel);
+    if (!rules.length) {
+      panel.appendChild(el("div", "empty",
+        "No rules. Every event is treated as its source proposed."));
+    }
+    rules.forEach(function (r, idx) {
+      panel.appendChild(ruleCard(r, idx, rules, advanced.checked, draw));
+    });
+    var bar = el("div", "formbar");
+    var add = el("button", "act primary", "Add a rule");
+    add.addEventListener("click", function () {
+      rules.push({ name: "", sources: [], conditions: [], entities: [] });
+      draw();
+    });
+    bar.appendChild(add);
+    panel.appendChild(bar);
+  };
+  advanced.addEventListener("change", draw);
+  draw();
+  body.appendChild(card);
+}
+
+// rulesNeedAdvanced reports whether any rule matches more than one value, or
+// uses a prefix pattern. The guided form would flatten those to the first
+// entry, so it does not get to open over them.
+function rulesNeedAdvanced(rules) {
+  for (var i = 0; i < rules.length; i++) {
+    var r = rules[i] || {};
+    var lists = [r.sources || [], r.conditions || [], r.entities || []];
+    for (var j = 0; j < lists.length; j++) {
+      if (lists[j].length > 1) return true;
+      if (lists[j].length === 1 && String(lists[j][0]).indexOf("*") >= 0) return true;
+    }
+  }
+  return false;
+}
+
+function ruleCard(r, idx, rules, advanced, redraw) {
+  var c = el("div", "card");
+  var f = el("div", "fields");
+  f.appendChild(labelled("Name (shown in the audit record)", bind(r, "name")));
+  c.appendChild(f);
+
+  if (!advanced) {
+    var g = el("div", "fields");
+    g.appendChild(labelled("When the source is", selectInto(r, "sources", SOURCE_NAMES)));
+    g.appendChild(labelled("and what happened is", firstOf(r, "conditions")));
+    g.appendChild(labelled("on (camera, door, blank = any)", firstOf(r, "entities")));
+    c.appendChild(g);
+  } else {
+    var h = el("div", "fields");
+    h.appendChild(labelled("Sources (comma separated, * allowed)", bindList(r, "sources")));
+    h.appendChild(labelled("Conditions (comma separated, * allowed)", bindList(r, "conditions")));
+    h.appendChild(labelled("Entities (comma separated, * allowed)", bindList(r, "entities")));
+    c.appendChild(h);
+    c.appendChild(el("div", "note",
+      "An empty list matches anything. A trailing * matches by prefix, so " +
+      "\"doorbell*\" covers every condition starting with it."));
+  }
+
+  var act = el("div", "fields");
+  var ig = el("input");
+  ig.type = "checkbox";
+  ig.style.width = "auto";
+  ig.checked = !!r.ignore;
+  ig.addEventListener("change", function () { r.ignore = ig.checked; redraw(); });
+  act.appendChild(labelled("Silence it entirely", ig));
+  if (!r.ignore) {
+    var sel = el("select");
+    SEVERITY_CHOICES.forEach(function (s) {
+      var o = document.createElement("option");
+      o.value = s;
+      o.textContent = s === "" ? "leave as the source proposed" : s;
+      if ((r.severity || "") === s) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener("change", function () { r.severity = sel.value; });
+    act.appendChild(labelled("Treat it as", sel));
+  }
+  c.appendChild(act);
+
+  if (r.ignore) {
+    // The validator refuses a blanket ignore, and finding that out at save
+    // time -- after filling the form in -- is worse than being told here.
+    var narrow = (r.sources || []).length || (r.conditions || []).length ||
+      (r.entities || []).length;
+    c.appendChild(el("div", narrow ? "note" : "delivery-error",
+      narrow
+        ? "This silences only what it matches above."
+        : "An ignore rule must narrow what it silences by source, condition or " +
+        "entity. As written this would silence everything, and the save will be refused."));
+  }
+
+  var bar = el("div", "formbar");
+  var rm = el("button", "act", "Remove");
+  rm.addEventListener("click", function () { rules.splice(idx, 1); redraw(); });
+  bar.appendChild(rm);
+  if (idx > 0) {
+    var up = el("button", "act", "Move up");
+    up.addEventListener("click", function () {
+      var t = rules[idx - 1]; rules[idx - 1] = rules[idx]; rules[idx] = t; redraw();
+    });
+    bar.appendChild(up);
+  }
+  c.appendChild(bar);
+  return c;
+}
+
+// selectInto edits a one-element list with a dropdown, for the guided view.
+function selectInto(obj, key, choices) {
+  var sel = el("select");
+  var cur = (obj[key] || [])[0] || "";
+  var opts = [""].concat(choices);
+  opts.forEach(function (s) {
+    var o = document.createElement("option");
+    o.value = s;
+    o.textContent = s === "" ? "any" : s;
+    if (cur === s) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.addEventListener("change", function () {
+    obj[key] = sel.value === "" ? [] : [sel.value];
+  });
+  return sel;
+}
+
+// firstOf edits the first entry of a list as a plain text box.
+function firstOf(obj, key) {
+  var i = el("input");
+  i.type = "text";
+  i.placeholder = "any";
+  i.value = (obj[key] || [])[0] || "";
+  i.addEventListener("input", function () {
+    var v = i.value.trim();
+    obj[key] = v === "" ? [] : [v];
+  });
+  return i;
+}

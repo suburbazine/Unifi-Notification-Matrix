@@ -115,9 +115,19 @@ type webView struct {
 // ---- inbound ----
 
 type settingsUpdate struct {
-	Consoles   []consoleUpdate     `json:"consoles"`
-	Channels   channelsUpdate      `json:"channels"`
-	Rules      rule.Set            `json:"rules"`
+	Consoles []consoleUpdate `json:"consoles"`
+	Channels channelsUpdate  `json:"channels"`
+	Rules    rule.Set        `json:"rules"`
+
+	// Policies are the escalation ladders, keyed by severity.
+	//
+	// A pointer to the map, so a client that does not mention policies leaves
+	// them alone rather than deleting every one. They were readable and not
+	// writable at all before this -- the only way to change an escalation
+	// ladder was to edit YAML, on the setting that decides whether anybody is
+	// told a second time.
+	Policies *map[string]config.Policy `json:"policies"`
+
 	QuietHours escalate.QuietHours `json:"quiet_hours"`
 	Web        webUpdate           `json:"web"`
 }
@@ -446,6 +456,17 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 	next.Rules = upd.Rules
 	next.QuietHours = upd.QuietHours
 
+	if upd.Policies != nil {
+		// An empty map means "use the shipped defaults for everything", which
+		// is a real thing to want and is how the config starts out. Stored as
+		// nil so the file says nothing rather than saying {}.
+		if len(*upd.Policies) == 0 {
+			next.Policies = nil
+		} else {
+			next.Policies = *upd.Policies
+		}
+	}
+
 	// The ack signing key is never editable here. Rotating it invalidates every
 	// acknowledgement link already sent, which for alerts still repeating means
 	// the only way left to acknowledge them is this UI -- a real cost, and not
@@ -487,6 +508,9 @@ func changedSections(before, after settingsView, touched []string) []string {
 	}
 	if !reflect.DeepEqual(before.Rules, after.Rules) {
 		out = append(out, "rules")
+	}
+	if !reflect.DeepEqual(before.Policies, after.Policies) {
+		out = append(out, "policies")
 	}
 	if !reflect.DeepEqual(before.QuietHours, after.QuietHours) {
 		out = append(out, "quiet_hours")
