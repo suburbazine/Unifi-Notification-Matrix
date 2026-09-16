@@ -285,6 +285,30 @@ recovery path when a signing step fails midway.
 
 ### If signing fails
 
+- **`No subscriptions found for ***.` at the `azure/login` step** — THE FIRST
+  FAILURE YOU WILL ACTUALLY HIT, and it does not look like what it is.
+  Observed on the first real run of this workflow.
+
+  The federation worked. The log says `Attempting Azure CLI login by using
+  OIDC...` and there is no `AADSTS70021`, so the subject matched and the token
+  was exchanged. What failed is the step afterwards: `az login` enumerates the
+  subscriptions the principal can see, and an app registration with **no role
+  assignment anywhere in the subscription** can see none, so the CLI exits 1.
+
+  It is the missing role assignment from §2c, surfacing at login rather than at
+  signing. Diagnose it in one command — an empty result is the whole answer:
+
+  ```bash
+  az role assignment list --assignee <APP_CLIENT_ID> --all -o table
+  ```
+
+  Then create it (§2c), wait a minute or two for propagation, and re-run the
+  workflow with `workflow_dispatch` against the same tag.
+
+  If the assignment exists and the subscription still is not found, check that
+  `AZURE_SUBSCRIPTION_ID` is in the same tenant as `AZURE_TENANT_ID` -- an app
+  in one tenant cannot see a subscription in another.
+
 - **`AADSTS70021` / no matching federated identity** — the subject does not
   match. It must be exactly `repo:OWNER/REPO:environment:release`, and the job
   must actually declare `environment: release`.
