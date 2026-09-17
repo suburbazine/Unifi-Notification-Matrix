@@ -557,38 +557,62 @@ func hooksStep(in Input) Step {
 		waiting = append(waiting, h.Name)
 	}
 
-	s.How = []string{
-		"In the UniFi console, open the application (Network, Protect or Access) " +
-			"and go to Settings > Alarm Manager. In Network it may be called " +
+	s.How = []string{}
+
+	// A loopback listener answers nobody but this machine, and the hook
+	// receiver lives on that same listener -- so every URL on this step is
+	// unreachable from the console, whatever else is configured correctly.
+	//
+	// Said HERE as well as on the acknowledgement step, because the two fail
+	// independently and an operator who has read one has no reason to think it
+	// applies to the other. The failure is also the quietest kind: the console
+	// reports the rule saved, nothing arrives, and nothing is recorded as
+	// rejected either, because the request never reaches this program.
+	if ListenIsLoopbackOnly(in.Listen) {
+		port := ListenPort(in.Listen)
+		if port == "" {
+			port = "8322"
+		}
+		s.How = append(s.How,
+			"NOTHING CAN REACH THESE URLS YET. web.listen is "+in.Listen+
+				", which accepts connections only from this machine, and the "+
+				"webhook endpoint is on that same listener. Set web.listen to "+
+				"0.0.0.0:"+port+" first, and restart -- until then the console "+
+				"will report the rule saved and no alarm will ever arrive.")
+	}
+
+	s.How = append(s.How,
+		"In the UniFi console, open the application (Network, Protect or Access) "+
+			"and go to Settings > Alarm Manager. In Network it may be called "+
 			"Alarms, under Settings > System.",
 		"Create one alarm. Pick the trigger you want -- for example WAN Offline.",
 		"For the action, choose Webhook, and set the method to POST.",
 		"Paste the URL for the matching hook below into the Delivery URL field.",
-		"ADD THE HEADER TOO. Both are listed below. A URL on its own is not a " +
-			"password -- it goes through this form, the console's configuration " +
-			"backup, your browser history and every proxy log on the way. The " +
-			"header does not, so this product requires both and there is no way " +
+		"ADD THE HEADER TOO. Both are listed below. A URL on its own is not a "+
+			"password -- it goes through this form, the console's configuration "+
+			"backup, your browser history and every proxy log on the way. The "+
+			"header does not, so this product requires both and there is no way "+
 			"to turn that off.",
-		"In Alarm Manager's webhook action, add a custom header with the name " +
+		"In Alarm Manager's webhook action, add a custom header with the name "+
 			"and value shown below.",
-		"Save the rule, then press Test in UniFi. The hook's card below will " +
+		"Save the rule, then press Test in UniFi. The hook's card below will "+
 			"say the alarm arrived.",
 		// One account of what Test does, not two. This line used to say a
 		// test raises a real incident, full stop, while the Webhooks tab
 		// offered a test mode whose whole point is that nothing is raised --
 		// and both were true, in different states the operator was never
 		// told about. Now the line says which state does which.
-		"PRESSING TEST RAISES A REAL INCIDENT here, on purpose: it goes through " +
-			"your rules, your ladder and your channels, so the notification " +
-			"reaches your phone and the whole chain is proven. Acknowledge it " +
-			"and you are done. To prove only that the console can reach this " +
-			"machine, without waking anybody, arm Test mode on the hook's card " +
-			"first -- arrivals are then counted and discarded, and nothing is " +
+		"PRESSING TEST RAISES A REAL INCIDENT here, on purpose: it goes through "+
+			"your rules, your ladder and your channels, so the notification "+
+			"reaches your phone and the whole chain is proven. Acknowledge it "+
+			"and you are done. To prove only that the console can reach this "+
+			"machine, without waking anybody, arm Test mode on the hook's card "+
+			"first -- arrivals are then counted and discarded, and nothing is "+
 			"raised until it lapses.",
-		"IF NOTHING ARRIVES, look at the line under each URL below. \"Refused\" " +
-			"means the console IS reaching us and the header is wrong or missing " +
+		"IF NOTHING ARRIVES, look at the line under each URL below. \"Refused\" "+
+			"means the console IS reaching us and the header is wrong or missing "+
 			"-- which is a different problem from the rule not firing at all.",
-	}
+	)
 	s.How = append(s.How,
 		"The URL for each hook is listed separately below. They are credentials: "+
 			"anyone who has one can raise an alarm on this system.")

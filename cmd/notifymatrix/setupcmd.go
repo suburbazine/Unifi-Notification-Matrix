@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -74,6 +75,56 @@ func setupInput(dataDir string) setup.Input {
 	return in
 }
 
+// hookBase is the address a UniFi console must POST an alarm to.
+//
+// IT IS NOT ack_base_url, and it used to be. That address belongs to the
+// acknowledgement LINKS, which is a different listener and often a different
+// network entirely:
+//
+//   - The hook receiver is mounted on the MAIN listener, beside the interface,
+//     on web.listen.
+//   - web.ack_listen, when set, starts a SECOND listener that serves only
+//     /ack/ and answers everything else with 404. That is the whole point of
+//     it -- it exists so a port forward can publish acknowledgements without
+//     publishing the status page and the settings sign-in.
+//
+// So on the configuration the setup checklist actively recommends -- an
+// ack_base_url pointing at a forwarded port, scoped with ack_listen -- the
+// hook URL came out as https://alerts.example.com/hook/<token>, which reaches
+// the ack-only listener and 404s. And the receiver answers every unknown path
+// with a bare 404 by design, so the operator sees a rule that looks perfect at
+// the UniFi end, nothing arriving, and no rejection recorded either, because
+// the request never reached the receiver at all. Steps 4 and 5 of the
+// checklist are adjacent: doing what it says produced the failure.
+//
+// The second error was quieter and would have survived the first being fixed:
+// it sent a console sitting on the same LAN out to a public hostname and back,
+// over plain http, to reach a machine in the same building.
+func hookBase(in setup.Input) string {
+	port := setup.ListenPort(in.Listen)
+	if port == "" {
+		port = "8322"
+	}
+
+	// A listener bound to one specific address is already the answer, and is
+	// more likely to be right than anything guessed from the interface list.
+	if host, _, err := net.SplitHostPort(strings.TrimSpace(in.Listen)); err == nil {
+		if ip := net.ParseIP(host); ip != nil && !ip.IsUnspecified() && !ip.IsLoopback() {
+			return "http://" + net.JoinHostPort(host, port)
+		}
+	}
+
+	// Bound to everything, or to loopback. Either way the console needs this
+	// machine's address on the network it shares with it. Loopback is a
+	// misconfiguration rather than an address to print -- the checklist says
+	// so at the step that fixes it -- but the LAN address is still the one
+	// they will need once they have.
+	if lan := setup.LocalAddress(); lan != "" {
+		return "http://" + net.JoinHostPort(lan, port)
+	}
+	return "http://<this machine's LAN address>:" + port
+}
+
 func fromConfig(in setup.Input, cfg *config.Config) setup.Input {
 	in.Consoles = len(cfg.Consoles)
 	seen := map[string]bool{}
@@ -109,10 +160,7 @@ func fromConfig(in setup.Input, cfg *config.Config) setup.Input {
 	// that already has the config file open. The daemon's public status
 	// endpoint reports the hook's NAME and whether anything arrived, never the
 	// URL.
-	base := cfg.Web.AckBaseURL
-	if base == "" {
-		base = "http://" + in.Listen
-	}
+	base := hookBase(in)
 	for _, h := range config.BuildHooks(cfg) {
 		in.Hooks = append(in.Hooks, setup.HookState{
 			Name: h.Name, Product: h.Product,

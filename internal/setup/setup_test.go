@@ -572,3 +572,47 @@ func TestEveryStepHasAStableKey(t *testing.T) {
 		t.Error("the hooks step is not keyed \"hooks\", so the credentials will be printed under the wrong step")
 	}
 }
+
+// A loopback listener answers nobody but this machine, and the webhook
+// receiver is on that same listener -- so every hook URL is unreachable from
+// the console whatever else is right. It is the quietest failure there is: the
+// console reports the rule saved, nothing arrives, and nothing is recorded as
+// rejected either, because the request never reaches this program.
+func TestTheHooksStepSaysWhenNothingCanReachIt(t *testing.T) {
+	in := Input{
+		Listen: "127.0.0.1:8322",
+		Hooks:  []HookState{{Name: "wan-down", Product: "network"}},
+	}
+	step := hooksStep(in)
+
+	var warned bool
+	for _, h := range step.How {
+		if strings.Contains(h, "NOTHING CAN REACH THESE URLS") {
+			warned = true
+			if !strings.Contains(h, "0.0.0.0:8322") {
+				t.Errorf("the warning does not name the fix: %q", h)
+			}
+		}
+	}
+	if !warned {
+		t.Errorf("a loopback listener produced no warning on the hooks step:\n%v", step.How)
+	}
+	if KindOf(step.How[0]) != Warning {
+		t.Errorf("the warning is not rendered as one: kind = %v", KindOf(step.How[0]))
+	}
+}
+
+// ...and it must not cry wolf on a listener that is actually reachable.
+func TestTheHooksStepIsQuietWhenTheListenerIsReachable(t *testing.T) {
+	for _, addr := range []string{"0.0.0.0:8322", "192.168.20.115:8322"} {
+		step := hooksStep(Input{
+			Listen: addr,
+			Hooks:  []HookState{{Name: "wan-down", Product: "network"}},
+		})
+		for _, h := range step.How {
+			if strings.Contains(h, "NOTHING CAN REACH") {
+				t.Errorf("%s was warned about and is reachable", addr)
+			}
+		}
+	}
+}
