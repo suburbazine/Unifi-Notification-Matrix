@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -25,26 +25,15 @@ import (
 func TestARunThatCannotStartRecordsWhy(t *testing.T) {
 	dir := t.TempDir()
 
-	// A configuration that loads and is then refused -- the shape of the one
+	// A configuration that parses and is then refused -- the shape of the one
 	// found in the field, with an address no machine has (TEST-NET-1).
-	cfg := config.Default()
-	if err := config.Save(dir, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	path := config.Path(dir)
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The KEY, not the value: the value also appears in the file's comments,
-	// and breaking a comment leaves a valid configuration that goes on to bind
-	// a real port on the machine running the test.
-	key := regexp.MustCompile(`(?m)^(\s+listen:\s*).*$`)
-	if n := len(key.FindAllString(string(b), -1)); n != 1 {
-		t.Fatalf("expected exactly one listen: key, found %d:\n%s", n, b)
-	}
-	broken := key.ReplaceAllString(string(b), "${1}192.0.2.1:8322")
-	if err := os.WriteFile(path, []byte(broken), 0o600); err != nil {
+	//
+	// Written by hand rather than through config.Save: saving mints and
+	// encrypts the acknowledgement key, and a Linux CI runner has no keyring
+	// to encrypt it with. The refusal under test happens at load, before any
+	// secret is needed.
+	broken := fmt.Sprintf("version: %d\nweb:\n  listen: 192.0.2.1:8322\n", config.SchemaVersion)
+	if err := os.WriteFile(config.Path(dir), []byte(broken), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
