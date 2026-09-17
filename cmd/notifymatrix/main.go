@@ -866,6 +866,17 @@ func runDaemon(ctx context.Context, dataDir string) error {
 			ApplyUpdate: func(ctx context.Context, v string) error {
 				return upd.apply(ctx, v, dataDir)
 			},
+			KnownEntities: func() []web.EntitySeen {
+				seen := supervisor.KnownEntities()
+				out := make([]web.EntitySeen, 0, len(seen))
+				for _, e := range seen {
+					out = append(out, web.EntitySeen{
+						Source: e.Source, ID: e.ID, Name: e.Name,
+						Kind: e.Kind, LastAt: e.LastAt,
+					})
+				}
+				return out
+			},
 			HookTestMode: func(name string, minutes int) (time.Time, error) {
 				if minutes <= 0 {
 					return time.Time{}, receiver.DisarmTest(name)

@@ -203,6 +203,13 @@ because that is the only way UniFi Network alarms exist at all.
 
 ![The inbound hook editor](docs/images/hooks.png)
 
+## What it can tell you about
+
+[docs/CONDITIONS.md](docs/CONDITIONS.md) lists every condition this build
+understands -- what each means and which surface produces it. It is generated
+from the code and checked by a test, so it cannot quietly drift from what the
+program actually does. The Rules editor offers the same list.
+
 ## The capability probe
 
 UniFi's surfaces are version-gated and under-observed. Protect's event

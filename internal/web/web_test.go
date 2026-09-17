@@ -201,6 +201,9 @@ type harness struct {
 	// hookArmed and hookFired record what the hook test endpoints asked for.
 	hookArmed []string
 	hookFired []string
+
+	// entities stands in for what the running daemon has seen.
+	entities []EntitySeen
 }
 
 // testConfig is valid, exercises every secret-bearing field, and plants the
@@ -296,6 +299,11 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 				return "", nil
 			}
 			return fn(ctx, name)
+		},
+		KnownEntities: func() []EntitySeen {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return h.entities
 		},
 		HookTestMode: func(name string, minutes int) (time.Time, error) {
 			h.mu.Lock()

@@ -10,6 +10,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/rule"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 )
@@ -45,6 +46,20 @@ type settingsView struct {
 	// only. A key that sat in a readable file should be treated as exposed,
 	// and the UI says so loudly.
 	PlaintextFields []string `json:"plaintext_fields,omitempty"`
+
+	// Conditions is the whole vocabulary a RULE can match, with what each one
+	// means and which surface emits it.
+	//
+	// Sent because the Rules editor asked operators to type a condition into a
+	// free-text box while Source and Severity both had dropdowns -- and a
+	// mistyped condition does not fail, it just never matches, so a rule meant
+	// to silence something does not silence it and nothing says so.
+	Conditions []event.ConditionDoc `json:"conditions,omitempty"`
+
+	// Entities are the things this daemon has seen events about, offered as
+	// suggestions for a rule's entity field. Suggestions only: an operator may
+	// well want to write a rule for a camera that has not fired yet.
+	Entities []EntitySeen `json:"entities,omitempty"`
 
 	// HookConditions is what an inbound hook may be told it means.
 	//
@@ -339,6 +354,7 @@ func viewSettings(c *config.Config) settingsView {
 			AckKeySet:  !c.Web.AckKey.IsZero(),
 		},
 	}
+	v.Conditions = event.Catalogue()
 	v.HookConditions = config.KnownConditions
 	for _, h := range c.Hooks {
 		v.Hooks = append(v.Hooks, hookView{
@@ -441,7 +457,21 @@ func viewSettings(c *config.Config) settingsView {
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, viewSettings(s.deps.Config()))
+	writeJSON(w, http.StatusOK, s.settingsWithSuggestions())
+}
+
+// settingsWithSuggestions is the view plus what only the RUNNING daemon knows:
+// the entities it has actually seen events about.
+//
+// Added here rather than in viewSettings because it is not configuration and
+// must not be: a save round-trips the view, and suggestions written back into
+// the config file would be observation masquerading as settings.
+func (s *Server) settingsWithSuggestions() settingsView {
+	v := viewSettings(s.deps.Config())
+	if s.deps.KnownEntities != nil {
+		v.Entities = s.deps.KnownEntities()
+	}
+	return v
 }
 
 // handleSaveSettings applies an update and hands it to the injected SaveFunc.

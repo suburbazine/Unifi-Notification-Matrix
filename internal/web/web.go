@@ -103,6 +103,14 @@ type Deps struct {
 	// and this proves that when it does, somebody's phone rings.
 	FireHookTest func(name string) (title string, err error)
 
+	// KnownEntities is what this daemon has actually seen events about.
+	//
+	// The entity field of a rule is the one no fixed list can supply -- camera
+	// and door names belong to the site, not to this build -- so the only
+	// honest suggestions are the things that have really come through. Empty
+	// on a fresh start, which is the truth rather than a gap.
+	KnownEntities func() []EntitySeen
+
 	// Checklist reports what is still needed to make this installation work.
 	//
 	// Optional: a build that does not supply it simply has no setup panel. The
@@ -380,4 +388,15 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = w.Write(b)
+}
+
+// EntitySeen is one thing the daemon has observed, offered to the Rules
+// editor. Mirrors ingest.EntitySeen; declared here so this package does not
+// depend on the ingest supervisor for a shape it only renders.
+type EntitySeen struct {
+	Source string    `json:"source"`
+	ID     string    `json:"id"`
+	Name   string    `json:"name"`
+	Kind   string    `json:"kind"`
+	LastAt time.Time `json:"last_at"`
 }

@@ -455,6 +455,21 @@ can tell "configured" from "working".
 
 ---
 
+### What you can write a rule about
+
+Every condition this build understands, what each one means, and which surface
+produces it, is listed in **[docs/CONDITIONS.md](CONDITIONS.md)** -- and the
+Rules editor offers the same list, so there is no need to memorise it or wait
+for something to fire and read it out of the log.
+
+Two things that list does not do. It cannot know your camera and door names,
+because those are yours; the editor suggests the ones this daemon has actually
+seen events about, and that list is empty until something happens. And it is
+not everything UniFi might send -- firmware emits types this build does not
+map. `notifymatrix probe` asks your own console what it really exposes.
+
+---
+
 ## 7. The alarms that need a rule made by hand
 
 Some alarms are **not readable by any API**. They exist only as UniFi **Alarm

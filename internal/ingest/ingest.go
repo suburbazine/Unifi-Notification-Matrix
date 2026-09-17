@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -69,6 +70,9 @@ const restartDelay = 30 * time.Second
 type Supervisor struct {
 	deps    Deps
 	sources []event.Source
+
+	// entities is what has actually been seen, for the Rules editor.
+	entities map[entityKey]*EntitySeen
 
 	mu    sync.Mutex
 	state map[string]*sourceState
@@ -150,6 +154,7 @@ func (s *Supervisor) runSource(ctx context.Context, src event.Source) {
 	name := src.Name()
 	sink := event.SinkFunc(func(ev event.Event) {
 		s.note(name)
+		s.noteEntity(name, ev.Entity)
 		if err := s.deps.Handle(ctx, ev); err != nil && ctx.Err() == nil {
 			// Reported, never returned. See Deps.Handle.
 			s.deps.Logf("ingest: %s: handling %s: %v", name, ev.Condition, err)
@@ -298,6 +303,92 @@ func (s *Supervisor) checkLiveness(ctx context.Context) {
 			_ = s.deps.Resolve(ctx, sourceEntity(name), event.ConditionSourceSilent)
 		}
 	}
+}
+
+// maxKnownEntities bounds what the Rules editor is offered.
+//
+// Bounded because it is fed by arriving events and nothing else prunes it. A
+// site with a lot of transient clients would otherwise grow this without
+// limit, which is a memory leak dressed up as a convenience.
+const maxKnownEntities = 500
+
+// entityKey identifies one observed thing. A struct rather than a joined
+// string: a separator is a bug waiting for a device name that contains it.
+type entityKey struct{ source, id, name string }
+
+// EntitySeen is one thing this daemon has actually observed.
+//
+// BOTH the id and the name, because a rule matches either (see Rule.Matches),
+// and they are different in kind: the id is stable and unreadable, the name is
+// readable and changes when somebody renames a camera. An operator wants to
+// pick the name; a rule that has to survive a rename wants the id.
+type EntitySeen struct {
+	Source string    `json:"source"`
+	ID     string    `json:"id"`
+	Name   string    `json:"name"`
+	Kind   string    `json:"kind"`
+	LastAt time.Time `json:"last_at"`
+}
+
+// noteEntity remembers something an event was about.
+//
+// The entity field of a rule is the one no fixed list can supply -- camera and
+// door names belong to the site, not to this build -- so the only honest
+// source of suggestions is what has actually come through. Everything else
+// would be a guess presented as a fact.
+func (s *Supervisor) noteEntity(source string, ent event.Entity) {
+	if ent.ID == "" && ent.Name == "" {
+		return
+	}
+	key := entityKey{source: source, id: ent.ID, name: ent.Name}
+	now := s.deps.Now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.entities == nil {
+		s.entities = map[entityKey]*EntitySeen{}
+	}
+	if e, ok := s.entities[key]; ok {
+		e.LastAt = now
+		if ent.Name != "" {
+			e.Name = ent.Name
+		}
+		return
+	}
+	if len(s.entities) >= maxKnownEntities {
+		// Full. Drop the least recently seen, which is the one an operator is
+		// least likely to be writing a rule about.
+		var oldestKey entityKey
+		var oldest time.Time
+		var haveOldest bool
+		for k, e := range s.entities {
+			if !haveOldest || e.LastAt.Before(oldest) {
+				oldestKey, oldest, haveOldest = k, e.LastAt, true
+			}
+		}
+		delete(s.entities, oldestKey)
+	}
+	s.entities[key] = &EntitySeen{
+		Source: source, ID: ent.ID, Name: ent.Name, Kind: ent.Kind, LastAt: now,
+	}
+}
+
+// KnownEntities reports what this daemon has seen events about, most recent
+// first. Empty on a fresh start, which is honest: nothing has happened yet.
+func (s *Supervisor) KnownEntities() []EntitySeen {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]EntitySeen, 0, len(s.entities))
+	for _, e := range s.entities {
+		out = append(out, *e)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].LastAt.Equal(out[j].LastAt) {
+			return out[i].LastAt.After(out[j].LastAt)
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
 
 // sourceEntity identifies one source for an internal incident. Per source, so

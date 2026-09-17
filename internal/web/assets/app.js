@@ -513,10 +513,14 @@ function bind(obj, key, numeric) {
   });
   return i;
 }
-function bindList(obj, key) {
+// bindList edits a comma-separated list. `seen`, when given, attaches the
+// observed-entity suggestions -- a datalist still completes the value being
+// typed after the last comma, so it helps in the advanced editor too.
+function bindList(obj, key, seen) {
   var i = keepOutOfPasswordManagers(el("input"));
   i.type = "text";
   i.value = (obj[key] || []).join(", ");
+  if (seen && seen.length) i.setAttribute("list", entityDatalist(seen));
   i.addEventListener("input", function () {
     obj[key] = i.value.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
   });
@@ -835,7 +839,7 @@ function renderSettings(body, s) {
   renderPolicies(body, draft);
 
   body.appendChild(el("h3", null, "Rules"));
-  renderRules(body, draft);
+  renderRules(body, draft, s.conditions || [], s.entities || []);
 
   if ((draft.plaintext_fields || []).length) {
     var pc = el("div", "card");
@@ -1532,7 +1536,7 @@ function durationField(obj, key, own) {
 var SOURCE_NAMES = ["protect", "access", "network", "internal"];
 var SEVERITY_CHOICES = ["", "critical", "high", "medium", "low", "info"];
 
-function renderRules(body, draft) {
+function renderRules(body, draft, vocab, seen) {
   var rules = draft.rules || (draft.rules = []);
   var card = el("div", "card");
   card.appendChild(el("div", "muted small",
@@ -1557,7 +1561,7 @@ function renderRules(body, draft) {
         "No rules. Every event is treated as its source proposed."));
     }
     rules.forEach(function (r, idx) {
-      panel.appendChild(ruleCard(r, idx, rules, advanced.checked, draw));
+      panel.appendChild(ruleCard(r, idx, rules, advanced.checked, draw, vocab || [], seen || []));
     });
     var bar = el("div", "formbar");
     var add = el("button", "act primary", "Add a rule");
@@ -1588,7 +1592,189 @@ function rulesNeedAdvanced(rules) {
   return false;
 }
 
-function ruleCard(r, idx, rules, advanced, redraw) {
+// entityField is free text WITH suggestions, and the split matters.
+//
+// No fixed list can supply this one: camera and door names belong to the site,
+// not to this build. The only honest suggestions are the things events have
+// actually been about -- so they come from what the running daemon has seen,
+// and an empty list on a fresh install is the truth rather than a gap.
+//
+// It stays free text because an operator may legitimately write a rule for a
+// camera that has not fired yet, or use a * prefix. A dropdown here would be a
+// list pretending to be exhaustive about somebody else's building.
+function entityField(r, seen) {
+  var i = keepOutOfPasswordManagers(el("input"));
+  i.type = "text";
+  i.placeholder = "any";
+  i.value = (r.entities || [])[0] || "";
+  i.setAttribute("list", entityDatalist(seen));
+  i.addEventListener("input", function () {
+    var v = i.value.trim();
+    r.entities = v === "" ? [] : [v];
+  });
+
+  var wrap = el("div", "");
+  wrap.appendChild(i);
+  if (!(seen || []).length) {
+    wrap.appendChild(el("div", "note",
+      "No suggestions yet: nothing has produced an event since this daemon " +
+      "started. Names appear here once they do. A rule matches an entity by " +
+      "its name or its id, and either works."));
+  }
+  return wrap;
+}
+
+// entityDatalist builds (once) the shared <datalist> of observed entities.
+//
+// Both the NAME and the ID are offered, because a rule matches either and they
+// answer different needs: the name is what a person recognises, and the id is
+// what survives somebody renaming a camera.
+var entityListID = "";
+function entityDatalist(seen) {
+  if (entityListID) {
+    var old = document.getElementById(entityListID);
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+  }
+  entityListID = "entities-seen";
+  var dl = document.createElement("datalist");
+  dl.id = entityListID;
+  var added = {};
+  (seen || []).forEach(function (e) {
+    [e.name, e.id].forEach(function (v) {
+      if (!v || added[v]) return;
+      added[v] = true;
+      var o = document.createElement("option");
+      o.value = v;
+      o.label = (e.name && e.id && v === e.id ? e.name + " " : "") +
+        "(" + e.source + (e.kind ? " " + e.kind : "") + ")";
+      dl.appendChild(o);
+    });
+  });
+  document.body.appendChild(dl);
+  return entityListID;
+}
+
+// conditionPicker offers the vocabulary instead of asking somebody to guess it.
+//
+// Source and Severity have always been dropdowns here. Condition -- the one
+// field with a fixed, finite, already-loaded vocabulary -- was a text box with
+// the placeholder "any", and a typo in it does not fail: the rule silently
+// never matches. A rule written to silence a noisy camera goes on not
+// silencing it, and nothing anywhere says so.
+//
+// Grouped, because thirty-nine flat entries is a list nobody reads, and each
+// option carries what it MEANS rather than just its name. Anything already in
+// the config is kept selectable even if this build no longer lists it, so
+// opening the page cannot quietly rewrite a rule somebody relies on.
+function conditionPicker(r, vocab) {
+  var cur = (r.conditions || [])[0] || "";
+  var sel = el("select");
+
+  var anyOpt = document.createElement("option");
+  anyOpt.value = "";
+  anyOpt.textContent = "anything";
+  sel.appendChild(anyOpt);
+
+  var groups = {}, order = [];
+  (vocab || []).forEach(function (c) {
+    if (!groups[c.group]) { groups[c.group] = []; order.push(c.group); }
+    groups[c.group].push(c);
+  });
+
+  var known = false;
+  order.forEach(function (g) {
+    var og = document.createElement("optgroup");
+    og.label = g;
+    groups[g].forEach(function (c) {
+      var o = document.createElement("option");
+      o.value = c.name;
+      o.textContent = c.name + " — " + c.meaning;
+      if (c.name === cur) { o.selected = true; known = true; }
+      og.appendChild(o);
+    });
+    sel.appendChild(og);
+  });
+
+  // A value this build does not know -- an older config, or a hand-edited
+  // file. Kept and marked rather than silently dropped on the next save.
+  if (cur !== "" && !known) {
+    var og2 = document.createElement("optgroup");
+    og2.label = "In your configuration, not in this build";
+    var o2 = document.createElement("option");
+    o2.value = cur;
+    o2.textContent = cur + " — this build does not emit this; the rule will never match";
+    o2.selected = true;
+    og2.appendChild(o2);
+    sel.appendChild(og2);
+  }
+
+  var meaning = el("div", "note", "");
+  var describe = function () {
+    var v = sel.value;
+    if (v === "") {
+      meaning.textContent = "Matches every condition from the chosen source.";
+      return;
+    }
+    var found = null;
+    (vocab || []).forEach(function (c) { if (c.name === v) found = c; });
+    if (!found) {
+      meaning.textContent = "This build does not emit " + v + ", so this rule will never match.";
+      return;
+    }
+    meaning.textContent = found.meaning +
+      (found.sources && found.sources.length
+        ? "  Emitted by: " + found.sources.join(", ") + "."
+        : "  No source emits this directly -- it arrives only on an inbound webhook you point at it.");
+  };
+  sel.addEventListener("change", function () {
+    var v = sel.value;
+    r.conditions = v === "" ? [] : [v];
+    describe();
+  });
+  describe();
+
+  var wrap = el("div", "");
+  wrap.appendChild(sel);
+  wrap.appendChild(meaning);
+  return wrap;
+}
+
+// conditionReference lists the whole vocabulary for the Advanced editor, where
+// the field is free text because that is where * prefixes live.
+//
+// Collapsed, so it is available without being in the way. It says what it is
+// and what it is NOT: these are the conditions a rule can match, which is not
+// the same as everything a console might send.
+function conditionReference(vocab) {
+  var d = document.createElement("details");
+  var sum = document.createElement("summary");
+  sum.textContent = "Every condition this build can match (" + (vocab || []).length + ")";
+  d.appendChild(sum);
+
+  d.appendChild(el("div", "note",
+    "These are the conditions a rule can match, because rules match this " +
+    "build's vocabulary. That is not the same as everything your UniFi might " +
+    "send: firmware emits types this build does not map, and those are counted " +
+    "as unrecognised rather than becoming a condition. Run \"notifymatrix " +
+    "probe\" to ask your own console what it actually exposes."));
+
+  var lastGroup = "";
+  (vocab || []).forEach(function (c) {
+    if (c.group !== lastGroup) {
+      d.appendChild(el("div", "label", c.group));
+      lastGroup = c.group;
+    }
+    var row = el("div", "note");
+    var name = el("code", "cond", c.name);
+    row.appendChild(name);
+    row.appendChild(document.createTextNode(" — " + c.meaning +
+      (c.sources && c.sources.length ? "  (" + c.sources.join(", ") + ")" : "  (inbound webhook only)")));
+    d.appendChild(row);
+  });
+  return d;
+}
+
+function ruleCard(r, idx, rules, advanced, redraw, vocab, seen) {
   var c = el("div", "card");
   var f = el("div", "fields");
   f.appendChild(labelled("Name (shown in the audit record)", bind(r, "name")));
@@ -1597,18 +1783,19 @@ function ruleCard(r, idx, rules, advanced, redraw) {
   if (!advanced) {
     var g = el("div", "fields");
     g.appendChild(labelled("When the source is", selectInto(r, "sources", SOURCE_NAMES)));
-    g.appendChild(labelled("and what happened is", firstOf(r, "conditions")));
-    g.appendChild(labelled("on (camera, door, blank = any)", firstOf(r, "entities")));
+    g.appendChild(labelled("and what happened is", conditionPicker(r, vocab)));
+    g.appendChild(labelled("on (camera, door, blank = any)", entityField(r, seen)));
     c.appendChild(g);
   } else {
     var h = el("div", "fields");
     h.appendChild(labelled("Sources (comma separated, * allowed)", bindList(r, "sources")));
     h.appendChild(labelled("Conditions (comma separated, * allowed)", bindList(r, "conditions")));
-    h.appendChild(labelled("Entities (comma separated, * allowed)", bindList(r, "entities")));
+    h.appendChild(labelled("Entities (comma separated, * allowed)", bindList(r, "entities", seen)));
     c.appendChild(h);
     c.appendChild(el("div", "note",
       "An empty list matches anything. A trailing * matches by prefix, so " +
       "\"doorbell*\" covers every condition starting with it."));
+    c.appendChild(conditionReference(vocab));
   }
 
   var act = el("div", "fields");
