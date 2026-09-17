@@ -86,8 +86,8 @@ func demoCmd(dataDir string, explicitDir bool) int {
 		PasswordHash:    func() string { return "" },
 		SetPasswordHash: func(string) error { return nil },
 		Checklist:       func() setup.Input { return demoChecklist(cfg) },
-		TestChannel: func(context.Context, string) error {
-			return fmt.Errorf("nothing is sent in demo mode")
+		TestChannel: func(context.Context, string) (string, error) {
+			return "", fmt.Errorf("nothing is sent in demo mode")
 		},
 	})
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/email"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/ntfy"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/pushover"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/voice"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/webhook"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 )
@@ -113,6 +114,30 @@ func BuildDelivery(c *Config, onResult func(channel.Result)) (*Delivery, error) 
 		}
 	}
 
+	if v := c.Channels.Voice; v != nil && v.Enabled {
+		ch, err := voice.New(voice.Config{
+			AccountSID: v.AccountSID,
+			AuthToken:  v.AuthToken,
+			From:       v.From,
+			Recipients: v.Recipients,
+			Voice:      v.Voice,
+			Language:   v.Language,
+		}, nil)
+		if err != nil {
+			// Recorded and skipped, never fatal: see Delivery.broken.
+			//
+			// It matters more here than anywhere else that this does not
+			// return. Validate refuses an incomplete voice channel at save
+			// time, so reaching this branch means a config that got past that
+			// -- hand-edited, or written by an older build -- and the reply to
+			// a mistyped phone number cannot be an alarm system that will not
+			// start.
+			d.broken["voice"] = err
+		} else {
+			d.queues["voice"] = channel.NewQueue(ch, channel.DefaultQueueDepth, onResult)
+		}
+	}
+
 	for _, h := range c.WebhookEndpoints() {
 		if !h.Enabled {
 			continue
@@ -160,12 +185,17 @@ func emailTLSMode(s string) email.TLSMode {
 // Named channels only. "Test everything" would fire every channel at once,
 // which on a site with email is a way to get rate-limited by your own provider
 // while checking a typo.
-func (d *Delivery) Test(ctx context.Context, name string) error {
+// The string reports what the test ACTUALLY DID, for the channels where that
+// is not "delivered a message". Empty means the generic answer is true.
+func (d *Delivery) Test(ctx context.Context, name string) (string, error) {
 	q, ok := d.queues[name]
 	if !ok {
-		return fmt.Errorf("channel %q is not enabled", name)
+		return "", fmt.Errorf("channel %q is not enabled", name)
 	}
-	return q.Test(ctx)
+	if err := q.Test(ctx); err != nil {
+		return "", err
+	}
+	return q.TestSummary(), nil
 }
 
 // Names lists the live channels.

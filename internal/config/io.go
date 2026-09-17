@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ack"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/voice"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/webhook"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/fileperm"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
@@ -168,6 +169,19 @@ func (c *Config) ApplyDefaults() {
 
 	if c.Channels.Ntfy != nil && c.Channels.Ntfy.ServerURL == "" {
 		c.Channels.Ntfy.ServerURL = "https://ntfy.sh"
+	}
+	// Written in rather than left blank so the file says what actually goes on
+	// the wire. The channel would default these itself, but then the spoken
+	// voice is decided somewhere the operator cannot read, and the whole
+	// reason both are sent explicitly is that a default they cannot see is
+	// free to change under them.
+	if v := c.Channels.Voice; v != nil {
+		if strings.TrimSpace(v.Voice) == "" {
+			v.Voice = voice.DefaultVoice
+		}
+		if strings.TrimSpace(v.Language) == "" {
+			v.Language = voice.DefaultLanguage
+		}
 	}
 	if e := c.Channels.Email; e != nil {
 		if e.TLS == "" {

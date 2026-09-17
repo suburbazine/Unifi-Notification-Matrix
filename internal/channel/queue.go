@@ -348,6 +348,18 @@ func (q *Queue) Close() {
 	q.wg.Wait()
 }
 
+// TestSummary reports what this channel's Test actually did, or "" when the
+// generic "a message was delivered" answer is true for it.
+//
+// Forwarded from the channel rather than exposing the channel itself, so the
+// queue stays the only thing that touches it.
+func (q *Queue) TestSummary() string {
+	if td, ok := q.ch.(TestDescriber); ok {
+		return td.TestSummary()
+	}
+	return ""
+}
+
 // Test sends the channel's own proof-of-configuration message.
 //
 // Deliberately NOT queued. A test is a person standing in front of the screen

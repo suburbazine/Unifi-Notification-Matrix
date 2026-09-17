@@ -218,8 +218,13 @@ func TestValidateAgainstChannels(t *testing.T) {
 	t.Run("a stage naming a missing channel is refused", func(t *testing.T) {
 		p := DefaultPolicies()
 		crit := p[incident.SeverityCritical]
+		// The placeholder used to be "voice", which was fine right up until
+		// voice was built and joined ImplementedChannels: the stand-in for
+		// "a channel that does not exist" became a channel that does, and this
+		// test failed for saying something true. A name nothing will ever
+		// deliver through cannot do that again.
 		crit.Stages = append(crit.Stages, Stage{
-			After: time.Hour, Channels: []string{"voice"},
+			After: time.Hour, Channels: []string{"carrier-pigeon"},
 		})
 		p[incident.SeverityCritical] = crit
 
@@ -229,7 +234,7 @@ func TestValidateAgainstChannels(t *testing.T) {
 		}
 		// The message has to say which severity, which stage and which
 		// channel, or the operator cannot fix it.
-		for _, want := range []string{"critical", "voice"} {
+		for _, want := range []string{"critical", "carrier-pigeon"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error message does not mention %q: %v", want, err)
 			}
@@ -249,10 +254,10 @@ func TestValidateAgainstChannels(t *testing.T) {
 	t.Run("reports every problem, not just the first", func(t *testing.T) {
 		p := map[incident.Severity]Policy{
 			incident.SeverityHigh: {Name: "high", Stages: []Stage{
-				{After: 0, Channels: []string{"voice", "pushover"}}}},
+				{After: 0, Channels: []string{"carrier-pigeon", "smoke-signal"}}}},
 		}
 		err := ValidateAgainstChannels(p, []string{"ntfy"})
-		for _, want := range []string{"voice", "pushover"} {
+		for _, want := range []string{"carrier-pigeon", "smoke-signal"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error does not mention %q: %v", want, err)
 			}

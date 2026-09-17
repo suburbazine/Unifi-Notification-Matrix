@@ -70,6 +70,7 @@ func (c Config) Warnings() []string {
 		}
 	}
 	w = append(w, c.unavailableChannelWarnings()...)
+	w = append(w, c.voiceOnNoLadderWarning()...)
 	w = append(w, c.exposureWarnings()...)
 	return w
 }
@@ -268,6 +269,7 @@ func (c Config) validateChannels() Problems {
 		}
 	}
 	p = append(p, c.validatePushover()...)
+	p = append(p, c.validateVoice()...)
 	p = append(p, c.validateWebhook()...)
 	return p
 }
@@ -292,6 +294,96 @@ func (c Config) validatePushover() Problems {
 	return p
 }
 
+// validateVoice refuses an enabled voice channel that could not place a call.
+//
+// Everything here is checked again by voice.New, which is where it has to be
+// -- a channel cannot trust that anybody validated its Config. Checking it a
+// second time at this layer is what turns "the voice channel is broken, see
+// the health page" into a rejected field at the moment somebody typed it,
+// which is the difference between finding out now and finding out from a
+// silent rung during an alarm.
+func (c Config) validateVoice() Problems {
+	var p Problems
+	v := c.Channels.Voice
+	if v == nil || !v.Enabled {
+		return nil
+	}
+	// Named separately rather than as "credentials missing": they are two
+	// values from the same page of the Twilio console and an operator who
+	// pasted one has usually pasted it into the wrong box.
+	if v.AccountSID.IsZero() {
+		p = append(p, "channel voice: needs a Twilio account SID "+
+			"(it begins \"AC\" and is on the Twilio console home page)")
+	} else if !strings.HasPrefix(v.AccountSID.Reveal(), "AC") {
+		// The message must not quote what it found. If the auth token really
+		// is in this field, echoing it writes the credential into a startup
+		// log and into the UI's problem list.
+		p = append(p, "channel voice: the account SID must begin \"AC\" "+
+			"(the auth token goes in the token field, not this one)")
+	}
+	if v.AuthToken.IsZero() {
+		p = append(p, "channel voice: needs the Twilio auth token "+
+			"(it is next to the account SID in the console -- it is not the account SID)")
+	}
+
+	if from := strings.TrimSpace(v.From); from == "" {
+		p = append(p, "channel voice: needs a from number -- a number bought "+
+			"from Twilio, or one verified as an outgoing caller ID on the account")
+	} else if !validE164(from) {
+		p = append(p, fmt.Sprintf("channel voice: from %q is not in E.164 form -- "+
+			"a + followed by the country code and the number, no spaces, dashes "+
+			"or parentheses (for example +15552223214)", v.From))
+	}
+
+	var recipients int
+	for _, to := range v.Recipients {
+		to = strings.TrimSpace(to)
+		if to == "" {
+			continue
+		}
+		recipients++
+		if !validE164(to) {
+			p = append(p, fmt.Sprintf("channel voice: recipient %q is not in "+
+				"E.164 form -- a + followed by the country code and the number, "+
+				"no spaces, dashes or parentheses (for example +15558675310)", to))
+		}
+	}
+	// An enabled channel with nobody to call is the shape this product exists
+	// to refuse: it would report a healthy channel, accept every alert handed
+	// to it, and ring nobody at all.
+	if recipients == 0 {
+		p = append(p, "channel voice: has no recipients, so it would call nobody")
+	}
+	return p
+}
+
+// validE164 is the shape Twilio insists on: a leading +, a country code that
+// never begins with 0, then digits, at most fifteen of them.
+//
+// Deliberately a copy of the check inside internal/channel/voice rather than
+// a shared helper. Ten lines duplicated is cheaper than this package importing
+// a channel for a string check, and the two cannot drift in a way that matters
+// -- the channel's copy is the one that decides what gets sent, and this one
+// exists only to say no earlier and more kindly.
+func validE164(s string) bool {
+	if !strings.HasPrefix(s, "+") {
+		return false
+	}
+	digits := s[1:]
+	if len(digits) < 2 || len(digits) > 15 {
+		return false
+	}
+	if digits[0] == '0' {
+		return false
+	}
+	for i := 0; i < len(digits); i++ {
+		if digits[i] < '0' || digits[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func (c Config) validateWebhook() Problems {
 	var p Problems
 
@@ -299,7 +391,7 @@ func (c Config) validateWebhook() Problems {
 	// because a policy rung names a channel and there is no way to say which
 	// of two "alerts" it meant. A collision with "ntfy" is worse: the rung
 	// would silently address whichever the map happened to keep.
-	reserved := map[string]bool{"ntfy": true, "email": true, "pushover": true}
+	reserved := map[string]bool{"ntfy": true, "email": true, "pushover": true, "voice": true}
 	seen := map[string]bool{}
 
 	for _, w := range c.WebhookEndpoints() {
@@ -407,6 +499,39 @@ func (c Config) validateWeb() Problems {
 	return p
 }
 
+// voiceOnNoLadderWarning says so when the voice channel is switched on and
+// nothing will ever use it.
+//
+// This is the one channel where enabling it is not enough. The shipped ladders
+// deliberately do not name voice -- a default that phones somebody at 3am is
+// not something to switch on for everybody -- so an operator who enables it
+// and writes no rung has a channel that tests green, reports healthy, appears
+// on the status page, and never calls anyone. That is indistinguishable from a
+// working setup right up until the night it matters.
+//
+// A warning and not a problem: the configuration is valid, everything else
+// still delivers, and refusing to start over a rung somebody has not written
+// yet would be worse than saying it out loud.
+func (c Config) voiceOnNoLadderWarning() []string {
+	v := c.Channels.Voice
+	if v == nil || !v.Enabled {
+		return nil
+	}
+	for _, p := range c.Policies {
+		for _, st := range p.Stages {
+			for _, ch := range st.Channels {
+				if strings.EqualFold(strings.TrimSpace(ch), "voice") {
+					return nil
+				}
+			}
+		}
+	}
+	return []string{"channel voice is enabled and no escalation rung names it, " +
+		"so nothing will ever place a call -- the shipped ladders leave voice out " +
+		"on purpose, because a default that phones somebody at 3am is not one to " +
+		"choose for you. Add voice to a stage of the policy you want it on."}
+}
+
 func (c Config) anyChannelEnabled() bool { return len(c.EnabledChannelNames()) > 0 }
 
 // EnabledChannelNames lists the channels this config would construct.
@@ -420,6 +545,9 @@ func (c Config) EnabledChannelNames() []string {
 	}
 	if c.Channels.Pushover != nil && c.Channels.Pushover.Enabled {
 		out = append(out, "pushover")
+	}
+	if c.Channels.Voice != nil && c.Channels.Voice.Enabled {
+		out = append(out, "voice")
 	}
 	for _, h := range c.WebhookEndpoints() {
 		if h.Enabled {

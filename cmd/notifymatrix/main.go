@@ -489,6 +489,31 @@ func runDaemon(ctx context.Context, dataDir string) error {
 	}
 	defer delivery.Close()
 
+	// A CHANNEL THAT IS CONFIGURED AND COULD NOT BE BUILT MUST SAY SO.
+	//
+	// Delivery.Broken() records these so that one malformed field cannot stop
+	// the daemon -- which is right, and which had exactly one flaw: nothing
+	// ever read it. The configuration said enabled, the setup checklist said
+	// enabled, and the channel was simply absent, so it would have delivered
+	// nothing at 3am while reading as healthy everywhere an operator looks.
+	// That is the state this product exists to refuse, and it was being
+	// produced by the mechanism added to make failures survivable.
+	//
+	// Reported at start rather than raised as an incident: the escalation
+	// ladder delivers THROUGH channels, so an incident about a broken channel
+	// may have no way to reach anybody. The audit record and the log are what
+	// can be relied on here.
+	for name, berr := range delivery.Broken() {
+		fmt.Fprintf(os.Stderr, "channel %s is enabled in the configuration but "+
+			"could not be started, so it will deliver nothing: %v\n", name, berr)
+		_ = auditLog.Append(ctx, audit.Entry{
+			Kind: audit.KindAlertFailed, Actor: "system",
+			Summary: "channel " + name + " is configured but could not be started, " +
+				"so it will deliver nothing until this is fixed and the service restarted",
+			Fields: map[string]string{"channel": name, "error": berr.Error()},
+		})
+	}
+
 	built, err := cfg.BuildPolicies(delivery.Names())
 	if err != nil {
 		return err
@@ -788,10 +813,10 @@ func runDaemon(ctx context.Context, dataDir string) error {
 				_ = config.RemoveSetupToken(dataDir)
 				return nil
 			},
-			TestChannel: func(ctx context.Context, name string) error {
-				err := delivery.Test(ctx, name)
+			TestChannel: func(ctx context.Context, name string) (string, error) {
+				summary, err := delivery.Test(ctx, name)
 				if err == nil {
-					return nil
+					return summary, nil
 				}
 				// "channel ntfy is not enabled" is a lie when the operator has
 				// just enabled it, saved, and pressed Test -- which is exactly
@@ -807,12 +832,12 @@ func runDaemon(ctx context.Context, dataDir string) error {
 				c := current
 				cfgMu.RUnlock()
 				if channelPendingRestart(c, delivery.Names(), name) {
-					return fmt.Errorf("%s is enabled in the configuration, but this "+
+					return "", fmt.Errorf("%s is enabled in the configuration, but this "+
 						"daemon started before that change and is still running without "+
 						"it -- real alarms would not reach it either. Restart to apply: %s",
 						name, typedCommand("stop")+" && "+typedCommand("start"))
 				}
-				return err
+				return "", err
 			},
 			// Restarting is the action this page most needed and least had.
 			// Channels, policies and rules are built once, at start, so every

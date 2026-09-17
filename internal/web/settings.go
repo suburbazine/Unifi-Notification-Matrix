@@ -73,6 +73,7 @@ type channelsView struct {
 	Ntfy     *ntfyView     `json:"ntfy,omitempty"`
 	Email    *emailView    `json:"email,omitempty"`
 	Pushover *pushoverView `json:"pushover,omitempty"`
+	Voice    *voiceView    `json:"voice,omitempty"`
 	Webhooks []webhookView `json:"webhooks"`
 }
 
@@ -86,6 +87,26 @@ type pushoverView struct {
 	UserSet  bool   `json:"user_set"`
 	Device   string `json:"device,omitempty"`
 	Sound    string `json:"sound,omitempty"`
+}
+
+// voiceView is the Twilio calling channel. Both halves of the credential pair
+// are booleans, for the same reason every other one is.
+//
+// The recipient numbers ARE returned in full, which is a deliberate difference
+// from the channel itself: voice masks them to "+...5310" in a delivery error,
+// because that error is stored on the incident and served from the
+// sign-in-free /api/incidents. This response is behind the session gate, and
+// an operator cannot check that they typed their own mobile number correctly
+// against a masked one.
+type voiceView struct {
+	Enabled       bool `json:"enabled"`
+	AccountSIDSet bool `json:"account_sid_set"`
+	AuthTokenSet  bool `json:"auth_token_set"`
+
+	From       string   `json:"from"`
+	Recipients []string `json:"recipients"`
+	Voice      string   `json:"voice,omitempty"`
+	Language   string   `json:"language,omitempty"`
 }
 
 type webhookView struct {
@@ -200,6 +221,7 @@ type channelsUpdate struct {
 	Ntfy     *ntfyUpdate      `json:"ntfy"`
 	Email    *emailUpdate     `json:"email"`
 	Pushover *pushoverUpdate  `json:"pushover"`
+	Voice    *voiceUpdate     `json:"voice"`
 	Webhooks *[]webhookUpdate `json:"webhooks"`
 }
 
@@ -209,6 +231,26 @@ type pushoverUpdate struct {
 	UserNew  string `json:"user_new"`
 	Device   string `json:"device"`
 	Sound    string `json:"sound"`
+}
+
+// voiceUpdate carries new Twilio credentials in. Both are write-only: they are
+// never populated on the way out, and this type is never serialised into a
+// response.
+//
+// TWO of them, which is the trap. The account SID is a credential as much as
+// the auth token is -- it is the HTTP Basic username and it is also in the
+// request path -- so it gets the same "" means keep treatment. An operator who
+// retypes only the token and expects the SID to follow is the case this
+// shape has to survive.
+type voiceUpdate struct {
+	Enabled       bool   `json:"enabled"`
+	AccountSIDNew string `json:"account_sid_new"`
+	AuthTokenNew  string `json:"auth_token_new"`
+
+	From       string   `json:"from"`
+	Recipients []string `json:"recipients"`
+	Voice      string   `json:"voice"`
+	Language   string   `json:"language"`
 }
 
 type webhookUpdate struct {
@@ -341,6 +383,26 @@ func viewSettings(c *config.Config) settingsView {
 			UserSet:  !o.User.IsZero(),
 			Device:   o.Device,
 			Sound:    o.Sound,
+		}
+	}
+	if o := c.Channels.Voice; o != nil {
+		recips := o.Recipients
+		if recips == nil {
+			recips = []string{}
+		}
+		v.Channels.Voice = &voiceView{
+			Enabled: o.Enabled,
+			// Booleans, both of them. The account SID looks like an
+			// identifier rather than a password and is the one somebody would
+			// be tempted to echo back so the form could show it -- and it is
+			// half of what anyone needs to place calls billed to this
+			// operator from a number their family recognises.
+			AccountSIDSet: !o.AccountSID.IsZero(),
+			AuthTokenSet:  !o.AuthToken.IsZero(),
+			From:          o.From,
+			Recipients:    recips,
+			Voice:         o.Voice,
+			Language:      o.Language,
 		}
 	}
 	for _, h := range c.WebhookEndpoints() {
@@ -558,6 +620,34 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 			touched = append(touched, "pushover user key")
 		}
 		next.Channels.Pushover = &o
+	}
+	if in := chans.Voice; in != nil {
+		v := config.Voice{
+			Enabled:    in.Enabled,
+			From:       strings.TrimSpace(in.From),
+			Recipients: in.Recipients,
+			Voice:      strings.TrimSpace(in.Voice),
+			Language:   strings.TrimSpace(in.Language),
+		}
+		// Carried forward unless replaced, and BOTH have to be. The form
+		// cannot echo a stored value back, so "unchanged" is only expressible
+		// as "sent nothing" -- and a channel whose credentials were wiped by
+		// somebody correcting a phone number does not announce itself. It just
+		// stops being able to ring anyone, and the next thing that needed it
+		// was the 3am one.
+		if cur.Channels.Voice != nil {
+			v.AccountSID = cur.Channels.Voice.AccountSID
+			v.AuthToken = cur.Channels.Voice.AuthToken
+		}
+		if in.AccountSIDNew != "" {
+			v.AccountSID = secret.Secret(in.AccountSIDNew)
+			touched = append(touched, "voice twilio account sid")
+		}
+		if in.AuthTokenNew != "" {
+			v.AuthToken = secret.Secret(in.AuthTokenNew)
+			touched = append(touched, "voice twilio auth token")
+		}
+		next.Channels.Voice = &v
 	}
 	if chans.Webhooks != nil {
 		// Signing secrets are carried across by NAME, for the same reason hook

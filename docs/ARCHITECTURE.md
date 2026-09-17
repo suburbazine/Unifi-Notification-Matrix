@@ -81,7 +81,8 @@ to ignore the product, which is a worse failure than not sending at all.
 Layered so that ingest, decision and delivery are separable: a source knows
 nothing about channels, and a channel knows nothing about UniFi.
 
-`✓` exists and is tested; `·` is not written yet.
+`✓` exists and is tested; `~` was folded into something else; `·` is not written
+yet — nothing carries it any more, now that the voice channel has landed.
 
 ```
 ✓ cmd/notifymatrix/     run, install/…/status, incidents, selfcheck
@@ -101,8 +102,8 @@ nothing about channels, and a channel knows nothing about UniFi.
   ✓ escalate/           policies, the scheduler, re-alert timing
     channel/
   ✓   (root)            Alert, Channel interface, per-channel bounded queue
-  ✓   ntfy/  email/
-  ·   pushover/  webhook/  voice/
+  ✓   ntfy/  email/  pushover/  webhook/
+  ✓   voice/            Twilio: speaks the alert and hangs up (§8). No ack path
   ✓ ack/                HMAC token mint + verify, ack routes
   ✓ secret/             Secret type, the four-tier prefix chain
   ✓ config/             YAML, source of truth; validation that refuses at startup
@@ -197,19 +198,29 @@ backs off or stays flat, which channels are in play at which stage, and when
 policies:
   critical:
     stages:
-      - after: 0s      channels: [ntfy, email]
-      - after: 2m      channels: [ntfy, email, pushover]
-      - after: 10m     channels: [ntfy, email, pushover, voice]
+      - after: 0s
+        channels: [ntfy, email]
+      - after: 2m
+        channels: [ntfy, email, pushover]
+      - after: 10m                                     # operator-written
+        channels: [ntfy, email, pushover, voice]
     repeat_every: 5m          # after the last stage, keep nagging
     give_up_after: never      # critical never gives up
     quiet_hours: ignore       # critical ignores quiet hours
   high:
     stages:
-      - after: 0s      channels: [ntfy]
-      - after: 15m     channels: [ntfy, email]
+      - after: 0s
+        channels: [ntfy]
+      - after: 15m
+        channels: [ntfy, email]
     repeat_every: 30m
     give_up_after: 4h
 ```
+
+The `voice` rung above is an **example an operator would write, not a shipped
+default**. The ladders in `escalate.DefaultPolicies` name no voice stage at any
+severity: the channel is built and opt-in, because a default that places billed
+phone calls at 3am is not one to choose on an operator's behalf. See §8.
 
 `give_up_after: never` is the default for `critical`, and it is deliberate: a
 product whose top severity eventually gives up has a silent failure mode
@@ -252,7 +263,14 @@ Ack arrives from:
 | email | link in both the plain-text and HTML parts |
 | web UI | authenticated button |
 | inbound webhook | `POST /api/ack` with the token |
-| voice *(later)* | DTMF "press 1" — §8, pending research |
+| voice | **Nothing. A call cannot be acknowledged**, in what is built: it speaks and hangs up. DTMF "press 1" is designed (§8) and not written |
+
+**Voice is the one channel that can only wake somebody, not hear from them.**
+The call speaks and hangs up, so an incident that was announced by telephone is
+still acknowledged from a link in another channel or from the interface, and the
+ladder keeps calling until that happens. That is the price of building the
+speak-and-hang-up half first, and it is recorded here rather than left to be
+discovered from a ringing phone.
 
 Reachability from outside the LAN is the operator's decision, documented with
 its trade-offs in §9. **It is not required for the product to work** — an
@@ -661,7 +679,7 @@ Ported from proven code, with their recorded field knowledge intact:
 | Pushover | severity→priority map; **priority 2 is never emitted** — see below |
 | JSON webhook | a **versioned envelope**, pinned by a golden test; HMAC signing bound to a timestamp |
 | Email | **plain text is always the base part**, HTML added as an alternative — a security alert must survive HTML-stripping gateways; inline CID logo |
-| Voice | new; Twilio first, see below |
+| Voice | **speak-and-hang-up only** — one REST POST to Twilio's Calls resource carrying **inline TwiML**; script capped because TTS is billed per 100 characters; on no default ladder; **no acknowledgement path at all** — see below |
 
 Email is the one real build cost: Go's stdlib `net/smtp` is frozen and
 minimal. `github.com/wneessen/go-mail` (cgo-free) handles implicit TLS on 465
@@ -712,41 +730,98 @@ The URL itself is treated as a credential, because for most receivers it is
 one — Home Assistant, Slack and n8n all put an unguessable token in the path or
 query — so it never appears whole in an error string.
 
-### Voice — the top rung, and it does not require exposing an endpoint
+### Voice — half built: it speaks, and it cannot be answered
 
-The obvious assumption is that "press 1 to acknowledge" needs a public callback
-URL, because DTMF normally arrives on a real-time inbound webhook during the
-call. **That assumption is wrong for every provider surveyed.** All of them
-expose a poll-by-call-id path that returns the collected digits after the fact:
-Twilio via the Studio Execution Context, Amazon Connect via
-`GetContactAttributes`, and Bland, Vapi and Retell via a plain
+The design below was two separable capabilities. **The first is built and the
+second is not**, and the gap between them is the difference between waking
+somebody and hearing from them:
+
+| | State |
+|---|---|
+| **Speak-and-hang-up** — REST POST to Twilio's Calls resource, the alert spoken by `<Say>`, call ends | **Built.** `internal/channel/voice`, channel name `voice` |
+| **Press-1-to-acknowledge** — Studio Flow triggered by REST, daemon polls the Execution Context for the digit | **Designed only.** Not written, and not started |
+
+So voice today is a way of making a phone ring with a sentence attached. It is
+**not** an acknowledgement route (§5), and the ladder above it keeps escalating
+until a human acknowledges somewhere else.
+
+**The inbound-exposure reasoning stands, and is why the second half can still be
+built this way.** The obvious assumption is that "press 1 to acknowledge" needs
+a public callback URL, because DTMF normally arrives on a real-time inbound
+webhook during the call. **That assumption is wrong for every provider
+surveyed.** All of them expose a poll-by-call-id path that returns the collected
+digits after the fact: Twilio via the Studio Execution Context, Amazon Connect
+via `GetContactAttributes`, and Bland, Vapi and Retell via a plain
 `GET /calls/{id}`. An early finding claimed these were webhook-only; the
 adversarial pass established that was a search failure rather than a real gap.
+The built half needs even less than that: it is one outbound request and it
+reads nothing back, so there is no inbound path in this product at all.
 
-**Build against Twilio first**, as two separable capabilities:
+**What the built half does differently from the plan above:** the TwiML is sent
+**inline** on the create-call request rather than hosted as a TwiML Bin. The
+script carries this incident's severity, entity and time, so a Bin would have to
+be either rewritten before every call or reduced to a message that says nothing
+specific — and a console-hosted Bin is configuration no code diff would ever
+show, which is the same objection recorded against Studio below.
 
-1. **Speak-and-hang-up** for the non-top rungs — a plain REST POST to the Calls
-   resource with a Twilio-hosted TwiML Bin. Trivial from Go, zero inbound
-   exposure.
-2. **Press-1-to-acknowledge** for the top rung — one Studio Flow authored once
-   in Twilio's console (Say → Gather Input), triggered by REST, with the daemon
-   polling `GET /v2/Flows/{FlowSid}/Executions/{Sid}` for the digit.
+**Three things the built half cannot do, said plainly because each one is a way
+an operator could believe an alarm was delivered when it was not:**
+
+- **Twilio's `201` means *queued*, not *answered*.** It proves the request was
+  accepted: not that the phone rang, not that a human picked up, not that it
+  did not go to voicemail. Call status is knowable only from a StatusCallback
+  webhook or by re-fetching the call resource, and neither is built. The channel
+  therefore reports **dispatch**, and the ladder is what keeps the promise.
+- **A trial Twilio account defeats it entirely.** Twilio plays its own message
+  before the TwiML runs and asks the callee to press a key to proceed, so an
+  unattended phone hears nothing while the API returns a clean `201`. The
+  credential check refuses a trial account outright rather than calling it
+  configured.
+- **A fan-out that partly fails reports success.** One accepted call means
+  somebody was told, so the delivery is not an error — and the other numbers'
+  failures go no further, because the `Channel` interface has nowhere to put a
+  warning on a send that succeeded. A number that has been dead for months looks
+  exactly like one that answers, and the credential check cannot find it either:
+  it deliberately places no call. Only a real alert, or somebody dialling the
+  number themselves, shows that. A per-channel warning path is the fix and it
+  does not exist yet.
+
+**The test button does not place a call**, and that is a deliberate divergence
+from the `Channel` interface's "sends a harmless message": a call costs money and
+rings a human, and a self-test that does that is one an operator switches off —
+which costs the whole proof rather than part of it. It does an unbilled
+authenticated `GET` of the account resource instead, which proves the credential
+pair and the account's state (active, and not trial) and proves nothing about
+whether the caller ID can reach the recipients. Because that is a different
+promise from every other channel's test, the interface prints its own wording
+rather than the generic "Sent."
 
 **Keep the escalation script terse.** Twilio bills TTS **per 100 characters**,
 not per request — Basic free, Premium Standard $0.0008, Neural $0.0032,
 Generative $0.0130 per 100 chars. Cost scales with prompt *length* independently
-of call duration, so a verbose alert script is charged for being verbose. (For
-comparison, Amazon Connect lands near $0.043/min all-in plus a mandatory DID —
-roughly 9× the naive quote, and the heaviest integration of the seven.)
+of call duration, so a verbose alert script is charged for being verbose, on
+every recipient of every repeat. The built channel caps the spoken script and
+defaults to a Basic voice, where the per-character cost is zero and only the
+minutes are billed. (For comparison, Amazon Connect lands near $0.043/min
+all-in plus a mandatory DID — roughly 9× the naive quote, and the heaviest
+integration of the seven.)
+
+**Retries are shorter here than in any other channel, on purpose.** Posting to
+`/Calls` is billed and side-effecting: a retry whose response was lost rings
+somebody a second time. Twilio documents that a `429` was *not processed* and is
+safe to retry; it documents nothing of the kind about a `500`, so that case gets
+exactly one. Everything else — an unverified caller ID, an unverified trial
+destination, a country the account may not call, a bad token — is a
+configuration fact that will fail identically forever and is not retried at all.
 
 **The strongest argument against the Studio-polling design**, recorded because
-it may well win later: the daemon needs an inbound HTTP receiver anyway (§9),
-so standing up one tunnel and using each provider's native webhook `Gather`
-would be more uniform — and would keep the top rung's behaviour inside
-versioned code rather than in Twilio-console configuration that no code diff
-will ever show. The polling design is chosen for the first release because it
-makes voice work with **nothing exposed at all**; revisit it once the tunnel
-story is settled in practice.
+it may well win when the second half is built: the daemon needs an inbound HTTP
+receiver anyway (§9), so standing up one tunnel and using each provider's native
+webhook `Gather` would be more uniform — and would keep the top rung's behaviour
+inside versioned code rather than in Twilio-console configuration that no code
+diff will ever show. The polling design was chosen because it makes voice work
+with **nothing exposed at all**; that remains an open choice, and the inline-TwiML
+decision above is a point in the counter-argument's favour.
 
 **Delivery never blocks ingest.** A greylisting mail server will otherwise
 drag the whole ingest cycle progressively later — this is a failure mode that
@@ -769,7 +844,7 @@ they genuinely differ:
 | Traffic | Reachability needed | Protection |
 |---|---|---|
 | Protect / Network / Access Alarm Manager → us | **None.** Same LAN | Bind LAN-only; shared-secret header (`Authorization: Bearer`, supported on the POST action) |
-| Voice provider → us | **None**, by design (§8 polls instead) | n/a |
+| Voice provider → us | **None.** What is built never hears back at all: one outbound POST, nothing read afterwards. The unbuilt press-1 half would poll rather than be called back (§8), so it needs nothing inbound either | n/a |
 | Operator's phone → ack URL | **Yes**, from wherever they are | HMAC token, single incident, idempotent (§5) |
 | Other SaaS senders → us | Yes, if used | HMAC-in-header, timestamp + nonce **bound into the signed material**, ~5 min replay window |
 

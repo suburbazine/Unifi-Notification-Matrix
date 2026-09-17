@@ -39,6 +39,12 @@ func TestSavingOneTabLeavesEveryOtherSectionAlone(t *testing.T) {
 	if next.Channels.Email == nil {
 		t.Error("email was deleted by a save that never mentioned it")
 	}
+	// Voice is the expensive one, so losing it silently is the one nobody
+	// notices until the night the cheap channels were all asleep.
+	if v := next.Channels.Voice; v == nil || !v.Enabled || v.AuthToken.IsZero() {
+		t.Errorf("voice was deleted, disabled or stripped of its credentials"+
+			" by a save that never mentioned it: %+v", v)
+	}
 	if len(next.Rules) != len(cur.Rules) {
 		t.Errorf("rules were deleted by a save that never mentioned them: %d left, want %d",
 			len(next.Rules), len(cur.Rules))

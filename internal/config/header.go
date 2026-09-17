@@ -99,6 +99,15 @@ const fileHeader = `# notifymatrix configuration
 #     enabled: true
 #     token: <application token>    # pushover.net/apps/build -- create one
 #     user: <user or group key>     # your Pushover dashboard
+#
+#   voice:
+#     enabled: true
+#     account_sid: <the AC... value from the Twilio console>
+#     token: <the auth token next to it>
+#     from: "+15552223214"          # a Twilio number, or a verified caller ID
+#     recipients: ["+15558675310"]  # every one is called on every alert
+#     voice: man                    # optional; man or woman cost nothing to speak
+#     language: en-US               # optional
 #   webhook:
 #     enabled: true
 #     url: http://homeassistant.local:8123/api/webhook/notifymatrix
@@ -111,6 +120,23 @@ const fileHeader = `# notifymatrix configuration
 # is the APPLICATION token you create once, "user" is your own account key.
 # Swapped, the console says the application token is invalid, which reads as a
 # bad token rather than as the pair being the wrong way round.
+#
+# The voice channel PHONES you and speaks the alert. It is the rung below
+# "nobody is answering": a call rings through a Do Not Disturb schedule that
+# silences everything else. It is also the only channel that costs money and
+# the only one that wakes a house, so it is on NO default ladder -- put it on
+# an escalation rung yourself, and put it late.
+#
+# Numbers must be written as +countrycode then the number, in quotes, with no
+# spaces, dashes or parentheses: "+15558675310". Twilio refuses anything else.
+#
+# Two things worth knowing before you trust it. A trial account can only call
+# numbers you have verified, and plays its own message asking the person who
+# answers to press a key BEFORE your alert is spoken -- so an unattended phone
+# hears nothing. And the "send test" button for this channel does NOT call
+# anybody: it checks the credentials, because a test that costs money and rings
+# somebody at 3am is not a test. Nothing here proves a call was answered; the
+# escalation ladder keeps going until somebody acknowledges.
 #
 # The webhook channel POSTs one JSON document per alert to anything you run --
 # Home Assistant, Node-RED, a script of your own. Set "secret" and each request

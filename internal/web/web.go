@@ -85,7 +85,7 @@ type Deps struct {
 	// TestChannel sends one channel's proof-of-configuration message and
 	// reports what happened. Optional: a build that does not supply it simply
 	// has no test button.
-	TestChannel func(ctx context.Context, name string) error
+	TestChannel func(ctx context.Context, name string) (summary string, err error)
 
 	// Checklist reports what is still needed to make this installation work.
 	//

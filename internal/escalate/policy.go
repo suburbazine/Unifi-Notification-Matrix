@@ -212,17 +212,24 @@ func (p Policy) ShouldGiveUp(inc *incident.Incident, now time.Time) bool {
 // ignores quiet hours; the operator can change the intervals but the default
 // will not choose silence for them.
 //
-// EVERY CHANNEL NAMED HERE MUST EXIST. The ladders are deliberately shorter
-// than the eventual design because only ntfy and email are implemented, and a
-// default that named "voice" or "pushover" today would ship a stage that
-// silently delivers nothing — which ValidateAgainstChannels now refuses to
-// start with, and rightly. The rungs go back in when the channels land:
+// EVERY CHANNEL NAMED HERE MUST EXIST. A default that named a channel this
+// build cannot deliver through would ship a stage that silently delivers
+// nothing, which is why the ladders are shorter than the eventual design.
 //
-//	critical  +10m → add voice, once internal/channel/voice exists
-//	critical  +2m  → add pushover
-//	info           → webhook, once internal/channel/webhook exists
+// VOICE IS IMPLEMENTED AND IS DELIBERATELY ON NO LADDER HERE. The package
+// internal/channel/voice exists and works, and it is still not a default: it
+// places billed phone calls, and shipping a default that dials somebody's mobile at 3am the
+// first time an alarm fires is not a decision this file gets to make on an
+// operator's behalf. It is opt-in -- ImplementedChannels lists it, so an
+// operator can put it on a rung and validation accepts it, and nothing puts it
+// there for them. The same argument has not been made for pushover, which is
+// also implemented and also absent: that one is just a rung nobody has written
+// yet.
 //
-// TestDefaultPoliciesNameOnlyImplementedChannels fails if this drifts.
+// The subtest TestValidateAgainstChannels/"defaults name only implemented
+// channels" fails if a ladder here names something this build cannot deliver
+// through, and TestChannelsUsed fails if voice or anything else is quietly
+// added to one.
 func DefaultPolicies() map[incident.Severity]Policy {
 	return map[incident.Severity]Policy{
 		incident.SeverityCritical: {
@@ -268,4 +275,8 @@ func DefaultPolicies() map[incident.Severity]Policy {
 // through. Kept next to DefaultPolicies so the two cannot drift apart
 // unnoticed; the real startup path passes the channels it actually
 // constructed, not this list.
-func ImplementedChannels() []string { return []string{"email", "ntfy"} }
+//
+// Being in this list means an operator MAY name the channel on a rung. It does
+// not mean anything names it -- see DefaultPolicies on why voice is here and
+// on no ladder.
+func ImplementedChannels() []string { return []string{"email", "ntfy", "voice"} }

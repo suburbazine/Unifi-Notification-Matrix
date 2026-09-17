@@ -112,6 +112,7 @@ type Channels struct {
 	Ntfy     *Ntfy     `json:"ntfy,omitempty"`
 	Email    *Email    `json:"email,omitempty"`
 	Pushover *Pushover `json:"pushover,omitempty"`
+	Voice    *Voice    `json:"voice,omitempty"`
 
 	// Webhook is the ORIGINAL single outbound endpoint, kept so existing
 	// configurations keep working. It is folded into Webhooks on load and
@@ -187,6 +188,59 @@ type Pushover struct {
 
 	// Sound overrides the account default.
 	Sound string `json:"sound,omitempty"`
+}
+
+// Voice configures the Twilio voice channel: a phone call that speaks the
+// alert and hangs up.
+//
+// It is the only channel that costs money per alert and the only one that
+// wakes a household, so it is never on a shipped escalation ladder -- an
+// operator has to put it on a rung themselves. See escalate.DefaultPolicies.
+type Voice struct {
+	Enabled bool `json:"enabled"`
+
+	// AccountSID is the identifier beginning "AC" on the Twilio console's home
+	// page. AuthToken is the token shown next to it.
+	//
+	// Two values that sit side by side in the console and look alike, which is
+	// the mistake people make: the token pasted into the account_sid box gets
+	// a 401 "permission denied" out of Twilio, which reads as a bad token and
+	// sends the operator off to rotate the one thing that was not wrong.
+	// Validation checks the "AC" prefix here so that never reaches Twilio.
+	//
+	// THE YAML KEY IS "token", not the "auth_token" Twilio's own documentation
+	// uses, and that is deliberate rather than sloppy: PlaintextSecrets scans
+	// the raw file for the literal key names api_key, token and password, so a
+	// credential pasted into this file in the clear under any other name is
+	// never reported as exposed and the operator is never told to rotate it.
+	// account_sid already has that hole; it is the lesser half of the pair and
+	// useless on its own, and the half that can place calls does not.
+	AccountSID secret.Secret `json:"account_sid,omitempty"`
+	AuthToken  secret.Secret `json:"token,omitempty"`
+
+	// From is the caller ID in E.164 (+15552223214). It must be a number
+	// bought from Twilio or a verified outgoing caller ID on the account --
+	// anything else is refused at call time with Twilio error 21210, which
+	// reads like a credentials problem and is not one.
+	From string `json:"from"`
+
+	// Recipients are the numbers called, in E.164. Every one is called on
+	// every alert, seconds apart, rather than minutes apart the way separate
+	// escalation rungs would space them.
+	Recipients []string `json:"recipients"`
+
+	// Voice and Language pick the text-to-speech voice. Empty means the
+	// channel's defaults ("man", "en-US"), which ApplyDefaults writes in so
+	// that what the file says is what goes on the wire.
+	//
+	// Both are sent explicitly on every call because Twilio's account-level
+	// default, set in a web console this product cannot see, otherwise
+	// overrides the documented one. An invalid voice, or a voice paired with a
+	// language it does not speak, fails AFTER Twilio has returned its 201 --
+	// a clean success followed by silence -- so the UI offers a list rather
+	// than a text box.
+	Voice    string `json:"voice,omitempty"`
+	Language string `json:"language,omitempty"`
 }
 
 // Webhook configures the generic webhook channel: one JSON POST per alert, to

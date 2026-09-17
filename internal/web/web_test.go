@@ -192,6 +192,11 @@ type harness struct {
 	// serviceActions records what the operator asked the service manager for.
 	serviceActions []ServiceAction
 	serviceErr     error
+
+	// testChannel stands in for a channel's "send test" button. The summary it
+	// returns is how a channel says its test did something other than deliver
+	// a message -- voice checks credentials and places no call.
+	testChannel func(context.Context, string) (string, error)
 }
 
 // testConfig is valid, exercises every secret-bearing field, and plants the
@@ -222,6 +227,19 @@ func testConfig() *config.Config {
 				Password:   secret.Secret(canary + "-email"),
 				From:       "alerts@example.com",
 				Recipients: []string{"operator@example.com"},
+			},
+			// Voice carries the canary in BOTH halves of its pair. The
+			// account SID is a credential too -- it is the HTTP Basic
+			// username -- and it is the one somebody would be tempted to
+			// echo back to the form because it reads like an identifier.
+			Voice: &config.Voice{
+				Enabled:    true,
+				AccountSID: secret.Secret("AC" + canary + "-sid"),
+				AuthToken:  secret.Secret(canary + "-twilio"),
+				From:       "+15552223214",
+				Recipients: []string{"+15558675310"},
+				Voice:      "man",
+				Language:   "en-US",
 			},
 		},
 		Web: config.Web{
@@ -265,6 +283,15 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 			defer h.mu.Unlock()
 			h.serviceActions = append(h.serviceActions, a)
 			return h.serviceErr
+		},
+		TestChannel: func(ctx context.Context, name string) (string, error) {
+			h.mu.Lock()
+			fn := h.testChannel
+			h.mu.Unlock()
+			if fn == nil {
+				return "", nil
+			}
+			return fn(ctx, name)
 		},
 		Checklist: func() setup.Input {
 			return setup.Input{
@@ -469,7 +496,8 @@ func TestSecretsNeverReachAResponseBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !got.Consoles[0].APIKeySet || !got.Channels.Ntfy.TokenSet ||
-		!got.Channels.Email.PasswordSet || !got.Web.AckKeySet {
+		!got.Channels.Email.PasswordSet || !got.Web.AckKeySet ||
+		!got.Channels.Voice.AccountSIDSet || !got.Channels.Voice.AuthTokenSet {
 		t.Errorf("settings hid the EXISTENCE of the secrets as well as their values: %+v", got)
 	}
 
@@ -536,6 +564,13 @@ func TestSecretsSurviveASaveThatDidNotResendThem(t *testing.T) {
 	}
 	if cfg.Web.AckKey.Reveal() != canary+"-ackkey" {
 		t.Error("the ack signing key was lost; every link already sent would be dead")
+	}
+	if cfg.Channels.Voice == nil {
+		t.Fatal("voice was deleted by a save that did not mention it")
+	}
+	if cfg.Channels.Voice.AuthToken.Reveal() != canary+"-twilio" ||
+		cfg.Channels.Voice.AccountSID.Reveal() != "AC"+canary+"-sid" {
+		t.Error("a Twilio credential was lost by a save that did not resend it")
 	}
 
 	// A value that WAS sent replaces the stored one.
@@ -1334,6 +1369,12 @@ func channelsAsUpdate(c *config.Config) channelsUpdate {
 	}
 	if p := c.Channels.Pushover; p != nil {
 		u.Pushover = &pushoverUpdate{Enabled: p.Enabled, Device: p.Device, Sound: p.Sound}
+	}
+	if v := c.Channels.Voice; v != nil {
+		u.Voice = &voiceUpdate{
+			Enabled: v.Enabled, From: v.From, Recipients: v.Recipients,
+			Voice: v.Voice, Language: v.Language,
+		}
 	}
 	endpoints := []webhookUpdate{}
 	for _, h := range c.WebhookEndpoints() {

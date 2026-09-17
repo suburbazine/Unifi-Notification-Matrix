@@ -152,6 +152,147 @@ ever told — which is the one failure this product exists to prevent.
 Two is better than one. A phone that is asleep and a mailbox that is not fail
 in different ways.
 
+### A phone call, for when nothing else wakes anybody
+
+**Voice** telephones you, speaks the alert, and hangs up. It is the rung below
+*nobody is answering*: a ringing phone gets through a Do Not Disturb schedule
+that silences every other channel here.
+
+It is also the only channel that **costs money every time it fires**, and the
+only one that wakes a household. Set it up after the free ones work, and put it
+late on a ladder.
+
+You need a [Twilio](https://www.twilio.com) account. In their console:
+
+1. **Buy a phone number with voice capability** — *Phone Numbers → Manage → Buy
+   a number*. This is the number your handset will show as the caller. (A number
+   you already own can be used instead if you verify it with Twilio as an
+   outgoing caller ID.)
+2. On the console home page, copy the **Account SID** — it begins `AC` — and the
+   **Auth Token** shown beside it.
+
+Then:
+
+```yaml
+channels:
+  voice:
+    enabled: true
+    account_sid: <the AC... value>
+    token: <the auth token beside it>
+    from: "+15552223214"            # the Twilio number you bought
+    recipients: ["+15558675310"]    # everyone here is called, every time
+    voice: man                      # optional
+    language: en-US                 # optional
+```
+
+| Field | What goes in it |
+|---|---|
+| `account_sid` | the value labelled **Account SID**, beginning `AC` |
+| `token` | the **Auth Token** beside it — not the account SID |
+| `from` | the Twilio number you bought, or a caller ID verified on the account |
+| `recipients` | every number to call. All of them are called on every alert, and again on every repeat |
+| `voice` | `man` or `woman`. Both are billed at nothing per character |
+| `language` | the locale the alert is spoken in, e.g. `en-US`, `en-GB`, `de-DE` |
+
+The two credentials sit side by side in the console and look alike, which is the
+mistake people make. Pasted the wrong way round, Twilio answers *permission
+denied* — which reads as a bad token and sends you off to rotate the one thing
+that was not wrong. So this refuses to start unless the account SID begins `AC`,
+and says which field the token belongs in.
+
+> **Write every number as `+`, country code, number — and keep the quotes.**
+> No spaces, dashes or parentheses: `"+442071838750"`, not `020 7183 8750`.
+> Twilio refuses anything else.
+>
+> The quotes are not decoration. Unquoted, `+15558675310` is a *number* to YAML,
+> and the plus is dropped on the way in — so the file you are looking at says
+> `+15558675310` while the error says `"15558675310" is not in E.164 form`, and
+> the one character that is missing is not in the message.
+
+#### A trial account cannot do this job
+
+Twilio starts every account in trial mode, and on a trial account this channel
+does not work in the way you need it to:
+
+- It can only call numbers you have **verified** in the console, up to five.
+- Twilio plays **its own message first, and asks whoever answered to press a
+  key** before your alert is spoken. An unattended phone never presses it. Nor
+  does somebody half asleep who answers with "hello" and waits. They hear
+  nothing, while Twilio still reports the call as accepted.
+
+The credential check refuses a trial account for exactly that reason and says so
+rather than reporting it as configured. **Upgrade the account before relying on
+this channel.**
+
+#### What it costs, and why the call is so brief
+
+Every call is billed for the minutes it lasts, and the spoken words are billed
+**separately, per 100 characters** — that part is charged for its length whether
+the call lasts five seconds or fifty. It multiplies: every recipient, on every
+rung, on every repeat, for as long as nobody acknowledges.
+
+So the script is deliberately terse — severity, what happened, where, when, and
+whether this is a reminder. Roughly a hundred characters, and capped. It is not
+an oversight that it does not read you the incident.
+
+The default `man` and `woman` voices cost nothing per character; only the call
+minutes are billed. The better-sounding Twilio voices are billed per 100
+characters, the best of them at around sixteen times the cheapest, which is why
+they are not the default.
+
+#### Nothing happens until a rung names it
+
+**Voice is on no default escalation ladder.** Enabling it here is not enough:
+it is configured, healthy, and will never ring anybody until you put it on a
+rung yourself.
+
+```yaml
+policies:
+  critical:
+    stages:
+      - after: 0s
+        channels: [ntfy, email]
+      - after: 10m                    # the phone, last
+        channels: [ntfy, email, voice]
+    repeat_every: 5m
+    give_up_after: never
+```
+
+> **Write the whole policy, not just the stages.** A policy you write *replaces*
+> the shipped one for that severity — it is not merged into it. Leave
+> `repeat_every` out and it is zero, which means the ladder simply ends once the
+> last stage has fired: the phone rings once, nobody answers, and the incident
+> stops asking. The interface's escalation editor writes all of this for you,
+> which is the safer way to do it.
+
+That is deliberate. A shipped default that telephones somebody at 3am the first
+time an alarm fires is not a decision to make on your behalf. Enable voice and
+leave it off every ladder and the daemon says so at startup, because a channel
+that is configured, green, and unreachable by every ladder looks exactly like a
+working one until the night it matters.
+
+#### The test button does not call anybody
+
+For every other channel, **Send a test** delivers a message. For this one it
+**checks the credentials and places no call** — a test that costs money and
+wakes somebody is not a harmless test, and it is a button pressed repeatedly
+while you are getting the configuration right.
+
+What that proves: the account SID and auth token are correct, and the account is
+real, reachable, active and not in trial. What it does **not** prove: that your
+caller ID is allowed to dial your recipients, that the destination country is
+enabled on the account, or that anybody answers. Only a real alert shows that.
+
+> **A call cannot be acknowledged from the handset.** It speaks and hangs up;
+> there is no "press 1". Escalation keeps going until somebody acknowledges from
+> a link in another channel or from the interface — so voice is a way of *waking
+> people*, not a way of closing an incident.
+>
+> And a call Twilio accepted is not a call anybody heard. Twilio's answer means
+> it has taken the request, not that the phone rang, not that it was answered,
+> and not that it did not go to voicemail. The ladder keeps escalating on that
+> basis, which is the only honest thing to do with it.
+
 ### Check it before you rely on it
 
 Open the interface, go to **Settings**, and press **Send a test** on each
@@ -159,6 +300,9 @@ channel you enabled. It reports what happened to that attempt — including the
 service's own error, which usually says exactly what is wrong.
 
 It tests the **saved** settings, so save first if you have just typed something.
+
+Voice is the exception, and its button says so: it checks the credentials and
+deliberately places no call.
 
 ---
 

@@ -37,7 +37,8 @@ func (s *Server) handleTestChannel(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), testSendTimeout)
 	defer cancel()
 
-	if err := s.deps.TestChannel(ctx, name); err != nil {
+	summary, err := s.deps.TestChannel(ctx, name)
+	if err != nil {
 		s.record(r, audit.Entry{
 			Kind: audit.KindAlertFailed, Actor: "web",
 			Summary: "test message to " + name + " failed",
@@ -49,14 +50,26 @@ func (s *Server) handleTestChannel(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, errorBody(err.Error()))
 		return
 	}
+	// A channel whose test does something other than deliver a message says
+	// so, and BOTH the record and the reply use its words.
+	//
+	// The generic wording was written when every channel delivered something.
+	// Voice does not -- its test checks credentials and deliberately places no
+	// call -- so the audit record said "test message sent to voice" and the
+	// API replied "Sent.", which is the product's own append-only record
+	// asserting a delivery that never happened. Painting over it in the
+	// browser would have left the record still lying.
+	detail := "Sent. If it does not arrive, the problem is between " +
+		name + " and the device, not in this configuration."
+	recorded := "test message sent to " + name
+	if summary != "" {
+		detail = summary
+		recorded = "test of " + name + ": " + summary
+	}
 	s.record(r, audit.Entry{
 		Kind: audit.KindAlertSent, Actor: "web",
-		Summary: "test message sent to " + name,
+		Summary: recorded,
 		Fields:  map[string]string{"channel": name},
 	})
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true,
-		"detail": "Sent. If it does not arrive, the problem is between " +
-			name + " and the device, not in this configuration.",
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": detail})
 }

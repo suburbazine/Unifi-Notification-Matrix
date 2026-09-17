@@ -32,9 +32,16 @@
 > the local web UI and its editors, the capability probe, the setup checklist,
 > the signed in-app updater, and Windows-service / systemd integration.
 >
-> Not built yet: the voice channel (the top escalation rung), and live config
-> reload — channels, policies and rules are built at start, so a saved change
-> needs a restart, and the interface has a button for that.
+> **The top rung can now telephone you.** The voice channel places a Twilio call
+> that speaks the alert and hangs up. It is opt-in — on no default ladder, since
+> billed calls at 3am are not a default worth choosing for anybody — and it
+> costs money per call.
+>
+> Not built yet: **acknowledging a call from the handset.** There is no "press
+> 1"; a call wakes somebody, and the incident is still acknowledged from another
+> channel or from the interface. Nor is live config reload — channels, policies
+> and rules are built at start, so a saved change needs a restart, and the
+> interface has a button for that.
 
 UniFi tells you a thing happened. Once.
 
@@ -72,8 +79,8 @@ believed.
 - **Derives the two door alarms UniFi Access does not report at all**: a door
   forced open, and a door held open past a threshold. Neither exists as a
   readable value on any Access surface.
-- Escalates on a policy ladder that widens over time: push, then email, then
-  (later) an automated phone call.
+- Escalates on a policy ladder that widens over time: push, then email, then —
+  if you put it on a rung yourself — an automated phone call.
 - **Acknowledgement works from a phone with one tap**, no login required.
   For somebody off-site, a second listener carrying *only* the acknowledgement
   route can be pinned to a random high port — so a firewall forward has
@@ -82,9 +89,15 @@ believed.
   may last, and silence past that becomes an incident — because a dead source
   and a quiet site look identical from outside.
 - Fans out to **ntfy**, **email**, **Pushover** and a **generic JSON webhook**
-  — so it slots into whatever you already run. Voice is planned.
+  — so it slots into whatever you already run. And to a **phone call** via
+  Twilio, for the rung below *nobody is answering*: it speaks the alert and
+  hangs up, rings through a Do Not Disturb schedule, costs money every time, and
+  is on no ladder until you name it on one.
 - Every channel has a **"send a test" button** that reports what actually
-  happened to that attempt, including the service's own error text.
+  happened to that attempt, including the service's own error text. Voice is the
+  exception and says so on the button: it checks the Twilio credentials and
+  places no call, because a test that costs money and rings somebody is not a
+  harmless one.
 - A **local web UI**: status is visible to anyone on the LAN so it works as a
   wall display, and every change requires a password.
 - An **append-only audit record** in plain JSONL — including the events a rule

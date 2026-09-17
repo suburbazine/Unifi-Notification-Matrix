@@ -67,3 +67,19 @@ type Channel interface {
 	// the "send test" button, and to the scheduled self-test.
 	Test(ctx context.Context) error
 }
+
+// TestDescriber lets a channel say what its test ACTUALLY DID.
+//
+// Every channel here delivers a message when tested, so the generic "Sent. If
+// it does not arrive, the problem is between the channel and the device" is
+// true for all of them -- until voice, whose test deliberately places no call,
+// because a test that costs money and rings somebody at 3am is not the
+// harmless message the interface above describes.
+//
+// Without this the audit record said "test message sent to voice" and the API
+// replied "Sent.", both of which are the product asserting a delivery that did
+// not happen. That is the one thing this codebase exists to refuse, and an
+// append-only record saying it is worse than a screen saying it.
+type TestDescriber interface {
+	TestSummary() string
+}

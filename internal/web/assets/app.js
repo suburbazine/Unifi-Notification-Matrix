@@ -546,6 +546,49 @@ function check(obj, key) {
   i.addEventListener("change", function () { obj[key] = i.checked; });
   return i;
 }
+// pick binds a string setting to a CONSTRAINED dropdown.
+//
+// A free-text box is the wrong control for the spoken voice and its language.
+// Twilio accepts the request and answers 201 whatever is in them, and an
+// unusable value only fails when <Say> runs -- so a typo produces a call that
+// connects, says nothing and hangs up, while this interface shows a clean
+// success.
+//
+// A value already in the config that is not on the list is kept and shown
+// rather than silently dropped: somebody who set a named Polly voice by hand
+// should not lose it by opening this page.
+function pick(obj, key, choices, blankLabel) {
+  var sel = el("select");
+  var cur = obj[key] || "";
+  var opts = [""].concat(choices);
+  if (cur && opts.indexOf(cur) < 0) opts.splice(1, 0, cur);
+  opts.forEach(function (s) {
+    var o = document.createElement("option");
+    o.value = s;
+    o.textContent = s === "" ? blankLabel : s;
+    if (cur === s) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.addEventListener("change", function () { obj[key] = sel.value; });
+  return sel;
+}
+
+// The two Basic-tier voices. They are billed at NOTHING per character and they
+// are valid with every language Twilio's basic text-to-speech speaks, which is
+// why only these two are offered. The Polly and Google voices sound better,
+// are billed per 100 characters of script on every call to every number on
+// every escalation rung, and each pairs with one fixed language: a voice and a
+// locale that disagree make the alert fail AFTER Twilio has accepted the call.
+var VOICE_SAY_VOICES = ["man", "woman"];
+
+// The locales those two voices speak.
+var VOICE_SAY_LANGUAGES = [
+  "en-US", "en-GB", "en-AU", "en-CA", "en-IN",
+  "fr-FR", "fr-CA", "de-DE", "es-ES", "es-MX", "it-IT",
+  "nl-NL", "pt-BR", "pt-PT", "da-DK", "sv-SE", "nb-NO",
+  "pl-PL", "ru-RU", "ja-JP", "ko-KR", "zh-CN"
+];
+
 function secretRow(card, isSet, label, obj, key) {
   var r = el("div", "row");
   r.appendChild(badge(isSet ? label + " set" : label + " not set", isSet ? "on" : "off"));
@@ -635,6 +678,7 @@ function renderSettings(body, s) {
   ch.ntfy = ch.ntfy || { enabled: false };
   ch.email = ch.email || { enabled: false, recipients: [] };
   ch.pushover = ch.pushover || { enabled: false };
+  ch.voice = ch.voice || { enabled: false, recipients: [] };
 
   if (ch.ntfy) {
     var nc = el("div", "card");
@@ -686,11 +730,66 @@ function renderSettings(body, s) {
     testRow(pc, "pushover");
     body.appendChild(pc);
   }
+  if (ch.voice) {
+    var vc = el("div", "card");
+    vc.appendChild(el("div", "title", "Voice call (Twilio)"));
+    var vf = el("div", "fields");
+    vf.appendChild(labelled("Enabled", check(ch.voice, "enabled")));
+    var vfrom = bind(ch.voice, "from");
+    vfrom.placeholder = "+15552223214";
+    vf.appendChild(labelled("Caller ID", vfrom));
+    var vto = bindList(ch.voice, "recipients");
+    vto.placeholder = "+15558675310, +15558675311";
+    vf.appendChild(labelled("Numbers to call (comma separated)", vto));
+    vf.appendChild(labelled("Voice", pick(ch.voice, "voice", VOICE_SAY_VOICES, "man (default)")));
+    vf.appendChild(labelled("Language", pick(ch.voice, "language", VOICE_SAY_LANGUAGES, "en-US (default)")));
+    vc.appendChild(vf);
+    secretRow(vc, ch.voice.account_sid_set, "account SID", ch.voice, "account_sid_new");
+    secretRow(vc, ch.voice.auth_token_set, "auth token", ch.voice, "auth_token_new");
+    vc.appendChild(el("div", "note",
+      "Two credentials from the Twilio console, and they are easy to swap. The " +
+      "account SID is the one that starts AC; the auth token is the other. The " +
+      "wrong way round, Twilio answers permission denied, which reads as a bad " +
+      "token rather than as the pair being reversed."));
+    vc.appendChild(el("div", "note",
+      "Every number here is a BILLED PHONE CALL, to every number, every time a " +
+      "rung naming voice fires -- including each repeat. Write numbers as + then " +
+      "the country code with no spaces, dashes or brackets (+15558675310). On a " +
+      "Twilio trial account the caller ID and every number called must be " +
+      "verified in the console first, and Twilio plays its own message asking " +
+      "for a keypress before the alert is spoken -- so on a trial account an " +
+      "unattended phone hears nothing at all."));
+    vc.appendChild(el("div", "note",
+      "The call speaks the alert and hangs up. There is no way to acknowledge " +
+      "from the handset, so the ladder keeps escalating until somebody " +
+      "acknowledges here or from a link in another channel."));
+    // Not decoration: voice is on NO default ladder, so a site that enables it
+    // here and stops has a channel that is configured, healthy, tested, and
+    // will never place a call.
+    vc.appendChild(el("div", "note",
+      "VOICE IS ON NO DEFAULT ESCALATION LADDER. Enabling it here is not enough: " +
+      "add voice to a rung under Escalation, by name, or it will never ring " +
+      "anybody. That is deliberate -- telephoning somebody at 3am is not " +
+      "something to switch on for every installation by default."));
+    // The generic "Sent." line the server prints after a test is untrue for
+    // this channel, because no call was placed. The truth is printed here
+    // instead.
+    testRow(vc, "voice", {
+      button: "Check the credentials",
+      note: "This button does NOT place a call. A test that costs money and " +
+        "wakes somebody is not a harmless test, so it checks the account SID " +
+        "and auth token against Twilio instead. It does not prove the caller ID " +
+        "can dial your numbers -- only a real alert does that.",
+      success: "Credentials accepted by Twilio. No call was placed and nobody's " +
+        "phone rang. This does not prove the caller ID can reach your numbers."
+    });
+    body.appendChild(vc);
+  }
   // The outbound webhook endpoints are on the Webhooks tab, with the inbound
   // ones: they are the same idea pointing opposite ways, and an operator
   // thinking about one is thinking about both.
 
-  var anyEnabled = ["ntfy", "email", "pushover"].some(function (k) {
+  var anyEnabled = ["ntfy", "email", "pushover", "voice"].some(function (k) {
     return ch[k] && ch[k].enabled;
   }) || (ch.webhooks || []).some(function (w) { return w.enabled; });
   if (!anyEnabled) {
@@ -838,25 +937,32 @@ function refreshAudit() {
 // The button sends against the SAVED configuration, not the form in front of
 // it -- so it says so, because testing a token you have typed but not saved
 // and being told it failed is a confusing half-hour.
-function testRow(card, name) {
+// opts is for the one channel whose test does not send anything. Voice checks
+// credentials rather than telephoning somebody, so it needs its own button
+// label, its own note and its own success sentence: the server prints one
+// generic "Sent. If it does not arrive..." line for every channel, and for a
+// call that was deliberately never placed that line is simply untrue.
+function testRow(card, name, opts) {
+  opts = opts || {};
   var row = el("div", "row");
-  var btn = el("button", "act", "Send a test");
+  var btn = el("button", "act", opts.button || "Send a test");
   var out = el("span", "muted small");
   row.appendChild(btn);
   row.appendChild(out);
   card.appendChild(row);
   card.appendChild(el("div", "note",
     "Tests the SAVED settings. Save first if you have just changed something."));
+  if (opts.note) card.appendChild(el("div", "note", opts.note));
 
   btn.addEventListener("click", function () {
     btn.disabled = true;
     out.className = "muted small";
-    out.textContent = "sending...";
+    out.textContent = opts.button ? "checking..." : "sending...";
     api("POST", "/api/channels/" + encodeURIComponent(name) + "/test").then(function (r) {
       btn.disabled = false;
       if (r.ok && r.data && r.data.ok) {
         out.className = "ok small";
-        out.textContent = r.data.detail || "sent";
+        out.textContent = opts.success || r.data.detail || "sent";
         return;
       }
       out.className = "err small";
@@ -996,7 +1102,7 @@ document.addEventListener("DOMContentLoaded", function () {
 var SEVERITIES = ["critical", "high", "medium", "low", "info"];
 // The built-in channels. Outbound webhooks are added by name at render time,
 // because how many there are and what they are called is configuration.
-var CHANNEL_NAMES = ["ntfy", "email", "pushover"];
+var CHANNEL_NAMES = ["ntfy", "email", "pushover", "voice"];
 
 // DEFAULT_LADDERS mirrors escalate.DefaultPolicies, so a severity the config
 // does not override can still be SHOWN. Displayed as "default" rather than
