@@ -70,10 +70,14 @@ func TestTheChecklistReportsRemainingSteps(t *testing.T) {
 		Available bool `json:"available"`
 		Ready     bool `json:"ready"`
 		Steps     []struct {
-			Title  string   `json:"title"`
-			Status string   `json:"status"`
-			Why    string   `json:"why"`
-			How    []string `json:"how"`
+			Key    string `json:"key"`
+			Title  string `json:"title"`
+			Status string `json:"status"`
+			Why    string `json:"why"`
+			How    []struct {
+				Text string `json:"text"`
+				Kind string `json:"kind"`
+			} `json:"how"`
 		} `json:"steps"`
 	}
 	if err := json.Unmarshal(body, &d); err != nil {
@@ -89,12 +93,23 @@ func TestTheChecklistReportsRemainingSteps(t *testing.T) {
 		t.Fatalf("steps = %d, want the whole checklist", len(d.Steps))
 	}
 	for _, s := range d.Steps {
+		if s.Key == "" {
+			t.Errorf("step %q has no key, so the page cannot tell which step it "+
+				"is without matching on the title text", s.Title)
+		}
 		if s.Why == "" {
 			t.Errorf("step %q has no reason; an instruction without a consequence "+
 				"is one people postpone", s.Title)
 		}
 		if s.Status != "done" && len(s.How) == 0 {
 			t.Errorf("step %q is not done and says nothing about how to do it", s.Title)
+		}
+		// Every line carries its kind, or the page cannot tell a warning
+		// from an action and renders both at the same weight -- the wall.
+		for _, l := range s.How {
+			if l.Text == "" || l.Kind == "" {
+				t.Errorf("step %q sent a line without text or kind: %+v", s.Title, l)
+			}
 		}
 	}
 }

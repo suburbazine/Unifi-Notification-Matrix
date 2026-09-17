@@ -3,12 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#1c1f25">
 <title>UniFi Notification Matrix</title>
 <!--
   Everything this page needs is served by this binary. No CDN, no framework,
-  no webfont: the LAN it runs on may have no route to the internet at all, and
-  an operator page that must fetch something before it works is a page that
-  fails exactly when the network is the problem.
+  no webfont, no icon pack: the LAN it runs on may have no route to the
+  internet at all, and an operator page that must fetch something before it
+  works is a page that fails exactly when the network is the problem. The
+  glyphs are inline SVG built by app.js for the same reason.
 
   The script is a separate file rather than inline because the
   Content-Security-Policy on every response forbids inline script.
@@ -18,36 +21,62 @@
 </head>
 <body>
 <header class="bar">
-  <div class="brand">UniFi Notification Matrix <span class="ver">{{.Version}}</span></div>
+  <div class="brand">
+    <!-- The mark: a 3x3 matrix, one cell lit. Inline because a favicon or
+         an <img> would be another request; aria-hidden because the name
+         beside it is the accessible label. -->
+    <svg class="mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <g fill="currentColor" opacity=".45">
+        <circle cx="5" cy="5" r="2.2"/><circle cx="12" cy="5" r="2.2"/><circle cx="19" cy="5" r="2.2"/>
+        <circle cx="5" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/>
+        <circle cx="5" cy="19" r="2.2"/><circle cx="12" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/>
+      </g>
+      <circle cx="12" cy="12" r="3" fill="currentColor"/>
+    </svg>
+    <span>UniFi Notification Matrix</span>
+    <span class="ver">{{.Version}}</span>
+  </div>
   <div class="right">
-    <span id="headline" class="badge">connecting</span>
+    <!-- A link, not a span: "2 ALERTING" is the one figure on this page
+         somebody wants to act on, and the hash routes to the board. -->
+    <a id="headline" class="badge" href="#incidents">connecting</a>
     <span id="session" class="muted"></span>
   </div>
 </header>
 
+<!-- Five tabs, in the order of the questions they answer: what is
+     happening (Incidents), is the machinery working (Health), what was never
+     finished (Setup), and then the two that change things. Webhooks used to
+     be a sixth tab; it is a section of Settings now, reached from the rail
+     there, because a hook's credentials rendered on two tabs with two
+     different explanations and an operator following Setup was sent to a
+     tab whose Save knew nothing about the console they had just typed in. -->
 <nav class="tabs" role="tablist">
   <button role="tab" data-tab="incidents" aria-selected="true">Incidents</button>
-  <button role="tab" data-tab="setup" aria-selected="false">Setup</button>
   <button role="tab" data-tab="health" aria-selected="false">Health</button>
-  <button role="tab" data-tab="webhooks" aria-selected="false">Webhooks</button>
+  <button role="tab" data-tab="setup" aria-selected="false">Setup</button>
   <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
-  <button role="tab" data-tab="audit" aria-selected="false">Audit</button>
+  <button role="tab" data-tab="activity" aria-selected="false">Activity</button>
 </nav>
 
 <main>
+  <noscript>
+    <div class="callout is-warn">This page is drawn by a script that this browser is not running. The daemon is fine; the page is not.</div>
+  </noscript>
+
+  <!-- Each tab has an empty lede mount (filled by setLede in app.js: one
+       line saying which question the tab answers, plus a live figure).
+       Written with no whitespace inside so :empty holds until it is filled. -->
   <section id="tab-incidents">
+    <div class="lede-mount" id="lede-incidents"></div>
     <h3>Open incidents</h3>
     <div id="open-incidents"></div>
     <h3>Recently closed</h3>
     <div id="recent-incidents"></div>
   </section>
 
-  <section id="tab-setup" hidden>
-    <h3>What is left to do</h3>
-    <div id="setup-body"></div>
-  </section>
-
   <section id="tab-health" hidden>
+    <div class="lede-mount" id="lede-health"></div>
     <h3>Sources</h3>
     <div id="health-sources"></div>
     <h3>Channels</h3>
@@ -56,15 +85,21 @@
     <div id="health-service"></div>
   </section>
 
-  <section id="tab-webhooks" hidden>
-    <div id="webhooks-body"></div>
+  <section id="tab-setup" hidden>
+    <div class="lede-mount" id="lede-setup"></div>
+    <h3>What is left to do</h3>
+    <div id="setup-body"></div>
   </section>
 
+  <!-- Settings is one page with a section rail; app.js builds the rail and
+       the sections. #settings/channels and friends land on a section. -->
   <section id="tab-settings" hidden>
+    <div class="lede-mount" id="lede-settings"></div>
     <div id="settings-body"></div>
   </section>
 
-  <section id="tab-audit" hidden>
+  <section id="tab-activity" hidden>
+    <div class="lede-mount" id="lede-activity"></div>
     <h3>Recent activity</h3>
     <div id="audit-body"></div>
   </section>

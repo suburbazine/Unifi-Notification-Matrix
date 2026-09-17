@@ -327,7 +327,13 @@ func TestAScopedButUnencryptedPublicAckURLIsFlagged(t *testing.T) {
 // or people take the harder one and get it wrong.
 func TestTheOffSiteInstructionsLeadWithTheVPN(t *testing.T) {
 	got := step(t, workable(), "acknowledgement")
-	joined := strings.Join(got.How, "\n")
+	// The off-site discussion is reference material under the step, not
+	// part of How: it is seven paragraphs an operator on a LAN never needs.
+	if len(got.Reference) == 0 {
+		t.Fatalf("the acknowledgement step has no reference topic; the off-site "+
+			"instructions have gone:\n%s", strings.Join(got.How, "\n"))
+	}
+	joined := strings.Join(got.Reference[0].Lines, "\n")
 
 	vpn := strings.Index(joined, "VPN")
 	forward := strings.Index(joined, "FORWARD A PORT")
@@ -507,5 +513,62 @@ func TestTheInstructionsNameTheListenerAsWellAsTheAddress(t *testing.T) {
 		if !strings.Contains(how, want) {
 			t.Errorf("the instructions never mention %q:\n%s", want, how)
 		}
+	}
+}
+
+// A warning in the checklist leads with capitals. That was only a habit until
+// the interface started drawing warnings as callouts; now it is the rule, and
+// a line that should be a callout and is not gets found here rather than by
+// an operator reading it at the same weight as the step beside it.
+func TestWarningsAreTheLinesThatLeadWithCapitals(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want LineKind
+	}{
+		{"IF YOU MUST FORWARD A PORT, scope it.", Warning},
+		{"ADD THE HEADER TOO. Both are listed below.", Warning},
+		{"TWO settings have to agree", Warning},
+		{"BEST: a VPN. WireGuard or Tailscale, on the phone.", Aside},
+		{"A guessable topic on the public ntfy.sh server", Action},
+		{"Run: notifymatrix install", Action},
+		{"In the UniFi console, open the application", Action},
+		{"ntfy is the quickest", Action},
+		{"", Action},
+	} {
+		if got := KindOf(tc.line); got != tc.want {
+			t.Errorf("KindOf(%q) = %q, want %q", tc.line, got, tc.want)
+		}
+	}
+
+	// And the steps actually contain some, or the convention is decorative.
+	var warnings int
+	for _, s := range Steps(Input{}) {
+		for _, h := range s.How {
+			if KindOf(h) == Warning {
+				warnings++
+			}
+		}
+	}
+	if warnings == 0 {
+		t.Error("no step carries a warning line; the callouts have gone")
+	}
+}
+
+// Every step has a stable key, and the hooks step's is the one the renderers
+// put the credentials under. Matching on the title text is how a rewording
+// would move them somewhere else without anybody noticing.
+func TestEveryStepHasAStableKey(t *testing.T) {
+	seen := map[string]bool{}
+	for _, s := range Steps(Input{}) {
+		if s.Key == "" {
+			t.Errorf("step %q has no key", s.Title)
+		}
+		if seen[s.Key] {
+			t.Errorf("key %q is used twice", s.Key)
+		}
+		seen[s.Key] = true
+	}
+	if step(t, Input{}, hooksTitle).Key != "hooks" {
+		t.Error("the hooks step is not keyed \"hooks\", so the credentials will be printed under the wrong step")
 	}
 }

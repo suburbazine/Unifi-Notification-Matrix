@@ -25,14 +25,32 @@ func (s *Server) handleChecklist(w http.ResponseWriter, r *http.Request) {
 	in := s.deps.Checklist()
 	authed := s.authenticated(r)
 
+	// Each line of How goes out with its kind, so the page can draw a
+	// warning as a bordered callout and number only the actions. The kind
+	// is decided by setup.KindOf, in the package that writes the lines --
+	// not by the page guessing from capital letters, which would drift the
+	// first time somebody reworded a warning.
+	lines := func(ls []string) []map[string]string {
+		out := make([]map[string]string, 0, len(ls))
+		for _, l := range ls {
+			out = append(out, map[string]string{"text": l, "kind": string(setup.KindOf(l))})
+		}
+		return out
+	}
 	steps := make([]map[string]any, 0, 8)
 	for _, st := range setup.Steps(in) {
+		ref := make([]map[string]any, 0, len(st.Reference))
+		for _, t := range st.Reference {
+			ref = append(ref, map[string]any{"title": t.Title, "lines": lines(t.Lines)})
+		}
 		steps = append(steps, map[string]any{
-			"title":  st.Title,
-			"status": string(st.Status),
-			"why":    st.Why,
-			"state":  st.State,
-			"how":    st.How,
+			"key":       st.Key,
+			"title":     st.Title,
+			"status":    string(st.Status),
+			"why":       st.Why,
+			"state":     st.State,
+			"how":       lines(st.How),
+			"reference": ref,
 		})
 	}
 

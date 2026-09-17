@@ -6,7 +6,16 @@
 "use strict";
 
 var REFRESH_MS = 5000;
-var state = { authed: false, setupRequired: false, minPassword: 12, tab: "incidents" };
+// ready and todo come from the status poll (api/status "setup"), so the
+// header, the Setup tab's count and the first-run landing all read the same
+// two numbers. serviceState is the service manager's word for the daemon
+// ("running", "stopped", "not installed"), kept so a Save can offer to
+// restart without asking Health first. section is the Settings section the
+// hash named (#settings/channels), if any.
+var state = {
+  authed: false, setupRequired: false, minPassword: 12, tab: "incidents",
+  section: "", ready: true, todo: 0, serviceState: "", setupKnown: false
+};
 
 function el(tag, cls, text) {
   var e = document.createElement(tag);
@@ -54,6 +63,354 @@ function stamp(iso) {
 }
 function badge(text, cls) { return el("span", "badge " + (cls || ""), text); }
 
+// ---------- visual primitives ----------
+//
+// Everything below is shared by every tab. A renderer that wants to show a
+// state, an icon, an explanation or an empty screen calls one of these rather
+// than assembling class strings, so that a colour or a glyph is decided in
+// ONE place and the style sheet's tone system (style.css, section 11) is the
+// only mapping from meaning to colour.
+//
+//   toneClass(x)                     "is-ok" | "is-warn" | "is-err" | "is-info" | "is-muted"
+//   icon(name, cls, label)           inline <svg>; decorative unless label given
+//   why(text, opts)                  the "why?" disclosure, see below
+//   callout(text, tone, title)       a bordered, tinted note with a glyph
+//   stateBlock(kind, opts)           empty / loading / error blocks
+//   emptyState / loadingState / errorState   shorthands for the above
+//   lede(iconName, question, figure) a tab's one-line header
+//   setLede(tab, iconName, question, figure)  ...placed into #lede-<tab>
+//   segmentBar(tones, label)         "4 of 7" as a bar, one segment per step
+//   pipeline(nodes)                  console -> here -> channels -> phone
+//   setTabCount(tab, text, tone)     the little pill on a tab button
+//   copyButton(text, label)          copies a credential, works over plain http
+
+// toneClass turns whatever a caller has -- a checklist status, a channel
+// state, a severity, a bare tone name -- into the one class the style sheet
+// understands. Unknown words are muted rather than an error: a new server
+// status must never make the UI throw.
+function toneClass(x) {
+  switch (String(x || "").toLowerCase()) {
+    case "ok": case "on": case "done": case "reporting": case "running":
+    case "delivered": case "ready": case "live": case "good": case "success":
+      return "is-ok";
+    case "warn": case "warning": case "unverified": case "acknowledged":
+    case "silent": case "high": case "held": case "pending": case "stale":
+      return "is-warn";
+    case "err": case "error": case "crit": case "critical": case "todo":
+    case "off": case "failing": case "failed": case "alerting": case "open":
+    case "missing": case "stopped": case "not ready":
+      return "is-err";
+    case "info": case "accent": case "medium": case "resolved": case "delivering":
+    case "active": case "in progress": case "customised": case "customized":
+      return "is-info";
+    default:
+      return "is-muted";
+  }
+}
+
+// ICONS: every glyph on a 24x24 grid, drawn as strokes with round caps and
+// joins at one weight (set by .icon in style.css), and no fills except the
+// deliberate dots. They are strings of SVG path data rather than markup so
+// nothing here is ever parsed as HTML. Each entry is one or more path "d"
+// attributes; a leading "o" marks a circle as "o cx cy r".
+//
+// Drawn here rather than taken from an icon set so the twelve the interface
+// needs share one hand, and so the CSP (script-src 'self', no external
+// assets) is satisfied without a new file for handleAsset to serve.
+var ICONS = {
+  // the twelve the interface is built around
+  camera:   ["M3 8.5A1.5 1.5 0 0 1 4.5 7H8l1.5-2.5h5L16 7h3.5A1.5 1.5 0 0 1 21 8.5V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", "o 12 13.5 3.5"],
+  door:     ["M5 21V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v17", "M3 21h18", "M15 12h.01"],
+  network:  ["M9 3h6v5H9z", "M3 16h6v5H3z", "M15 16h6v5h-6z", "M12 8v3", "M6 16v-2a1.5 1.5 0 0 1 1.5-1.5h9A1.5 1.5 0 0 1 18 14v2"],
+  bell:     ["M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15z", "M10 21a2 2 0 0 0 4 0"],
+  envelope: ["M3 6.5A1.5 1.5 0 0 1 4.5 5h15A1.5 1.5 0 0 1 21 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z", "M3 8l9 6 9-6"],
+  phone:    ["M5 3h3.5l2 5-2.5 1.5a11 11 0 0 0 6.5 6.5L16 13.5l5 2V19a2 2 0 0 1-2 2A16 16 0 0 1 3 5a2 2 0 0 1 2-2z"],
+  plug:     ["M9 2v6", "M15 2v6", "M6 8h12v3a6 6 0 0 1-12 0z", "M12 17v5"],
+  check:    ["M5 12.5l4.5 4.5L19 7"],
+  warning:  ["M12 3.5 21.5 20h-19z", "M12 10v4.5", "M12 17.5h.01"],
+  clock:    ["o 12 12 9", "M12 7v5l3 2"],
+  shield:   ["M12 3l8 3v6c0 4.8-3.4 8-8 9-4.6-1-8-4.2-8-9V6z", "M9 12l2 2 4-4"],
+  gear:     ["M19.3 9.8L21.8 10.1L21.8 13.9L19.3 14.2L18.7 15.6L20.3 17.6L17.6 20.3L15.6 18.7L14.2 19.3L13.9 21.8L10.1 21.8L9.8 19.3L8.4 18.7L6.4 20.3L3.7 17.6L5.3 15.6L4.7 14.2L2.2 13.9L2.2 10.1L4.7 9.8L5.3 8.4L3.7 6.4L6.4 3.7L8.4 5.3L9.8 4.7L10.1 2.2L13.9 2.2L14.2 4.7L15.6 5.3L17.6 3.7L20.3 6.4L18.7 8.4Z", "o 12 12 3"],
+  // and the ones the primitives themselves need
+  chevron:  ["M9 6l6 6-6 6"],
+  info:     ["o 12 12 9", "M12 11v5", "M12 8h.01"],
+  x:        ["M6 6l12 12", "M18 6L6 18"],
+  arrow:    ["M4 12h16", "M14 6l6 6-6 6"],
+  activity: ["M3 12h4l3-7 4 14 3-7h4"],
+  list:     ["M5 4.5h14a1.5 1.5 0 0 1 1.5 1.5v13a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19V6A1.5 1.5 0 0 1 5 4.5z", "M8 4v2", "M16 4v2", "M8.5 13l2.5 2.5 5-5"],
+  link:     ["M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1", "M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"],
+  copy:     ["M9 9h10a1.5 1.5 0 0 1 1.5 1.5v10A1.5 1.5 0 0 1 19 22H9a1.5 1.5 0 0 1-1.5-1.5v-10A1.5 1.5 0 0 1 9 9z", "M5 15V4.5A1.5 1.5 0 0 1 6.5 3H16"],
+  key:      ["o 8 14 4", "M11 11l9-9", "M16 6l2 2", "M18.5 3.5l2 2"],
+  power:    ["M12 3v9", "M6.3 7.3a8 8 0 1 0 11.4 0"],
+  refresh:  ["M20 12a8 8 0 1 1-2.3-5.7", "M20 4v5h-5"],
+  server:   ["M4 5h16v5H4z", "M4 14h16v5H4z", "M8 7.5h.01", "M8 16.5h.01"],
+  home:     ["M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"],
+  help:     ["o 12 12 9", "M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .8-1 1.5V14", "M12 17h.01"]
+};
+
+var SVG_NS = "http://www.w3.org/2000/svg";
+
+// icon returns an inline <svg class="icon"> for one of the names in ICONS.
+// Decorative by default (aria-hidden), because it nearly always sits beside
+// the word it illustrates; pass a label when it stands alone -- a bare
+// warning triangle in a table cell -- and it becomes role="img".
+// cls is appended to the class list: "sm" / "lg" for size, a tone class
+// for colour, "chev" for the accordion chevron that rotates.
+function icon(name, cls, label) {
+  var d = ICONS[name] || ICONS.help;
+  var svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "icon" + (cls ? " " + cls : ""));
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("focusable", "false");
+  if (label) {
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", label);
+  } else {
+    svg.setAttribute("aria-hidden", "true");
+  }
+  d.forEach(function (p) {
+    var node;
+    if (p.charAt(0) === "o") {
+      var v = p.split(" ");
+      node = document.createElementNS(SVG_NS, "circle");
+      node.setAttribute("cx", v[1]); node.setAttribute("cy", v[2]); node.setAttribute("r", v[3]);
+    } else {
+      node = document.createElementNS(SVG_NS, "path");
+      node.setAttribute("d", p);
+    }
+    svg.appendChild(node);
+  });
+  return svg;
+}
+
+// fill puts text or a node into a container. Every primitive below takes
+// "text" that may be a string OR a ready-made node, so a caller can hand
+// over a paragraph with a link in it without the primitive growing options.
+function fill(node, content) {
+  if (content === undefined || content === null) return node;
+  if (content.nodeType) node.appendChild(content);
+  else node.textContent = String(content);
+  return node;
+}
+
+// why -- the "why?" disclosure.
+//
+//   lab.appendChild(why("Renaming this hook reissues its credentials..."));
+//   row.appendChild(why(text, "what's this?"));          // custom trigger label
+//   row.appendChild(why(text, { label: "why?", tone: "warn" }));
+//
+// It returns ONE node: a small trigger button and the explanation, hidden
+// until pressed. Put it inside the label or title of the thing it explains;
+// for a checkbox row, append it to the row (not the label) and the style
+// sheet drops the body to its own line under the pair.
+//
+// Chosen over a native title= tooltip and over a floating popover, and the
+// reasons are in style.css beside .why. In short: a tooltip never shows on a
+// phone or on keyboard focus; a popover covers the control it explains and
+// its text is absent from the document until opened, which would blind the
+// snapshot harness that guards this UI's copy. This is a real <button>, so
+// it works by tap, click and keyboard, and announces its expanded state.
+var whySeq = 0;
+function why(text, opts) {
+  if (typeof opts === "string") opts = { label: opts };
+  opts = opts || {};
+  var wrap = el("span", "why");
+  var btn = el("button", "why-btn");
+  btn.type = "button";
+  btn.setAttribute("aria-expanded", "false");
+  var id = "why-" + (++whySeq);
+  btn.setAttribute("aria-controls", id);
+  btn.appendChild(icon("info", "sm"));
+  btn.appendChild(document.createTextNode(opts.label || "why?"));
+  var body = fill(el("span", "why-body" + (opts.tone ? " " + toneClass(opts.tone) : "")), text);
+  body.id = id;
+  body.hidden = true;
+  btn.addEventListener("click", function (ev) {
+    // The trigger often sits inside a <label>; without this the click
+    // would also land on the label and focus (or toggle) its control.
+    ev.preventDefault(); ev.stopPropagation();
+    var open = body.hidden;
+    body.hidden = !open;
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  wrap.appendChild(btn);
+  wrap.appendChild(body);
+  return wrap;
+}
+
+// callout: a warning or fact that belongs beside one control, rendered as
+// a bordered, tinted block with a glyph. tone is ok | warn | err | info
+// (default info). Text may contain newlines; they are kept.
+function callout(text, tone, title) {
+  var t = toneClass(tone || "info");
+  var box = el("div", "callout " + t);
+  var glyph = t === "is-ok" ? "check" : (t === "is-err" || t === "is-warn") ? "warning" : "info";
+  box.appendChild(icon(glyph));
+  var inner = el("div", "grow");
+  if (title) inner.appendChild(el("span", "callout-title", title));
+  inner.appendChild(fill(el("span", "callout-body"), text));
+  box.appendChild(inner);
+  return box;
+}
+
+// stateBlock: an empty, loading or error state that looks designed.
+//
+//   stateBlock("empty", { icon: "camera", title: "Nothing is being watched",
+//                         text: "...", tone: "warn",
+//                         action: { label: "Set up a console", href: "#setup" } })
+//   stateBlock("loading", { text: "Loading incidents…" })
+//   stateBlock("error",   { text: "could not load settings", action: { label: "Retry", onClick: fn } })
+//
+// opts.compact renders one row instead of a centred block, for a state that
+// sits inside a card rather than standing in for one. An action may be an
+// href (a hash link to another tab) or an onClick; primary: true fills it.
+function stateBlock(kind, opts) {
+  opts = opts || {};
+  var tone = opts.tone || (kind === "error" ? "err" : "muted");
+  var box = el("div", "state " + toneClass(tone) + (opts.compact ? " compact" : ""));
+  box.setAttribute("role", kind === "error" ? "alert" : "status");
+  if (kind === "loading") {
+    box.appendChild(el("span", "spinner"));
+    box.appendChild(el("div", "state-text", opts.text || "Loading…"));
+    return box;
+  }
+  box.appendChild(icon(opts.icon || (kind === "error" ? "warning" : "info")));
+  var body = el("div", opts.compact ? "grow" : "");
+  if (opts.title) body.appendChild(el("div", "state-title", opts.title));
+  if (opts.text) body.appendChild(fill(el("div", "state-text"), opts.text));
+  box.appendChild(body);
+  if (opts.action) {
+    var bar = el("div", "formbar");
+    var a = opts.action;
+    var b;
+    if (a.href) {
+      b = el("a", "act" + (a.primary ? " primary" : ""), a.label);
+      b.href = a.href;
+    } else {
+      b = el("button", "act" + (a.primary ? " primary" : ""), a.label);
+      b.type = "button";
+      if (a.onClick) b.addEventListener("click", a.onClick);
+    }
+    if (a.icon) b.insertBefore(icon(a.icon), b.firstChild);
+    bar.appendChild(b);
+    box.appendChild(bar);
+  }
+  return box;
+}
+function emptyState(title, text, action, extra) {
+  var o = extra || {};
+  o.title = title; o.text = text; o.action = action;
+  return stateBlock("empty", o);
+}
+function loadingState(text) { return stateBlock("loading", { text: text }); }
+function errorState(text, retry) {
+  return stateBlock("error", {
+    title: "That did not load", text: text,
+    action: retry ? { label: "Try again", onClick: retry, icon: "refresh" } : null
+  });
+}
+
+// lede: a tab's one-line header -- glyph, the question the tab answers,
+// and the live figure that answers it ("2 alerting · 1 acknowledged").
+// figure may be a string or a node (a row of badges, say). tone colours
+// the glyph, so Health can go amber when a channel is failing.
+function lede(iconName, question, figure, tone) {
+  var box = el("div", "lede" + (tone ? " " + toneClass(tone) : ""));
+  box.appendChild(icon(iconName));
+  var txt = el("div", "grow");
+  txt.appendChild(el("div", "lede-q", question));
+  if (figure !== undefined && figure !== null && figure !== "") {
+    txt.appendChild(fill(el("div", "lede-fig"), figure));
+  }
+  box.appendChild(txt);
+  return box;
+}
+// setLede fills the mount index.html leaves at the top of each tab.
+function setLede(tab, iconName, question, figure, tone) {
+  var mount = byId("lede-" + tab);
+  if (!mount) return null;
+  clear(mount);
+  var l = lede(iconName, question, figure, tone);
+  mount.appendChild(l);
+  return l;
+}
+
+// segmentBar: one segment per item, each in its tone. Pass what the
+// bar means as the label, because six coloured rectangles say nothing to
+// a screen reader.
+function segmentBar(tones, label) {
+  var bar = el("div", "segments");
+  bar.setAttribute("role", "img");
+  if (label) bar.setAttribute("aria-label", label);
+  (tones || []).forEach(function (t) { bar.appendChild(el("span", "seg " + toneClass(t))); });
+  return bar;
+}
+
+// pipeline: nodes = [{ icon, title, sub, tone }], drawn left to right with
+// arrows between (top to bottom at phone width, by CSS).
+function pipeline(nodes) {
+  var box = el("div", "pipeline");
+  (nodes || []).forEach(function (n, i) {
+    if (i > 0) {
+      var link = el("span", "link");
+      link.appendChild(icon("arrow"));
+      box.appendChild(link);
+    }
+    var node = el("div", "node " + toneClass(n.tone));
+    node.appendChild(icon(n.icon || "info"));
+    node.appendChild(el("div", "node-title", n.title));
+    if (n.sub) node.appendChild(fill(el("div", "node-sub"), n.sub));
+    box.appendChild(node);
+  });
+  return box;
+}
+
+// setTabCount puts a small pill on a tab button ("Setup 3"), or removes it
+// when text is empty. The tone says whether the number is good news.
+function setTabCount(tab, text, tone) {
+  var btn = document.querySelector ? document.querySelector('nav.tabs button[data-tab="' + tab + '"]') : null;
+  if (!btn) return;
+  var pill = btn.querySelector(".count");
+  if (!text && text !== 0) { if (pill) btn.removeChild(pill); return; }
+  if (!pill) { pill = el("span", "count"); btn.appendChild(pill); }
+  pill.className = "count " + toneClass(tone);
+  pill.textContent = String(text);
+}
+
+// copyButton copies text to the clipboard and says so for a moment.
+//
+// navigator.clipboard exists only in a secure context, and this page is
+// usually plain http on a LAN -- so on the very installs that need it most
+// the modern API is simply undefined. The old execCommand path still works
+// there, so it is the fallback rather than an error message.
+function copyButton(text, label) {
+  var b = el("button", "act small");
+  b.type = "button";
+  b.appendChild(icon("copy"));
+  var word = document.createTextNode(label || "Copy");
+  b.appendChild(word);
+  b.addEventListener("click", function () {
+    var value = typeof text === "function" ? text() : text;
+    var done = function (okay) {
+      word.textContent = okay ? "Copied" : "Select and copy";
+      setTimeout(function () { word.textContent = label || "Copy"; }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(function () { done(true); }, function () { done(false); });
+      return;
+    }
+    var ta = document.createElement("textarea");
+    ta.value = value; ta.setAttribute("readonly", "");
+    ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    var okay = false;
+    try { okay = document.execCommand("copy"); } catch (e) { okay = false; }
+    document.body.removeChild(ta);
+    done(okay);
+  });
+  return b;
+}
+
 // ---------- incidents ----------
 
 function incidentCard(inc, showActions) {
@@ -69,7 +426,7 @@ function incidentCard(inc, showActions) {
   head.appendChild(badge(inc.severity, "sev-" + inc.severity));
   head.appendChild(badge(inc.state, "st-" + inc.state));
   head.appendChild(el("div", "title grow", inc.title || inc.dedup_key));
-  head.appendChild(el("span", "muted small", age(inc.age_seconds) + " old"));
+  head.appendChild(el("span", "muted small", incidentAge(inc)));
   card.appendChild(head);
 
   var meta = [];
@@ -115,6 +472,20 @@ function incidentCard(inc, showActions) {
   return card;
 }
 
+// incidentAge says how long an incident has been what it is. "3m old" on
+// a closed card read as if the incident were three minutes old, when it was
+// closed two hours ago and had been open for a day; the verb makes the
+// number mean something. age_seconds counts from opening, so a closed card
+// measures from closed_at instead.
+function incidentAge(inc) {
+  if (inc.state === "closed" && inc.closed_at) {
+    var t = new Date(inc.closed_at).getTime();
+    if (!isNaN(t)) return "closed " + age((Date.now() - t) / 1000) + " ago";
+    return "closed";
+  }
+  return "open " + age(inc.age_seconds);
+}
+
 function act(button, method, path, body) {
   button.disabled = true;
   api(method, path, body).then(function (res) {
@@ -133,14 +504,39 @@ function refreshIncidents() {
     var open = byId("open-incidents"), recent = byId("recent-incidents");
     clear(open); clear(recent);
     var list = res.data.incidents || [];
-    var nOpen = 0, nDone = 0;
+    var nOpen = 0, nDone = 0, nAlert = 0, nAcked = 0;
     list.forEach(function (inc) {
       if (inc.state === "closed") { recent.appendChild(incidentCard(inc, false)); nDone++; }
-      else { open.appendChild(incidentCard(inc, true)); nOpen++; }
+      else {
+        open.appendChild(incidentCard(inc, true)); nOpen++;
+        if (inc.state === "acknowledged") nAcked++; else nAlert++;
+      }
     });
+
+    // The lede: the tab's question and the live answer to it.
+    var fig = el("span", "cluster");
+    fig.appendChild(badge(nAlert + " alerting", nAlert ? "is-err" : "is-muted"));
+    fig.appendChild(badge(nAcked + " acknowledged", nAcked ? "is-warn" : "is-muted"));
+    fig.appendChild(el("span", "", "· " + nDone + " closed recently"));
+    setLede("incidents", "bell", "What is happening now.", fig,
+      nAlert ? "err" : (nAcked ? "warn" : "ok"));
+
     if (!nOpen) {
-      open.appendChild(el("div", "empty",
-        "Nothing open. Check Health to confirm the sources are actually reporting."));
+      // Nothing open means one of two very different things, and the empty
+      // state has to say which: on a set-up installation it is good news
+      // and Health confirms it; on one watching nothing it is the absence
+      // of a product, and the button goes to Setup.
+      if (state.setupKnown && !state.ready) {
+        open.appendChild(emptyState("Nothing is being watched yet",
+          "There are no incidents because nothing can raise one. Setup says what is missing.",
+          { label: "Finish setup", href: "#setup", primary: true, icon: "list" },
+          { icon: "warning", tone: "warn" }));
+      } else {
+        open.appendChild(emptyState("Nothing open",
+          "Health confirms the sources are actually reporting -- silence is only good news if they are.",
+          { label: "Check Health", href: "#health", icon: "activity" },
+          { icon: "check", tone: "ok" }));
+      }
     }
     if (!nDone) recent.appendChild(el("div", "empty", "Nothing closed recently."));
   });
@@ -148,51 +544,98 @@ function refreshIncidents() {
 
 // ---------- health ----------
 
+// channelState reduces a channel's five counters to the one word an
+// operator is asking for, with the numbers as a detail line underneath.
+// "Queued 0 / 256 · Dropped 0 · Sending no" was the row before, and reading
+// it meant knowing which of five columns to look at first. Held back is
+// its own state and must not look like either of the others: the channel
+// is not delivering, and it is not being attempted.
+function channelState(c) {
+  var held = c.backing_off_until && new Date(c.backing_off_until) > new Date();
+  if (!c.enabled) return { word: "off", tone: "muted" };
+  if (held) {
+    return { word: "held back until " + new Date(c.backing_off_until).toLocaleTimeString(),
+             tone: "warn", held: true };
+  }
+  if (c.last_error || c.dropped > 0) return { word: "failing", tone: "err" };
+  if (c.in_flight || c.pending > 0) return { word: "delivering", tone: "info" };
+  return { word: "idle", tone: "ok" };
+}
+
 function renderHealth(h) {
+  var sources = (h && h.sources) || [];
+  var channels = (h && h.channels) || [];
+  var reporting = sources.filter(function (x) { return !x.silent; }).length;
+  var silent = sources.length - reporting;
+  var failing = channels.filter(function (c) { return channelState(c).tone === "err"; }).length;
+  var held = channels.filter(function (c) { return channelState(c).held; }).length;
+
+  // The lede. Health answers "is the machinery working", and the figure is
+  // the two counts that decide it.
+  var fig = el("span", "cluster");
+  fig.appendChild(badge(reporting + (reporting === 1 ? " source" : " sources") + " reporting",
+    reporting ? "is-ok" : "is-muted"));
+  if (silent) fig.appendChild(badge(silent + " silent", "is-warn"));
+  if (failing) fig.appendChild(badge(failing + (failing === 1 ? " channel" : " channels") + " failing", "is-err"));
+  if (held) fig.appendChild(badge(held + " held back", "is-warn"));
+  if (!failing && !held && channels.length) {
+    fig.appendChild(el("span", "", "· " + channels.length + (channels.length === 1 ? " channel" : " channels") + " ready"));
+  }
+  setLede("health", "activity", "Is the machinery working.", fig,
+    failing || (!sources.length) ? "err" : (silent || held ? "warn" : "ok"));
+
   var srcs = byId("health-sources"); clear(srcs);
-  if (!h || !h.sources || !h.sources.length) {
-    srcs.appendChild(el("div", "empty", "No sources are configured, so nothing is being watched."));
+  if (!sources.length) {
+    srcs.appendChild(emptyState("No sources are configured",
+      "Nothing is being watched, so nothing can be raised. A console with at " +
+      "least one source to watch is the first step.",
+      { label: "Go to Setup", href: "#setup", primary: true, icon: "list" },
+      { icon: "camera", tone: "warn" }));
   } else {
-    var t = table(["Source", "Last seen", "Expected within", "State"]);
-    h.sources.forEach(function (s) {
+    // "Silent after", not "expected within": the column is the length of
+    // silence at which a source is reported silent, and the old heading
+    // read as a promise of when the next event would come.
+    var t = table(["Source", "Last seen", "Silent after", "State"]);
+    sources.forEach(function (s) {
       var row = t.tBodies[0].insertRow();
       row.insertCell().textContent = s.name;
       row.insertCell().textContent = s.last_seen
         ? stamp(s.last_seen) + " (" + age(s.age_seconds) + " ago)" : "never";
       row.insertCell().textContent = s.expected_within_seconds
-        ? age(s.expected_within_seconds) : "—";
+        ? age(s.expected_within_seconds) : "\u2014";
       var c = row.insertCell();
-      c.appendChild(badge(s.silent ? "silent" : "reporting", s.silent ? "off" : "on"));
+      c.appendChild(badge(s.silent ? "silent" : "reporting", s.silent ? "is-warn" : "is-ok"));
       if (s.detail) c.appendChild(el("div", "muted small", s.detail));
     });
     srcs.appendChild(wrap(t));
   }
 
   var chs = byId("health-channels"); clear(chs);
-  if (!h || !h.channels || !h.channels.length) {
-    chs.appendChild(el("div", "empty", "No channels are configured, so an alarm has nowhere to go."));
+  if (!channels.length) {
+    chs.appendChild(emptyState("No channels are configured",
+      "An alarm has nowhere to go. Enable at least one channel under Settings.",
+      { label: "Open Channels", href: "#settings/channels", primary: true, icon: "bell" },
+      { icon: "bell", tone: "warn" }));
   } else {
-    var ct = table(["Channel", "Enabled", "Queued", "Dropped", "Sending", "Last error"]);
-    h.channels.forEach(function (c) {
+    var ct = table(["Channel", "State", "Last error"]);
+    channels.forEach(function (c) {
+      var st = channelState(c);
       var row = ct.tBodies[0].insertRow();
       row.insertCell().textContent = c.name;
-      row.insertCell().appendChild(badge(c.enabled ? "on" : "off", c.enabled ? "on" : "off"));
-      row.insertCell().textContent = c.pending + " / " + c.depth;
-      var d = row.insertCell();
-      d.textContent = c.dropped;
-      if (c.dropped > 0) d.className = "err";
-      row.insertCell().textContent = c.in_flight ? "yes" : "no";
-      var e = row.insertCell();
-      e.textContent = c.last_error || "—";
-      if (c.last_error) e.className = "err";
-      // Held back is a third state, and it must not look like either of the
-      // other two: it is not delivering, and it is not being attempted.
-      if (c.backing_off_until && new Date(c.backing_off_until) > new Date()) {
-        e.className = "err";
-        e.appendChild(el("div", "small",
-          "held back after " + c.consecutive_fails + " failures in a row; " +
-          "next attempt " + stamp(c.backing_off_until)));
+      var sc = row.insertCell();
+      sc.appendChild(badge(st.word, toneClass(st.tone)));
+      // The numbers, muted, under the word they add up to.
+      var detail = "queued " + c.pending + " / " + c.depth + " \u00b7 dropped " + c.dropped +
+        (c.in_flight ? " \u00b7 sending now" : "");
+      sc.appendChild(el("div", (c.dropped > 0 ? "err" : "muted") + " small", detail));
+      if (st.held) {
+        sc.appendChild(el("div", "warn small",
+          "after " + c.consecutive_fails + " failures in a row; next attempt " +
+          stamp(c.backing_off_until)));
       }
+      var e = row.insertCell();
+      e.textContent = c.last_error || "\u2014";
+      if (c.last_error) e.className = "err";
     });
     chs.appendChild(wrap(ct));
   }
@@ -213,10 +656,10 @@ function renderHealth(h) {
     lines.push("running since " + stamp(h.started_at) + " (" + age(h.uptime_seconds) + ")");
   }
   if (s.detail) lines.push(s.detail);
-  if (lines.length) card.appendChild(el("div", "muted small", lines.join("  ·  ")));
+  if (lines.length) card.appendChild(el("div", "muted small", lines.join("  \u00b7  ")));
   if (s.unclean_previous_exit) {
     card.appendChild(el("div", "delivery-error",
-      "The last exit was unclean — a crash, or a power cut."));
+      "The last exit was unclean \u2014 a crash, or a power cut."));
   }
 
   // Channels, policies and rules are all built once, at start. Until this
@@ -232,24 +675,7 @@ function renderHealth(h) {
       if (action === "stop" && s.state !== "running") return;
       var b = el("button", action === "restart" ? "act primary" : "act",
         action.charAt(0).toUpperCase() + action.slice(1) + " the service");
-      b.addEventListener("click", function () {
-        msg.className = "msg";
-        msg.textContent = "asking the service manager to " + action + "…";
-        api("POST", "api/service", { action: action }).then(function (res) {
-          if (!res.ok) {
-            msg.className = "msg err";
-            msg.textContent = (res.data && res.data.error) || (action + " failed");
-            return;
-          }
-          // A restart or a stop takes THIS page's server down with it, so
-          // there is no success response worth waiting for -- saying
-          // "reconnecting" is the honest description of what happens next.
-          msg.textContent = action === "start"
-            ? "started."
-            : "asked. This page will go quiet for a few seconds while it restarts.";
-          setTimeout(refreshAll, 6000);
-        });
-      });
+      b.addEventListener("click", function () { serviceAction(action, b, msg); });
       bar.appendChild(b);
     });
     card.appendChild(bar);
@@ -257,6 +683,65 @@ function renderHealth(h) {
   }
   svc.appendChild(card);
   if (state.authed) renderUpdate(svc);
+}
+
+// serviceAction asks the service manager for one action and reports into
+// msg. Shared by the Health tab's buttons and the "Restart now" a Save
+// offers, so the two cannot describe the same restart differently.
+function serviceAction(action, button, msg) {
+  if (button) button.disabled = true;
+  msg.className = "msg";
+  msg.textContent = "asking the service manager to " + action + "\u2026";
+  api("POST", "api/service", { action: action }).then(function (res) {
+    if (button) button.disabled = false;
+    if (!res.ok) {
+      msg.className = "msg err";
+      msg.textContent = (res.data && res.data.error) || (action + " failed");
+      return;
+    }
+    // A restart or a stop takes THIS page's server down with it, so there
+    // is no success response worth waiting for -- saying "reconnecting" is
+    // the honest description of what happens next.
+    msg.className = "msg ok";
+    msg.textContent = action === "start"
+      ? "started."
+      : "asked. This page will go quiet for a few seconds while it restarts.";
+    setTimeout(refreshAll, 6000);
+  });
+}
+
+// restartOffer is what a Save appends when the change it just made only
+// takes effect after a restart: the sentence, and the button, together.
+// The old message said "changes take effect when the service restarts" and
+// the restart button was on another tab -- the operator was sent away from
+// the thing they had just saved to finish saving it. Nothing is offered
+// when the daemon is not a service (a terminal run is restarted from the
+// terminal) or the viewer is not signed in.
+function restartOffer(what) {
+  var box = el("div", "restart-offer callout is-info");
+  box.appendChild(icon("power"));
+  var inner = el("div", "grow");
+  inner.appendChild(el("span", "callout-title", "Saved. " + (what || "This change") +
+    " takes effect when the service restarts."));
+  var body = el("div", "callout-body");
+  if (state.authed && state.serviceState && state.serviceState !== "not installed") {
+    body.appendChild(el("span", "", "The daemon is still running the old configuration until then. "));
+    var bar = el("div", "formbar");
+    var b = el("button", "act primary small", "Restart now");
+    b.type = "button";
+    b.appendChild(icon("refresh"));
+    var msg = el("div", "msg");
+    b.addEventListener("click", function () { serviceAction("restart", b, msg); });
+    bar.appendChild(b);
+    body.appendChild(bar);
+    body.appendChild(msg);
+  } else {
+    body.appendChild(el("span", "", "Restart the daemon to apply it" +
+      (state.authed ? "." : "; sign in to do that from here.")));
+  }
+  inner.appendChild(body);
+  box.appendChild(inner);
+  return box;
 }
 
 // ---------- updates ----------
@@ -353,11 +838,24 @@ function table(cols) {
   t.createTBody();
   return t;
 }
-function wrap(t) { var d = el("div", "card"); d.appendChild(t); return d; }
+// wrap puts a table in a card, inside a horizontal scroller: the health and
+// audit tables are wider than a phone, and a table that cannot scroll on its
+// own pushes the whole page sideways instead.
+function wrap(t) {
+  var d = el("div", "card");
+  var sx = el("div", "scroll-x");
+  sx.appendChild(t);
+  d.appendChild(sx);
+  return d;
+}
 
 // ---------- status ----------
 
-function refreshStatus() {
+// refreshStatus polls api/status and redraws everything that is on every
+// screen: the headline badge, the session control, the Setup tab's count,
+// the demo banner and the Health tab. done, when given, runs after the
+// first successful answer (the landing decision waits on it).
+function refreshStatus(done) {
   api("GET", "api/status").then(function (res) {
     var h = byId("headline");
     if (!res.ok) {
@@ -370,11 +868,35 @@ function refreshStatus() {
     state.authed = !!d.authenticated;
     state.setupRequired = !!d.setup_required;
     state.minPassword = d.min_password_length || 12;
+    var su = d.setup || {};
+    state.setupKnown = !!su.available;
+    state.ready = su.available ? !!su.ready : true;
+    state.todo = su.todo || 0;
+    state.serviceState = (d.health && d.health.service && d.health.service.state) || "";
 
+    // The headline. Alerting beats everything; then open; then -- before
+    // "all clear" -- whether there is anything here to be clear ABOUT. An
+    // installation watching nothing has no incidents, and "all clear" in
+    // green was the first thing a fresh install said about itself.
     var c = d.incidents || {};
-    if (c.alerting > 0) { h.textContent = c.alerting + " alerting"; h.className = "badge off"; }
-    else if (c.open > 0) { h.textContent = c.open + " open"; h.className = "badge"; }
-    else { h.textContent = "all clear"; h.className = "badge on"; }
+    if (c.alerting > 0) {
+      h.textContent = c.alerting + " alerting"; h.className = "badge solid is-err"; h.href = "#incidents";
+    } else if (c.open > 0) {
+      h.textContent = c.open + " open"; h.className = "badge is-warn"; h.href = "#incidents";
+    } else if (state.setupKnown && !state.ready) {
+      h.textContent = "not set up"; h.className = "badge is-warn"; h.href = "#setup";
+    } else {
+      h.textContent = "all clear"; h.className = "badge on"; h.href = "#incidents";
+    }
+
+    // The count on the Setup tab: how many steps are stopping or degrading
+    // delivery. Red while nothing can be delivered, amber once it can but a
+    // step is still open, gone when there is nothing to do.
+    if (state.setupKnown && state.todo > 0) {
+      setTabCount("setup", state.todo, state.ready ? "warn" : "err");
+    } else {
+      setTabCount("setup", "");
+    }
 
     var sess = byId("session"); clear(sess);
     if (state.authed) {
@@ -390,12 +912,18 @@ function refreshStatus() {
     renderDemoBanner(d.demo);
     renderHealth(d.health);
     if (wasAuthed !== state.authed) refreshTab();
+    if (done) done();
   });
 }
 
 // ---------- sign in / setup ----------
 
-function labelled(text, input) {
+// labelled pairs a caption with a control. The optional third argument is
+// the explanation that belongs AT this control -- the warning that renaming
+// a hook reissues its credentials, say -- and it is rendered as a why()
+// disclosure beside the caption, so it leaves the screen without leaving
+// the field. Pass a string, or the options why() takes.
+function labelled(text, input, help, key) {
   var d = document.createElement("div");
   // A checkbox reads as "[x] thing", not as a caption with a box under it.
   // Stacking them made a row of toggles look like a row of headings with
@@ -405,9 +933,18 @@ function labelled(text, input) {
     var lab = el("label", null, text);
     d.appendChild(input);
     d.appendChild(lab);
+    // On the row, not in the label: the style sheet drops the body to its
+    // own line under the pair, where a label's nowrap would have crushed it.
+    if (help) d.appendChild(typeof help === "string" ? why(help) : why(help.text, help));
     return d;
   }
-  d.appendChild(el("label", null, text));
+  var cap = el("label", null, text);
+  // The config key, in mono beside the human name, for the fields the Setup
+  // instructions name by key: "set web.ack_listen to auto" was impossible to
+  // follow when the form called that field "Acknowledgement-only listener".
+  if (key) cap.appendChild(el("span", "key", key));
+  if (help) cap.appendChild(typeof help === "string" ? why(help) : why(help.text, help));
+  d.appendChild(cap);
   d.appendChild(input);
   return d;
 }
@@ -420,6 +957,21 @@ function renderSignIn(container) {
     card.appendChild(el("div", "note",
       "The daemon printed a one-time setup token to its console when it started. " +
       "It is the only way to set the first password, and it works once."));
+    // The checklist's password step knows the thing this card did not: on
+    // a service install that token was printed to a console that does not
+    // exist, and the route is a command instead. Its instructions are
+    // rendered here, at the field asking for the token, from the same
+    // source Setup uses -- so the two cannot disagree.
+    var howMount = el("div", "");
+    card.appendChild(howMount);
+    api("GET", "/api/checklist").then(function (r) {
+      if (!r.ok || !r.data || !r.data.steps) return;
+      r.data.steps.forEach(function (st) {
+        if (st.key !== "password" || !st.how || !st.how.length) return;
+        if (st.state) howMount.appendChild(callout(st.state, "warn", "Now"));
+        howMount.appendChild(referenceTopic("How to get past this", st.how));
+      });
+    });
     var tok = keepOutOfPasswordManagers(el("input")); tok.type = "text";
     card.appendChild(labelled("Setup token", tok));
     var pw = el("input"); pw.type = "password"; pw.autocomplete = "new-password";
@@ -460,17 +1012,672 @@ function renderSignIn(container) {
 
 // ---------- settings ----------
 
+// The Settings page is one page with a section rail, and every section
+// has its own Save.
+//
+// It was one long scroll with one Save at the bottom: the button for the
+// Consoles card sat six screens below it, Escalation told the operator to
+// "enable a channel above and save, then come back", and a Setup step that
+// said "Open Settings" landed at the top of all of it. Now each section
+// posts ONLY the keys it owns. The server leaves an absent section alone --
+// TestSavingOneTabLeavesEveryOtherSectionAlone pins that -- which is the
+// property that makes a page of partial saves safe to have at all.
+//
+// Webhooks lives here too, as a section, and was a tab. A hook's URL and
+// header rendered on two tabs with two explanations, and the tab's Save
+// knew nothing about the console typed in on the other one.
+var SETTINGS_SECTIONS = [
+  { key: "consoles",   title: "Consoles",    icon: "camera" },
+  { key: "channels",   title: "Channels",    icon: "bell" },
+  { key: "webhooks",   title: "Webhooks",    icon: "link" },
+  { key: "escalation", title: "Escalation",  icon: "activity" },
+  { key: "rules",      title: "Rules",       icon: "list" },
+  { key: "quiet",      title: "Quiet hours", icon: "clock" },
+  { key: "web",        title: "Web",         icon: "gear" },
+  { key: "password",   title: "Password",    icon: "key" }
+];
+
+// settingsCtx is the page being edited: the draft the inputs mutate, the
+// last-saved view, the hook credentials, and a redraw per section. Module
+// level because hookTestControls (arming test mode) needs to redraw the
+// webhooks section from outside the renderer.
+var settingsCtx = null;
+
 function refreshSettings() {
   var body = byId("settings-body");
-  api("GET", "api/settings").then(function (res) {
-    if (res.status === 401) { renderSignIn(body); return; }
-    if (!res.ok) {
-      clear(body);
-      body.appendChild(el("div", "card err", res.data.error || "could not load settings"));
+  // The settings API deliberately never returns a hook's token -- it
+  // returns token_set, like every other credential -- so the URL an Alarm
+  // Manager rule needs is not in it. The checklist is the one endpoint that
+  // renders those, and only to a signed-in caller. Both are fetched so the
+  // URL is on the screen where the hook is CREATED.
+  Promise.all([api("GET", "api/settings"), api("GET", "/api/checklist")])
+    .then(function (both) {
+    var res = both[0], list = both[1];
+    if (res.status === 401) {
+      setLede("settings", "gear", "Change what it does.", "");
+      settingsCtx = null;
+      renderSignIn(body);
       return;
     }
-    renderSettings(body, res.data);
+    if (!res.ok) {
+      clear(body);
+      body.appendChild(errorState(res.data.error || "could not load settings", refreshSettings));
+      return;
+    }
+    renderSettings(body, res.data, hookCredsFrom(list));
   });
+}
+
+// hookCredsFrom indexes the checklist's hooks by name.
+function hookCredsFrom(list) {
+  var creds = {};
+  if (list && list.ok && list.data && list.data.hooks) {
+    list.data.hooks.forEach(function (h) { creds[h.name] = h; });
+  }
+  return creds;
+}
+
+// refreshWebhooks redraws the webhooks section with fresh credentials.
+// Called after test mode is armed or ended, so the notice and the counts
+// on the hook card follow the server.
+function refreshWebhooks() {
+  if (!settingsCtx) { refreshSettings(); return; }
+  api("GET", "/api/checklist").then(function (list) {
+    if (!settingsCtx) return;
+    settingsCtx.creds = hookCredsFrom(list);
+    settingsCtx.redraw("webhooks");
+  });
+}
+
+function renderSettings(body, s, creds) {
+  clear(body);
+  // A working copy: the inputs edit this, and this is what gets posted back
+  // -- one section at a time.
+  var draft = JSON.parse(JSON.stringify(s));
+  var ctx = { draft: draft, saved: s, creds: creds || {}, sections: {} };
+  ctx.redraw = function (key) {
+    var sc = ctx.sections[key];
+    if (!sc) return;
+    clear(sc.body);
+    SECTION_RENDERERS[key](sc.body, ctx);
+  };
+  settingsCtx = ctx;
+
+  settingsLede(s);
+
+  if ((draft.plaintext_fields || []).length) {
+    body.appendChild(callout(
+      "Unprotected credentials were found in the config file: " +
+      draft.plaintext_fields.join(", ") +
+      ". Treat them as exposed and rotate them; saving re-protects what is there.",
+      "err", "Plaintext credentials"));
+  }
+
+  var page = el("div", "railed");
+  var rail = el("nav", "rail");
+  rail.setAttribute("aria-label", "Settings sections");
+  SETTINGS_SECTIONS.forEach(function (sec) {
+    var a = el("a", null, sec.title);
+    a.href = "#settings/" + sec.key;
+    a.setAttribute("data-section", sec.key);
+    rail.appendChild(a);
+  });
+  page.appendChild(rail);
+
+  var col = el("div", "sections");
+  SETTINGS_SECTIONS.forEach(function (sec) {
+    col.appendChild(settingsSection(ctx, sec));
+  });
+  page.appendChild(col);
+  body.appendChild(page);
+
+  watchRail();
+  if (state.section) {
+    scrollToSection(state.section);
+    // Once more a moment later: the demo banner and the lede arrive from
+    // the status poll after this render and push the page down, and on a
+    // phone that was enough to leave #settings/escalation at the top of
+    // Consoles.
+    setTimeout(function () {
+      if (state.tab === "settings" && state.section) scrollToSection(state.section);
+    }, 300);
+  } else {
+    markRail(SETTINGS_SECTIONS[0].key);
+  }
+}
+
+// settingsLede: the tab's question and a count of what is configured.
+function settingsLede(s) {
+  var ch = s.channels || {};
+  var on = ["ntfy", "email", "pushover", "voice"].filter(function (k) { return ch[k] && ch[k].enabled; }).length;
+  var outs = (ch.webhooks || []).filter(function (w) { return w.enabled; }).length;
+  var parts = [
+    (s.consoles || []).length + ((s.consoles || []).length === 1 ? " console" : " consoles"),
+    (on + outs) + " of " + (4 + (ch.webhooks || []).length) + " channels enabled",
+    (s.hooks || []).length + ((s.hooks || []).length === 1 ? " UniFi rule" : " UniFi rules"),
+    (s.rules || []).length + ((s.rules || []).length === 1 ? " rule" : " rules")
+  ];
+  setLede("settings", "gear", "Change what it does.", parts.join(" \u00b7 "));
+}
+
+// settingsSection builds one section: heading, body, and the Save bar for
+// it. The body is what redraw() refills; the bar is built once so a Save's
+// message survives the redraw it triggers.
+function settingsSection(ctx, sec) {
+  var root = el("section", "settings-section");
+  root.id = "settings-" + sec.key;
+  var h = el("h2");
+  h.appendChild(icon(sec.icon));
+  h.appendChild(document.createTextNode(sec.title));
+  root.appendChild(h);
+  var body = el("div", "section-body");
+  root.appendChild(body);
+  var foot = el("div", "section-foot");
+  root.appendChild(foot);
+  ctx.sections[sec.key] = { root: root, body: body, foot: foot };
+  ctx.redraw(sec.key);
+  var save = SECTION_SAVES[sec.key];
+  if (save) foot.appendChild(saveBar(ctx, sec, save));
+  return root;
+}
+
+// saveBar is one section's Save button, its message, and -- because every
+// section here is read once at start -- the restart offer that follows a
+// successful save. On success the section is redrawn from the server's
+// answer, so "token set" badges and freshly issued hook URLs appear, and
+// the OTHER sections are left exactly as typed.
+function saveBar(ctx, sec, save) {
+  var box = el("div", "");
+  var bar = el("div", "formbar");
+  var btn = el("button", "act primary", "Save " + sec.title.toLowerCase());
+  btn.type = "button";
+  var msg = el("div", "msg");
+  var notice = el("div", "");
+  btn.addEventListener("click", function () {
+    msg.className = "msg"; msg.textContent = "";
+    clear(notice);
+    btn.disabled = true;
+    api("POST", "api/settings", save.payload(ctx)).then(function (res) {
+      btn.disabled = false;
+      if (!res.ok) {
+        msg.className = "msg err";
+        msg.textContent = (res.data && res.data.error) || "the save was refused";
+        return;
+      }
+      var fresh = (res.data && res.data.settings) || null;
+      var finish = function () {
+        if (fresh) { ctx.saved = fresh; save.apply(ctx, fresh); settingsLede(fresh); }
+        ctx.redraw(sec.key);
+        (save.also || []).forEach(function (k) { ctx.redraw(k); });
+        notice.appendChild(restartOffer(save.restart));
+        refreshStatus();
+      };
+      if (save.refetchCreds) {
+        api("GET", "/api/checklist").then(function (list) { ctx.creds = hookCredsFrom(list); finish(); });
+      } else {
+        finish();
+      }
+    });
+  });
+  bar.appendChild(btn);
+  box.appendChild(bar);
+  box.appendChild(msg);
+  box.appendChild(notice);
+  return box;
+}
+
+// SECTION_SAVES: what each Save posts, and how the draft is refreshed from
+// the answer. The payload shapes are load-bearing: the webhooks one is what
+// TestSavingOneTabLeavesEveryOtherSectionAlone parses, byte for byte.
+var SECTION_SAVES = {
+  consoles: {
+    payload: function (ctx) { return { consoles: ctx.draft.consoles || [] }; },
+    apply: function (ctx, fresh) { ctx.draft.consoles = clone(fresh.consoles || []); },
+    restart: "A console change"
+  },
+  channels: {
+    payload: function (ctx) {
+      var ch = ctx.draft.channels || {};
+      return { channels: { ntfy: ch.ntfy, email: ch.email, pushover: ch.pushover, voice: ch.voice } };
+    },
+    apply: function (ctx, fresh) {
+      var ch = ctx.draft.channels || (ctx.draft.channels = {});
+      var fc = fresh.channels || {};
+      ["ntfy", "email", "pushover", "voice"].forEach(function (k) { ch[k] = clone(fc[k] || { enabled: false }); });
+    },
+    also: ["escalation"],
+    restart: "A channel change"
+  },
+  webhooks: {
+    payload: function (ctx) {
+      var draft = ctx.draft;
+      return {
+        hooks: draft.hooks || [],
+        channels: { webhooks: (draft.channels && draft.channels.webhooks) || [] }
+      };
+    },
+    apply: function (ctx, fresh) {
+      ctx.draft.hooks = clone(fresh.hooks || []);
+      var ch = ctx.draft.channels || (ctx.draft.channels = {});
+      ch.webhooks = clone((fresh.channels && fresh.channels.webhooks) || []);
+    },
+    also: ["escalation"],
+    refetchCreds: true,
+    restart: "A webhook change"
+  },
+  escalation: {
+    payload: function (ctx) { return { policies: ctx.draft.policies || {} }; },
+    apply: function (ctx, fresh) { ctx.draft.policies = clone(fresh.policies || {}); },
+    restart: "An escalation change"
+  },
+  rules: {
+    payload: function (ctx) { return { rules: ctx.draft.rules || [] }; },
+    apply: function (ctx, fresh) { ctx.draft.rules = clone(fresh.rules || []); },
+    restart: "A rule change"
+  },
+  quiet: {
+    payload: function (ctx) { return { quiet_hours: ctx.draft.quiet_hours || {} }; },
+    apply: function (ctx, fresh) { ctx.draft.quiet_hours = clone(fresh.quiet_hours || {}); },
+    restart: "A quiet hours change"
+  },
+  web: {
+    payload: function (ctx) {
+      var w = ctx.draft.web || {};
+      return { web: { listen: w.listen || "", ack_base_url: w.ack_base_url || "", ack_listen: w.ack_listen || "" } };
+    },
+    apply: function (ctx, fresh) { ctx.draft.web = clone(fresh.web || {}); },
+    restart: "A listen address change"
+  }
+};
+
+// SECTION_RENDERERS fill a section's body from the draft. Each is given the
+// whole context, because the escalation matrix's columns are the channels
+// enabled in the draft and the rules editor wants the vocabulary the server
+// sent alongside the settings.
+var SECTION_RENDERERS = {
+  consoles: renderConsolesSection,
+  channels: renderChannelsSection,
+  webhooks: renderWebhooksSection,
+  escalation: function (body, ctx) {
+    // The view choice (matrix or ladders) lives on the context so a Save,
+    // which redraws the section, does not flip the operator out of the
+    // matrix they were just using.
+    ctx.escView = ctx.escView || {};
+    renderPolicies(body, ctx.draft, ctx.saved, ctx.escView);
+  },
+  rules: function (body, ctx) {
+    var s = ctx.saved;
+    renderRules(body, ctx.draft, s.conditions || [], s.entities || []);
+  },
+  quiet: renderQuietSection,
+  web: renderWebSection,
+  password: renderPasswordSection
+};
+
+function renderConsolesSection(body, ctx) {
+  var draft = ctx.draft;
+  var consoles = draft.consoles || (draft.consoles = []);
+  consoles.forEach(function (c, idx) {
+    var card = el("div", "card");
+    var f = el("div", "fields");
+    f.appendChild(labelled("Name", bind(c, "name")));
+    f.appendChild(labelled("Host or IP address", bind(c, "host")));
+    f.appendChild(labelled("Certificate fingerprint (SHA-256, optional)", bind(c, "fingerprint")));
+    card.appendChild(f);
+
+    // Sources were displayed as a comma-joined string and could only be
+    // changed by editing YAML -- on the setting that decides whether anything
+    // is watched at all. A console with no source is polled for nothing and
+    // looks entirely healthy doing it.
+    card.appendChild(el("div", "label", "Sources to watch"));
+    var sr = el("div", "row");
+    ["protect", "access", "network"].forEach(function (name) {
+      sr.appendChild(labelled(name, inList(c, "sources", name)));
+    });
+    card.appendChild(sr);
+
+    var ir = el("div", "row");
+    ir.appendChild(labelled("Skip certificate check", check(c, "insecure_skip_verify"),
+      { text: "Leave the certificate check on. A UniFi console's certificate is " +
+        "self-signed, so the usual answer is to paste its SHA-256 fingerprint " +
+        "above -- that pins this one console. Skipping the check instead accepts " +
+        "ANY certificate, which is the state an attacker on your network needs.",
+        label: "why leave it on?", tone: "warn" }));
+    card.appendChild(ir);
+
+    if (c.api_key_credential) {
+      var cr = el("div", "row");
+      cr.appendChild(el("span", "muted small",
+        "service credential " + c.api_key_credential + " overrides the key in the file"));
+      card.appendChild(cr);
+    }
+    secretRow(card, c.api_key_set, "API key", c, "api_key_new");
+    card.appendChild(el("div", "note",
+      "The stored key is never sent to this page, only whether one exists. " +
+      "Protect, Access and Network each issue their OWN key -- one key does " +
+      "not cover the others."));
+
+    var rm = el("button", "act", "Remove this console");
+    rm.type = "button";
+    rm.addEventListener("click", function () {
+      consoles.splice(idx, 1);
+      ctx.redraw("consoles");
+    });
+    var rb = el("div", "formbar"); rb.appendChild(rm);
+    card.appendChild(rb);
+    body.appendChild(card);
+  });
+  if (!consoles.length) {
+    body.appendChild(emptyState("No consoles configured",
+      "Nothing is being watched. Add the console, with the API key it issued.",
+      null, { icon: "camera", tone: "warn", compact: true }));
+  }
+  var addCon = el("button", "act" + (consoles.length ? "" : " primary"), "Add a console");
+  addCon.type = "button";
+  addCon.addEventListener("click", function () {
+    consoles.push({ name: "", host: "", sources: ["protect"], api_key_set: false });
+    ctx.redraw("consoles");
+  });
+  var addBar = el("div", "formbar"); addBar.appendChild(addCon);
+  body.appendChild(addBar);
+}
+
+// enabledBox is a channel's Enabled checkbox. It redraws the escalation
+// matrix when toggled, because the matrix's columns are the enabled
+// channels and a box ticked here should appear there without a round trip.
+function enabledBox(ctx, obj) {
+  var b = check(obj, "enabled");
+  b.addEventListener("change", function () { ctx.redraw("escalation"); });
+  return b;
+}
+
+function renderChannelsSection(body, ctx) {
+  var draft = ctx.draft;
+  var ch = draft.channels || (draft.channels = {});
+  // Every channel card is rendered whether or not the config already has one,
+  // so a channel can be ADDED here rather than only edited. Before this, a
+  // channel absent from the file was invisible in the interface and the only
+  // way to add one was to hand-edit YAML -- which is exactly the person this
+  // interface exists for.
+  ch.ntfy = ch.ntfy || { enabled: false };
+  ch.email = ch.email || { enabled: false, recipients: [] };
+  ch.pushover = ch.pushover || { enabled: false };
+  ch.voice = ch.voice || { enabled: false, recipients: [] };
+
+  var nc = el("div", "card");
+  nc.appendChild(channelTitle("bell", "ntfy", ch.ntfy.enabled));
+  var nf = el("div", "fields");
+  nf.appendChild(labelled("Enabled", enabledBox(ctx, ch.ntfy)));
+  var nurl = bind(ch.ntfy, "server_url");
+  // The default is real and usable, so it is shown as the placeholder rather
+  // than left as an empty box somebody has to know how to fill.
+  nurl.placeholder = "https://ntfy.sh  (leave blank for the public server)";
+  nf.appendChild(labelled("Server URL", nurl));
+  nf.appendChild(labelled("Topic", bind(ch.ntfy, "topic"),
+    { text: "Treat the topic name as a password. A guessable topic on the public " +
+      "ntfy.sh server is readable by anybody who guesses it.", label: "why?", tone: "warn" }));
+  nc.appendChild(nf);
+  secretRow(nc, ch.ntfy.token_set, "token", ch.ntfy, "token_new");
+  testRow(nc, "ntfy");
+  body.appendChild(nc);
+
+  var ec = el("div", "card");
+  ec.appendChild(channelTitle("envelope", "Email", ch.email.enabled));
+  var ef = el("div", "fields");
+  ef.appendChild(labelled("Enabled", enabledBox(ctx, ch.email)));
+  ef.appendChild(labelled("Host", bind(ch.email, "host")));
+  ef.appendChild(labelled("Port", bind(ch.email, "port", true)));
+  ef.appendChild(labelled("TLS", pick(ch.email, "tls", ["auto", "starttls", "implicit", "none"], "auto (default)")));
+  ef.appendChild(labelled("Username", bind(ch.email, "username")));
+  ef.appendChild(labelled("From", bind(ch.email, "from")));
+  ef.appendChild(labelled("Recipients (comma separated)", bindList(ch.email, "recipients")));
+  ec.appendChild(ef);
+  secretRow(ec, ch.email.password_set, "password", ch.email, "password_new");
+  testRow(ec, "email");
+  body.appendChild(ec);
+
+  var pc = el("div", "card");
+  pc.appendChild(channelTitle("phone", "Pushover", ch.pushover.enabled));
+  var pf = el("div", "fields");
+  pf.appendChild(labelled("Enabled", enabledBox(ctx, ch.pushover)));
+  pf.appendChild(labelled("Device (blank = all)", bind(ch.pushover, "device")));
+  pf.appendChild(labelled("Sound (blank = account default)", bind(ch.pushover, "sound")));
+  pc.appendChild(pf);
+  secretRow(pc, ch.pushover.token_set, "application token", ch.pushover, "token_new");
+  secretRow(pc, ch.pushover.user_set, "user or group key", ch.pushover, "user_new");
+  pc.appendChild(el("div", "note",
+    "Two different credentials. The application token is the one you create at " +
+    "pushover.net/apps/build; the user key is on your own dashboard. Swapped, " +
+    "Pushover reports an invalid application token, which reads as a bad token " +
+    "rather than as the pair being the wrong way round."));
+  testRow(pc, "pushover");
+  body.appendChild(pc);
+
+  var vc = el("div", "card");
+  vc.appendChild(channelTitle("phone", "Voice call (Twilio)", ch.voice.enabled));
+  var vf = el("div", "fields");
+  vf.appendChild(labelled("Enabled", enabledBox(ctx, ch.voice)));
+  var vfrom = bind(ch.voice, "from");
+  vfrom.placeholder = "+15552223214";
+  vf.appendChild(labelled("Caller ID", vfrom));
+  var vto = bindList(ch.voice, "recipients");
+  vto.placeholder = "+15558675310, +15558675311";
+  vf.appendChild(labelled("Numbers to call (comma separated)", vto));
+  vf.appendChild(labelled("Voice", pick(ch.voice, "voice", VOICE_SAY_VOICES, "man (default)")));
+  vf.appendChild(labelled("Language", pick(ch.voice, "language", VOICE_SAY_LANGUAGES, "en-US (default)")));
+  vc.appendChild(vf);
+  secretRow(vc, ch.voice.account_sid_set, "account SID", ch.voice, "account_sid_new");
+  secretRow(vc, ch.voice.auth_token_set, "auth token", ch.voice, "auth_token_new");
+  vc.appendChild(el("div", "note",
+    "Two credentials from the Twilio console, and they are easy to swap. The " +
+    "account SID is the one that starts AC; the auth token is the other. The " +
+    "wrong way round, Twilio answers permission denied, which reads as a bad " +
+    "token rather than as the pair being reversed."));
+  // The cost and the trial-account trap, as a callout: this is the one
+  // channel where a misconfiguration costs money or rings nobody.
+  vc.appendChild(callout(
+    "Every number here is a BILLED PHONE CALL, to every number, every time a " +
+    "rung naming voice fires -- including each repeat. Write numbers as + then " +
+    "the country code with no spaces, dashes or brackets (+15558675310). On a " +
+    "Twilio trial account the caller ID and every number called must be " +
+    "verified in the console first, and Twilio plays its own message asking " +
+    "for a keypress before the alert is spoken -- so on a trial account an " +
+    "unattended phone hears nothing at all.", "warn", "Billed, per call"));
+  vc.appendChild(el("div", "note",
+    "The call speaks the alert and hangs up. There is no way to acknowledge " +
+    "from the handset, so the ladder keeps escalating until somebody " +
+    "acknowledges here or from a link in another channel."));
+  // Not decoration: voice is on NO default ladder, so a site that enables it
+  // here and stops has a channel that is configured, healthy, tested, and
+  // will never place a call.
+  var ladderNote = el("span", "");
+  ladderNote.appendChild(document.createTextNode(
+    "VOICE IS ON NO DEFAULT ESCALATION LADDER. Enabling it here is not enough: " +
+    "tick voice on a row of the "));
+  var esc = el("a", null, "escalation matrix");
+  esc.href = "#settings/escalation";
+  ladderNote.appendChild(esc);
+  ladderNote.appendChild(document.createTextNode(
+    ", or it will never ring anybody. That is deliberate -- telephoning " +
+    "somebody at 3am is not something to switch on for every installation by default."));
+  vc.appendChild(callout(ladderNote, "info", "Then put it on a rung"));
+  // The generic "Sent." line the server prints after a test is untrue for
+  // this channel, because no call was placed. The truth is printed here
+  // instead.
+  testRow(vc, "voice", {
+    button: "Check the credentials",
+    note: "This button does NOT place a call. A test that costs money and " +
+      "wakes somebody is not a harmless test, so it checks the account SID " +
+      "and auth token against Twilio instead. It does not prove the caller ID " +
+      "can dial your numbers -- only a real alert does that.",
+    success: "Credentials accepted by Twilio. No call was placed and nobody's " +
+      "phone rang. This does not prove the caller ID can reach your numbers."
+  });
+  body.appendChild(vc);
+
+  // Outbound webhook endpoints are under Webhooks, with the inbound ones:
+  // they are the same idea pointing opposite ways.
+  var anyEnabled = ["ntfy", "email", "pushover", "voice"].some(function (k) {
+    return ch[k] && ch[k].enabled;
+  }) || (ch.webhooks || []).some(function (w) { return w.enabled; });
+  if (!anyEnabled) {
+    body.appendChild(emptyState("No channel is enabled",
+      "Incidents will still be tracked, and nobody will be told.",
+      null, { icon: "bell", tone: "warn", compact: true }));
+  }
+}
+
+// channelTitle is a channel card's heading: glyph, name, and whether it is
+// on -- so a scroll down the section reads which channels are live without
+// finding each Enabled box.
+function channelTitle(iconName, name, enabled) {
+  var t = el("div", "card-title");
+  t.appendChild(icon(iconName));
+  t.appendChild(document.createTextNode(name));
+  t.appendChild(badge(enabled ? "on" : "off", enabled ? "on" : "is-muted"));
+  return t;
+}
+
+function renderWebhooksSection(body, ctx) {
+  var draft = ctx.draft, s = ctx.saved, creds = ctx.creds;
+  // Vocabulary from the rest of the product: UniFi has "alarm rules", and
+  // the arrow says which way the data goes without a preposition to misread.
+  body.appendChild(el("h3", null, "UniFi alarm rules (UniFi \u2192 here)"));
+  body.appendChild(el("p", "",
+    "WAN outages, threat detections, PoE faults and Protect's own hardware " +
+    "alarms are not readable by any API. They exist ONLY as Alarm Manager " +
+    "rules that push to a URL, and no API can create those rules -- so these " +
+    "endpoints are the only way those alarms reach this product at all."));
+  renderHooks(body, draft, s.hook_conditions || [], creds || {});
+
+  body.appendChild(el("h3", null, "Push to your own systems (here \u2192 you)"));
+  body.appendChild(el("p", "",
+    "One JSON POST per alert, to anything you run. Each endpoint has a name, " +
+    "and an escalation rung refers to it by that name -- so a home automation " +
+    "box and an on-call service can be told about different severities."));
+  renderOutboundWebhooks(body, draft);
+}
+
+function renderQuietSection(body, ctx) {
+  var draft = ctx.draft;
+  var qc = el("div", "card");
+  var q = draft.quiet_hours || (draft.quiet_hours = {});
+  var qf = el("div", "fields");
+  qf.appendChild(labelled("Enabled", check(q, "enabled")));
+  qf.appendChild(labelled("Start (HH:MM)", bind(q, "start")));
+  qf.appendChild(labelled("End (HH:MM)", bind(q, "end")));
+  qf.appendChild(labelled("Time zone (IANA name)", bind(q, "zone")));
+  qc.appendChild(qf);
+  qc.appendChild(el("div", "note",
+    "Held alerts are delivered when the window ends. Only severities whose " +
+    "row in the escalation matrix respects quiet hours are held."));
+  qc.appendChild(callout("Quiet hours never apply to critical. That control does not exist.", "info"));
+  body.appendChild(qc);
+}
+
+function renderWebSection(body, ctx) {
+  var draft = ctx.draft;
+  var wc = el("div", "card");
+  var w = draft.web || (draft.web = {});
+  var wf = el("div", "fields");
+  var listen = bind(w, "listen");
+  listen.placeholder = "0.0.0.0:8330";
+  wf.appendChild(labelled("Listen on", listen,
+    "Where this page and the acknowledgement links are served. 0.0.0.0:8330 " +
+    "means every interface; a single address means only that one, so " +
+    "127.0.0.1 stops answering.", "web.listen"));
+  var ackUrl = bind(w, "ack_base_url");
+  ackUrl.placeholder = "http://192.168.1.50:8330";
+  // The warning belongs AT this field: a blank here does not stop alerts,
+  // it strips the acknowledge link off every one of them.
+  wf.appendChild(labelled("Ack link address", ackUrl,
+    { text: "The address put into every alert's acknowledge link -- this " +
+      "machine as a phone reaches it, not 127.0.0.1. Blank means alerts carry " +
+      "no acknowledge link at all, and the only way to stop one is this page.",
+      label: "blank?", tone: "warn" }, "web.ack_base_url"));
+  var ackListen = bind(w, "ack_listen");
+  ackListen.placeholder = "blank = none \u00b7 auto = pick a port";
+  wf.appendChild(labelled("Ack-only listener", ackListen,
+    "Set to \"auto\" and a second listener starts on a random high port that " +
+    "serves ONLY /ack/. That is the port to forward from outside, if you " +
+    "must: a NAT forward cannot pick a path, so forwarding the main listen " +
+    "address publishes the whole status page along with it.", "web.ack_listen"));
+  wc.appendChild(wf);
+  var wr = el("div", "row");
+  wr.appendChild(badge(w.ack_key_set ? "ack signing key set" : "ack signing key not set",
+    w.ack_key_set ? "on" : "off"));
+  wr.appendChild(el("span", "muted small",
+    "Minted on first start. Not editable here: rotating it would invalidate every link already sent."));
+  wc.appendChild(wr);
+  body.appendChild(wc);
+}
+
+function renderPasswordSection(body, ctx) {
+  var pwc = el("div", "card signin");
+  var cur = el("input"); cur.type = "password"; cur.autocomplete = "current-password";
+  var neu = el("input"); neu.type = "password"; neu.autocomplete = "new-password";
+  pwc.appendChild(labelled("Current password", cur));
+  pwc.appendChild(labelled("New password (at least " + state.minPassword + " characters)", neu));
+  var pmsg = el("div", "msg");
+  var pbtn = el("button", "act primary", "Change password");
+  pbtn.type = "button";
+  pbtn.addEventListener("click", function () {
+    pmsg.className = "msg"; pmsg.textContent = "";
+    api("POST", "api/password", { current: cur.value, password: neu.value }).then(function (res) {
+      if (!res.ok) {
+        pmsg.className = "msg err";
+        pmsg.textContent = res.data.error || "that did not work";
+        return;
+      }
+      cur.value = ""; neu.value = "";
+      pmsg.className = "msg ok";
+      pmsg.textContent = "Changed. Every other session is now signed out.";
+      refreshStatus();
+    });
+  });
+  var pbar = el("div", "formbar"); pbar.appendChild(pbtn);
+  pwc.appendChild(pbar); pwc.appendChild(pmsg);
+  body.appendChild(pwc);
+}
+
+// ---- the rail ----
+
+// markRail lights the rail entry for one section.
+function markRail(section) {
+  var links = document.querySelectorAll ? document.querySelectorAll(".rail a[data-section]") : [];
+  for (var i = 0; i < links.length; i++) {
+    if (links[i].getAttribute("data-section") === section) links[i].setAttribute("aria-current", "true");
+    else links[i].removeAttribute("aria-current");
+  }
+}
+
+// watchRail keeps the rail's current entry on the section in view as the
+// page scrolls. One listener for the page's life; it does nothing unless
+// Settings is showing. The section whose top is nearest the header wins.
+var railWatched = false;
+function watchRail() {
+  if (railWatched || !window.addEventListener) return;
+  railWatched = true;
+  var pending = false;
+  var update = function () {
+    pending = false;
+    if (state.tab !== "settings" || !settingsCtx) return;
+    var top = 0;
+    var bar = document.querySelector("header.bar");
+    if (bar && bar.getBoundingClientRect) top = bar.getBoundingClientRect().bottom + 24;
+    var current = null;
+    SETTINGS_SECTIONS.forEach(function (sec) {
+      var sc = settingsCtx.sections[sec.key];
+      if (!sc || !sc.root.getBoundingClientRect) return;
+      if (sc.root.getBoundingClientRect().top <= top) current = sec.key;
+    });
+    markRail(current || SETTINGS_SECTIONS[0].key);
+  };
+  window.addEventListener("scroll", function () {
+    if (pending) return;
+    pending = true;
+    if (window.requestAnimationFrame) window.requestAnimationFrame(update); else update();
+  }, { passive: true });
 }
 
 // keepOutOfPasswordManagers marks a field that is NOT the operator's own
@@ -561,21 +1768,6 @@ function check(obj, key) {
 // A value already in the config that is not on the list is kept and shown
 // rather than silently dropped: somebody who set a named Polly voice by hand
 // should not lose it by opening this page.
-function pick(obj, key, choices, blankLabel) {
-  var sel = el("select");
-  var cur = obj[key] || "";
-  var opts = [""].concat(choices);
-  if (cur && opts.indexOf(cur) < 0) opts.splice(1, 0, cur);
-  opts.forEach(function (s) {
-    var o = document.createElement("option");
-    o.value = s;
-    o.textContent = s === "" ? blankLabel : s;
-    if (cur === s) o.selected = true;
-    sel.appendChild(o);
-  });
-  sel.addEventListener("change", function () { obj[key] = sel.value; });
-  return sel;
-}
 
 // The two Basic-tier voices. They are billed at NOTHING per character and they
 // are valid with every language Twilio's basic text-to-speech speaks, which is
@@ -604,314 +1796,30 @@ function secretRow(card, isSet, label, obj, key) {
   card.appendChild(labelled("Replace " + label, i));
 }
 
-function renderSettings(body, s) {
-  clear(body);
-  // A working copy: the inputs edit this, and this is what gets posted back.
-  var draft = JSON.parse(JSON.stringify(s));
-
-  body.appendChild(el("h3", null, "Consoles"));
-  var consoles = draft.consoles || (draft.consoles = []);
-  consoles.forEach(function (c, idx) {
-    var card = el("div", "card");
-    var f = el("div", "fields");
-    f.appendChild(labelled("Name", bind(c, "name")));
-    f.appendChild(labelled("Host or IP address", bind(c, "host")));
-    f.appendChild(labelled("Certificate fingerprint (SHA-256, optional)", bind(c, "fingerprint")));
-    card.appendChild(f);
-
-    // Sources were displayed as a comma-joined string and could only be
-    // changed by editing YAML -- on the setting that decides whether anything
-    // is watched at all. A console with no source is polled for nothing and
-    // looks entirely healthy doing it.
-    card.appendChild(el("div", "label", "Watch these applications"));
-    var sr = el("div", "row");
-    ["protect", "access", "network"].forEach(function (name) {
-      sr.appendChild(labelled(name, inList(c, "sources", name)));
-    });
-    card.appendChild(sr);
-
-    var ir = el("div", "row");
-    ir.appendChild(labelled("Skip certificate check", check(c, "insecure_skip_verify")));
-    card.appendChild(ir);
-    card.appendChild(el("div", "note",
-      "Leave the certificate check on. A UniFi console's certificate is " +
-      "self-signed, so the usual answer is to paste its SHA-256 fingerprint " +
-      "above -- that pins this one console. Skipping the check instead accepts " +
-      "ANY certificate, which is the state an attacker on your network needs."));
-
-    if (c.api_key_credential) {
-      var cr = el("div", "row");
-      cr.appendChild(el("span", "muted small",
-        "service credential " + c.api_key_credential + " overrides the key in the file"));
-      card.appendChild(cr);
-    }
-    secretRow(card, c.api_key_set, "API key", c, "api_key_new");
-    card.appendChild(el("div", "note",
-      "The stored key is never sent to this page, only whether one exists. " +
-      "Protect, Access and Network each issue their OWN key -- one key does " +
-      "not cover the others."));
-
-    var rm = el("button", "act", "Remove this console");
-    rm.addEventListener("click", function () {
-      consoles.splice(idx, 1);
-      renderSettings(body, draft);
-    });
-    var rb = el("div", "formbar"); rb.appendChild(rm);
-    card.appendChild(rb);
-    body.appendChild(card);
-  });
-  if (!consoles.length) {
-    body.appendChild(el("div", "empty",
-      "No consoles configured. Nothing is being watched."));
-  }
-  var addCon = el("button", "act primary", "Add a console");
-  addCon.addEventListener("click", function () {
-    consoles.push({ name: "", host: "", sources: ["protect"], api_key_set: false });
-    renderSettings(body, draft);
-  });
-  var addBar = el("div", "formbar"); addBar.appendChild(addCon);
-  body.appendChild(addBar);
-
-  body.appendChild(el("h3", null, "Channels"));
-  var ch = draft.channels || (draft.channels = {});
-  // Every channel card is rendered whether or not the config already has one,
-  // so a channel can be ADDED here rather than only edited. Before this, a
-  // channel absent from the file was invisible in the interface and the only
-  // way to add one was to hand-edit YAML -- which is exactly the person this
-  // interface exists for.
-  ch.ntfy = ch.ntfy || { enabled: false };
-  ch.email = ch.email || { enabled: false, recipients: [] };
-  ch.pushover = ch.pushover || { enabled: false };
-  ch.voice = ch.voice || { enabled: false, recipients: [] };
-
-  if (ch.ntfy) {
-    var nc = el("div", "card");
-    nc.appendChild(el("div", "title", "ntfy"));
-    var nf = el("div", "fields");
-    nf.appendChild(labelled("Enabled", check(ch.ntfy, "enabled")));
-    var nurl = bind(ch.ntfy, "server_url");
-    // The default is real and usable, so it is shown as the placeholder rather
-    // than left as an empty box somebody has to know how to fill.
-    nurl.placeholder = "https://ntfy.sh  (leave blank for the public server)";
-    nf.appendChild(labelled("Server URL", nurl));
-    nf.appendChild(labelled("Topic", bind(ch.ntfy, "topic")));
-    nc.appendChild(nf);
-    secretRow(nc, ch.ntfy.token_set, "token", ch.ntfy, "token_new");
-    testRow(nc, "ntfy");
-    body.appendChild(nc);
-  }
-  if (ch.email) {
-    var ec = el("div", "card");
-    ec.appendChild(el("div", "title", "Email"));
-    var ef = el("div", "fields");
-    ef.appendChild(labelled("Enabled", check(ch.email, "enabled")));
-    ef.appendChild(labelled("Host", bind(ch.email, "host")));
-    ef.appendChild(labelled("Port", bind(ch.email, "port", true)));
-    ef.appendChild(labelled("TLS (auto, starttls, implicit, none)", bind(ch.email, "tls")));
-    ef.appendChild(labelled("Username", bind(ch.email, "username")));
-    ef.appendChild(labelled("From", bind(ch.email, "from")));
-    ef.appendChild(labelled("Recipients (comma separated)", bindList(ch.email, "recipients")));
-    ec.appendChild(ef);
-    secretRow(ec, ch.email.password_set, "password", ch.email, "password_new");
-    testRow(ec, "email");
-    body.appendChild(ec);
-  }
-  if (ch.pushover) {
-    var pc = el("div", "card");
-    pc.appendChild(el("div", "title", "Pushover"));
-    var pf = el("div", "fields");
-    pf.appendChild(labelled("Enabled", check(ch.pushover, "enabled")));
-    pf.appendChild(labelled("Device (blank = all)", bind(ch.pushover, "device")));
-    pf.appendChild(labelled("Sound (blank = account default)", bind(ch.pushover, "sound")));
-    pc.appendChild(pf);
-    secretRow(pc, ch.pushover.token_set, "application token", ch.pushover, "token_new");
-    secretRow(pc, ch.pushover.user_set, "user or group key", ch.pushover, "user_new");
-    pc.appendChild(el("div", "note",
-      "Two different credentials. The application token is the one you create at " +
-      "pushover.net/apps/build; the user key is on your own dashboard. Swapped, " +
-      "Pushover reports an invalid application token, which reads as a bad token " +
-      "rather than as the pair being the wrong way round."));
-    testRow(pc, "pushover");
-    body.appendChild(pc);
-  }
-  if (ch.voice) {
-    var vc = el("div", "card");
-    vc.appendChild(el("div", "title", "Voice call (Twilio)"));
-    var vf = el("div", "fields");
-    vf.appendChild(labelled("Enabled", check(ch.voice, "enabled")));
-    var vfrom = bind(ch.voice, "from");
-    vfrom.placeholder = "+15552223214";
-    vf.appendChild(labelled("Caller ID", vfrom));
-    var vto = bindList(ch.voice, "recipients");
-    vto.placeholder = "+15558675310, +15558675311";
-    vf.appendChild(labelled("Numbers to call (comma separated)", vto));
-    vf.appendChild(labelled("Voice", pick(ch.voice, "voice", VOICE_SAY_VOICES, "man (default)")));
-    vf.appendChild(labelled("Language", pick(ch.voice, "language", VOICE_SAY_LANGUAGES, "en-US (default)")));
-    vc.appendChild(vf);
-    secretRow(vc, ch.voice.account_sid_set, "account SID", ch.voice, "account_sid_new");
-    secretRow(vc, ch.voice.auth_token_set, "auth token", ch.voice, "auth_token_new");
-    vc.appendChild(el("div", "note",
-      "Two credentials from the Twilio console, and they are easy to swap. The " +
-      "account SID is the one that starts AC; the auth token is the other. The " +
-      "wrong way round, Twilio answers permission denied, which reads as a bad " +
-      "token rather than as the pair being reversed."));
-    vc.appendChild(el("div", "note",
-      "Every number here is a BILLED PHONE CALL, to every number, every time a " +
-      "rung naming voice fires -- including each repeat. Write numbers as + then " +
-      "the country code with no spaces, dashes or brackets (+15558675310). On a " +
-      "Twilio trial account the caller ID and every number called must be " +
-      "verified in the console first, and Twilio plays its own message asking " +
-      "for a keypress before the alert is spoken -- so on a trial account an " +
-      "unattended phone hears nothing at all."));
-    vc.appendChild(el("div", "note",
-      "The call speaks the alert and hangs up. There is no way to acknowledge " +
-      "from the handset, so the ladder keeps escalating until somebody " +
-      "acknowledges here or from a link in another channel."));
-    // Not decoration: voice is on NO default ladder, so a site that enables it
-    // here and stops has a channel that is configured, healthy, tested, and
-    // will never place a call.
-    vc.appendChild(el("div", "note",
-      "VOICE IS ON NO DEFAULT ESCALATION LADDER. Enabling it here is not enough: " +
-      "add voice to a rung under Escalation, by name, or it will never ring " +
-      "anybody. That is deliberate -- telephoning somebody at 3am is not " +
-      "something to switch on for every installation by default."));
-    // The generic "Sent." line the server prints after a test is untrue for
-    // this channel, because no call was placed. The truth is printed here
-    // instead.
-    testRow(vc, "voice", {
-      button: "Check the credentials",
-      note: "This button does NOT place a call. A test that costs money and " +
-        "wakes somebody is not a harmless test, so it checks the account SID " +
-        "and auth token against Twilio instead. It does not prove the caller ID " +
-        "can dial your numbers -- only a real alert does that.",
-      success: "Credentials accepted by Twilio. No call was placed and nobody's " +
-        "phone rang. This does not prove the caller ID can reach your numbers."
-    });
-    body.appendChild(vc);
-  }
-  // The outbound webhook endpoints are on the Webhooks tab, with the inbound
-  // ones: they are the same idea pointing opposite ways, and an operator
-  // thinking about one is thinking about both.
-
-  var anyEnabled = ["ntfy", "email", "pushover", "voice"].some(function (k) {
-    return ch[k] && ch[k].enabled;
-  }) || (ch.webhooks || []).some(function (w) { return w.enabled; });
-  if (!anyEnabled) {
-    body.appendChild(el("div", "empty",
-      "No channel is enabled. Incidents will still be tracked, and nobody will be told."));
-  }
-
-  body.appendChild(el("h3", null, "Quiet hours"));
-  var qc = el("div", "card");
-  var q = draft.quiet_hours || (draft.quiet_hours = {});
-  var qf = el("div", "fields");
-  qf.appendChild(labelled("Enabled", check(q, "enabled")));
-  qf.appendChild(labelled("Start (HH:MM)", bind(q, "start")));
-  qf.appendChild(labelled("End (HH:MM)", bind(q, "end")));
-  qf.appendChild(labelled("Time zone (IANA name)", bind(q, "zone")));
-  qc.appendChild(qf);
-  qc.appendChild(el("div", "note",
-    "Quiet hours never apply to critical. That control does not exist."));
-  body.appendChild(qc);
-
-  body.appendChild(el("h3", null, "Web"));
-  var wc = el("div", "card");
-  var w = draft.web || (draft.web = {});
-  var wf = el("div", "fields");
-  wf.appendChild(labelled("Listen address", bind(w, "listen")));
-  wf.appendChild(labelled("Acknowledgement base URL", bind(w, "ack_base_url")));
-  wf.appendChild(labelled("Acknowledgement-only listener (blank = none)", bind(w, "ack_listen")));
-  wc.appendChild(wf);
-  wc.appendChild(el("div", "note",
-    "The acknowledgement-only listener is the one to forward a port to. A NAT " +
-    "forward cannot pick a path, so forwarding to the main listen address " +
-    "publishes the whole status page along with it; this one serves /ack/ and " +
-    "nothing else."));
-  var wr = el("div", "row");
-  wr.appendChild(badge(w.ack_key_set ? "ack signing key set" : "ack signing key not set",
-    w.ack_key_set ? "on" : "off"));
-  wc.appendChild(wr);
-  wc.appendChild(el("div", "note",
-    "A listen address change takes effect when the service restarts."));
-  body.appendChild(wc);
-
-  body.appendChild(el("h3", null, "Escalation"));
-  renderPolicies(body, draft);
-
-  body.appendChild(el("h3", null, "Rules"));
-  renderRules(body, draft, s.conditions || [], s.entities || []);
-
-  if ((draft.plaintext_fields || []).length) {
-    var pc = el("div", "card");
-    pc.appendChild(el("div", "delivery-error",
-      "Unprotected credentials were found in the config file: " +
-      draft.plaintext_fields.join(", ") +
-      ". Treat them as exposed and rotate them; saving re-protects what is there."));
-    body.appendChild(pc);
-  }
-
-  var msg = el("div", "msg");
-  var save = el("button", "act primary", "Save settings");
-  save.addEventListener("click", function () {
-    msg.className = "msg"; msg.textContent = "";
-    save.disabled = true;
-    api("POST", "api/settings", draft).then(function (res) {
-      save.disabled = false;
-      if (!res.ok) {
-        msg.className = "msg err";
-        msg.textContent = res.data.error || "the save was refused";
-        return;
-      }
-      msg.className = "msg ok";
-      msg.textContent = "Saved.";
-      refreshSettings();
-    });
-  });
-  var bar = el("div", "formbar"); bar.appendChild(save);
-  body.appendChild(bar);
-  body.appendChild(msg);
-
-  body.appendChild(el("h3", null, "Password"));
-  var pwc = el("div", "card signin");
-  var cur = el("input"); cur.type = "password"; cur.autocomplete = "current-password";
-  var neu = el("input"); neu.type = "password"; neu.autocomplete = "new-password";
-  pwc.appendChild(labelled("Current password", cur));
-  pwc.appendChild(labelled("New password (at least " + state.minPassword + " characters)", neu));
-  var pmsg = el("div", "msg");
-  var pbtn = el("button", "act", "Change password");
-  pbtn.addEventListener("click", function () {
-    pmsg.className = "msg"; pmsg.textContent = "";
-    api("POST", "api/password", { current: cur.value, password: neu.value }).then(function (res) {
-      if (!res.ok) {
-        pmsg.className = "msg err";
-        pmsg.textContent = res.data.error || "that did not work";
-        return;
-      }
-      cur.value = ""; neu.value = "";
-      pmsg.className = "msg ok";
-      pmsg.textContent = "Changed. Every other session is now signed out.";
-      refreshStatus();
-    });
-  });
-  var pbar = el("div", "formbar"); pbar.appendChild(pbtn);
-  pwc.appendChild(pbar); pwc.appendChild(pmsg);
-  body.appendChild(pwc);
-}
-
 // ---------- audit ----------
 
 function refreshAudit() {
   var body = byId("audit-body");
   api("GET", "api/audit?limit=200").then(function (res) {
-    if (res.status === 401) { renderSignIn(body); return; }
+    if (res.status === 401) {
+      setLede("activity", "clock", "What happened, and who did it.", "");
+      renderSignIn(body); return;
+    }
     if (!res.ok) {
       clear(body);
-      body.appendChild(el("div", "card err", res.data.error || "could not load the audit log"));
+      body.appendChild(errorState(res.data.error || "could not load the audit log", refreshAudit));
       return;
     }
     clear(body);
     var entries = res.data.entries || [];
-    if (!entries.length) { body.appendChild(el("div", "empty", "Nothing recorded yet.")); return; }
+    setLede("activity", "clock", "What happened, and who did it.",
+      entries.length ? entries.length + " recent entries" : "");
+    if (!entries.length) {
+      body.appendChild(emptyState("Nothing recorded yet",
+        "Every alarm, delivery, acknowledgement, save and restart lands here.",
+        null, { icon: "clock" }));
+      return;
+    }
     var t = table(["When", "Kind", "Actor", "Summary"]);
     t.className = "audit";
     entries.forEach(function (e) {
@@ -981,63 +1889,337 @@ function testRow(card, name, opts) {
 // because the two answer different questions: health says what is WRONG, and
 // this says what has never been DONE. A product that has simply not been
 // finished looks perfectly healthy.
+//
+// It is drawn as onboarding, not as a status list. The first version rendered
+// every step as a card with everything in it open at once: seven "why"
+// paragraphs, forty-odd instruction lines, the acknowledgement step alone
+// twelve items long, all at one weight -- and the hook credentials the text
+// kept calling "below" were rendered above step 1. Now there is a progress
+// header, one accordion row per step with only the first unfinished one
+// open, warnings drawn as callouts between the numbered actions, reference
+// material folded behind its title, and the credentials inside the step that
+// tells you to paste them.
+
+// Where each step is finished. Setup can say what is missing, but the fixing
+// happens on another tab, and a step that cannot take you there is a status
+// line rather than a step. Keyed by the step's key from the server, so a
+// reworded title moves nothing. The hrefs land on the one Settings section
+// that finishes the step, not the top of the page.
+var SETUP_GO = {
+  console:  { href: "#settings/consoles",   label: "Open Consoles" },
+  sources:  { href: "#settings/consoles",   label: "Open Consoles" },
+  channel:  { href: "#settings/channels",   label: "Open Channels" },
+  ack:      { href: "#settings/web",        label: "Open Web settings" },
+  hooks:    { href: "#settings/webhooks",   label: "Open Webhooks" },
+  password: { href: "#settings",            label: "Set the password" },
+  service:  { href: "#health",              label: "Open Health" }
+};
+
 function refreshSetup() {
   var body = byId("setup-body");
   api("GET", "/api/checklist").then(function (r) {
     clear(body);
     if (!r.ok || !r.data || !r.data.available) {
-      body.appendChild(el("p", "muted", "No checklist available from this build."));
+      setLede("setup", "list", "What was never finished.", "");
+      body.appendChild(emptyState("No checklist available from this build",
+        "This build does not report a setup checklist, so there is nothing to show here."));
       return;
     }
     var d = r.data;
+    var steps = orderSteps(d.steps || []);
+    body.appendChild(setupProgress(d, steps));
 
-    var banner = el("div", "card");
-    if (d.ready) {
-      banner.appendChild(el("p", "", "This installation can raise and deliver an alarm."));
-    } else {
-      banner.appendChild(badge("not ready", "crit"));
-      banner.appendChild(el("p", "",
-        "Nothing can be delivered yet. The steps marked TODO below are what is missing."));
-    }
-    if (!d.authenticated) {
-      banner.appendChild(el("p", "muted",
-        "Sign in to see the webhook URLs. They are credentials, so they are not " +
-        "shown to a signed-out viewer."));
-    }
-    body.appendChild(banner);
-
-    // The hook credentials. The banner above promises these to a signed-in
-    // reader and nothing rendered them, so the only way to get the URL was
-    // `notifymatrix setup` in a terminal -- on the one screen built so that
-    // nobody has to open one. An operator who had just created a hook in the
-    // interface was told to paste a URL the interface would not show them.
-    if (d.hooks && d.hooks.length) {
-      body.appendChild(hooksCard(d.hooks, d.authenticated));
-    }
-
-    (d.steps || []).forEach(function (s, i) {
-      var card = el("div", "card");
-      var head = el("div", "row");
-      head.appendChild(badge(s.status, statusClass(s.status)));
-      head.appendChild(el("strong", "", (i + 1) + ". " + s.title));
-      card.appendChild(head);
-
-      if (s.state) card.appendChild(el("p", "muted", "Now: " + s.state));
-      if (s.status !== "done") {
-        if (s.why) card.appendChild(el("p", "", s.why));
-        if (s.how && s.how.length) {
-          var ol = el("ol", "how");
-          s.how.forEach(function (h) { ol.appendChild(el("li", "", h)); });
-          card.appendChild(ol);
-        }
-      }
-      body.appendChild(card);
+    // One step open: the first that is not done, preferring a blocking one
+    // over an optional one. A fresh install used to open all seven, which is
+    // the wall; a finished install opens none.
+    var openKey = firstToDo(steps);
+    steps.forEach(function (s) {
+      body.appendChild(setupStep(s, {
+        open: s.key === openKey,
+        startHere: s.hoisted,
+        hooks: d.hooks || [],
+        authed: d.authenticated
+      }));
     });
   });
 }
 
+// orderSteps keeps the server's order except for the password step, which
+// is hoisted to the top while it is not done. On the web it is the FIRST
+// thing an operator needs -- every other step's "Open Settings" lands on the
+// sign-in form -- and the server lists it sixth because the CLI reader, who
+// already has a terminal, does not need it first.
+function orderSteps(steps) {
+  var out = steps.slice();
+  for (var i = 0; i < out.length; i++) {
+    if (out[i].key === "password" && out[i].status !== "done") {
+      var pw = out.splice(i, 1)[0];
+      pw.hoisted = true;
+      out.unshift(pw);
+      break;
+    }
+  }
+  return out;
+}
+
+// firstToDo picks which step opens: the first todo, else the first
+// unverified, else the first optional. Todo before optional because an
+// optional step listed earlier ("one channel is fine, two is better") must
+// not open in front of the step that is stopping delivery.
+function firstToDo(steps) {
+  var order = ["todo", "unverified", "optional"];
+  for (var i = 0; i < order.length; i++) {
+    for (var j = 0; j < steps.length; j++) {
+      if (steps[j].status === order[i]) return steps[j].key;
+    }
+  }
+  return null;
+}
+
+// setupProgress is the header: "4 of 7 done" as a figure and a bar, whether
+// the installation is ready, and the pipeline -- console -> this machine ->
+// channels -> your phone -- with each node in the tone of the step that
+// proves it. The pipeline is the picture that makes the checklist's order
+// obvious: an alarm has to get all the way along it, and a red node is where
+// it stops.
+function setupProgress(d, steps) {
+  var card = el("div", "card setup-progress");
+  var total = steps.length;
+  var done = steps.filter(function (s) { return s.status === "done"; }).length;
+  var todo = steps.filter(function (s) { return s.status === "todo"; }).length;
+  var figure = done + " of " + total + " done";
+  var tone = d.ready ? (done === total ? "ok" : "info") : "err";
+
+  setLede("setup", "list", "What was never finished.", figure, tone);
+
+  var top = el("div", "row top");
+  var fig = el("div", "");
+  fig.appendChild(el("div", "figure", done + " of " + total));
+  fig.appendChild(el("div", "kpi-label", "steps done"));
+  top.appendChild(fig);
+  var side = el("div", "grow");
+  if (d.ready) {
+    side.appendChild(callout("This installation can raise and deliver an alarm." +
+      (done < total ? " The steps still open improve it; none of them is stopping an alarm." : ""), "ok",
+      done === total ? "Everything is done" : "Ready"));
+  } else {
+    side.appendChild(callout("Nothing can be delivered yet. The steps marked TODO below are what is missing" +
+      (todo ? " -- " + todo + " of them." : "."), "err", "Not ready"));
+  }
+  top.appendChild(side);
+  card.appendChild(top);
+
+  card.appendChild(segmentBar(steps.map(function (s) { return s.status; }),
+    figure + ": one segment per step, green done, red to do, amber unverified, grey optional"));
+
+  card.appendChild(pipeline(pipelineNodes(steps)));
+
+  // The credentials are gated, and this is the only line that says so; the
+  // first version promised them to a signed-in reader and then rendered them
+  // nowhere at all.
+  if (!d.authenticated && d.hooks && d.hooks.length) {
+    card.appendChild(el("div", "note",
+      "Sign in to see the webhook URLs. They are credentials, so they are not " +
+      "shown to a signed-out viewer."));
+  }
+  return card;
+}
+
+// pipelineNodes joins the four stations of an alarm to the steps that prove
+// each one. The console node answers for the console, the sources AND the
+// Alarm Manager rules: all three are "does the console speak to us", and a
+// console with nothing to watch and no rules is one that never does.
+//
+// A node names the step that is holding it. The node read "UniFi console:
+// to do" while the step "Add your UniFi console" read DONE, because the
+// node was toned by three steps and labelled with one of them -- a
+// contradiction on the screen meant to make the order obvious. Now the
+// sub-line says "to do: alarm rules", which is what it measures.
+var STEP_SHORT = {
+  console: "console", sources: "sources", hooks: "alarm rules",
+  service: "service", channel: "channel", ack: "ack link", password: "password"
+};
+function pipelineNodes(steps) {
+  var by = {};
+  steps.forEach(function (s) { by[s.key] = s; });
+  var rank = { todo: 3, unverified: 2, optional: 1, done: 0 };
+  var worst = function (keys) {
+    var w = "done", wk = null;
+    keys.forEach(function (k) {
+      var st = by[k] ? by[k].status : "done";
+      if ((rank[st] || 0) > (rank[w] || 0)) { w = st; wk = k; }
+    });
+    return { status: w, key: wk };
+  };
+  var word = { done: "done", todo: "to do", unverified: "unverified", optional: "optional" };
+  var node = function (iconName, title, keys) {
+    var w = worst(keys);
+    var sub = word[w.status] || w.status;
+    // Name the culprit only when the node stands for more than one step;
+    // "Channels: to do: channel" would say the same thing twice.
+    if (w.key && keys.length > 1 && w.status !== "done") sub += ": " + (STEP_SHORT[w.key] || w.key);
+    return { icon: iconName, title: title, sub: sub, tone: w.status };
+  };
+  return [
+    node("camera", "UniFi console", ["console", "sources", "hooks"]),
+    node("server", "This machine", ["service"]),
+    node("bell", "Channels", ["channel"]),
+    node("phone", "Your phone", ["ack"])
+  ];
+}
+
+// setupGlyph is the status as a shape, for the row's leading icon -- a
+// check, a warning, a clock for "configured but never seen working", a
+// circle for optional -- so a row says its state before its colour does.
+function setupGlyph(status) {
+  if (status === "done") return "check";
+  if (status === "todo") return "warning";
+  if (status === "unverified") return "clock";
+  return "info";
+}
+
+// setupStep is one accordion row: glyph, title, state, chevron in the
+// summary; what is true now, why it matters, the actions, any reference
+// topic, the hook credentials (on the hooks step) and a button to the tab
+// that finishes it in the body. A <details>, because it works with no
+// script at all and its open state is one attribute the renderer sets.
+function setupStep(s, opts) {
+  opts = opts || {};
+  var det = el("details", "step " + toneClass(s.status));
+  if (opts.open) det.open = true;
+  det.setAttribute("data-step", s.key || "");
+
+  var sum = el("summary");
+  sum.appendChild(icon(setupGlyph(s.status)));
+  sum.appendChild(el("span", "step-title", s.title));
+  if (opts.startHere) sum.appendChild(badge("start here", "info"));
+  sum.appendChild(badge(s.status, statusClass(s.status)));
+  // The state, truncated to the room left on the row. The full text is the
+  // first line of the body; this is so a collapsed done step still reads
+  // "1 console(s) configured" and not just DONE.
+  if (s.state) sum.appendChild(el("span", "step-state", s.state));
+  sum.appendChild(icon("chevron", "chev"));
+  det.appendChild(sum);
+
+  // Three parts. The lead is what is true now and why it matters; the "do"
+  // is the instructions, the reference topics and (on the hooks step) the
+  // credentials; the go is the button to the section that finishes it. On
+  // a phone they stack in that order. On a wide screen the lead and the
+  // button take the left column and the instructions the right, because an
+  // open step used to leave half of a 1280px row empty: a 64-character
+  // measure is right for reading and wrong for a card that is 1100px wide.
+  var body = el("div", "body");
+  var lead = el("div", "step-lead stack");
+  if (s.state) {
+    var now = el("div", "step-now");
+    now.appendChild(el("span", "dot " + toneClass(s.status)));
+    now.appendChild(el("span", "step-now-k", "Now"));
+    now.appendChild(el("span", "", s.state));
+    lead.appendChild(now);
+  }
+  if (s.why) lead.appendChild(el("p", "step-why", s.why));
+  body.appendChild(lead);
+
+  var work = el("div", "step-do stack");
+  if (s.how && s.how.length) work.appendChild(howList(s.how));
+  (s.reference || []).forEach(function (t) {
+    work.appendChild(referenceTopic(t.title, t.lines));
+  });
+  // The credentials live INSIDE the step whose instructions say "paste the
+  // URL below", so that "below" is true. They used to render above step 1.
+  if (s.key === "hooks" && opts.hooks && opts.hooks.length) {
+    work.appendChild(hooksCard(opts.hooks, opts.authed));
+  }
+  if (work.firstChild) body.appendChild(work);
+
+  var go = SETUP_GO[s.key];
+  if (go) {
+    var bar = el("div", "formbar step-go");
+    var a = el("a", "act" + (s.status === "done" ? "" : " primary"));
+    a.href = go.href;
+    a.appendChild(document.createTextNode(go.label));
+    a.appendChild(icon("arrow"));
+    bar.appendChild(a);
+    body.appendChild(bar);
+  }
+  det.appendChild(body);
+  return det;
+}
+
+// howList draws the instruction lines with their weight. Actions are the
+// numbered list; a warning or an aside breaks the list and sits between as
+// a callout, and the numbering continues after it -- so the acknowledgement
+// step reads "1, 2, 3, then a bordered IF YOU MUST FORWARD A PORT, then 4",
+// rather than twelve items at one weight of which three were things to do.
+// Accepts plain strings too (an action each), for callers that predate the
+// kinds.
+function howList(lines) {
+  var box = el("div", "how-list");
+  var ol = null, n = 0;
+  (lines || []).forEach(function (l) {
+    if (typeof l === "string") l = { text: l, kind: "action" };
+    if (l.kind === "warning" || l.kind === "aside") {
+      ol = null;
+      box.appendChild(callout(l.text, l.kind === "warning" ? "warn" : "info"));
+      return;
+    }
+    if (!ol) {
+      ol = el("ol", "how");
+      if (n) { ol.setAttribute("start", String(n + 1)); ol.start = n + 1; }
+      box.appendChild(ol);
+    }
+    n++;
+    ol.appendChild(el("li", "", l.text));
+  });
+  return box;
+}
+
+// referenceTopic folds a titled block of reference lines behind its title.
+// Reachable from the step it belongs to -- one tap, no other tab -- which is
+// the rule for anything that leaves the primary screen.
+function referenceTopic(title, lines) {
+  var det = el("details", "aside");
+  var sum = el("summary");
+  sum.appendChild(icon("help"));
+  sum.appendChild(el("span", "grow", title));
+  sum.appendChild(icon("chevron", "chev"));
+  det.appendChild(sum);
+  var body = el("div", "body");
+  body.appendChild(howList(lines));
+  det.appendChild(body);
+  return det;
+}
+
+// testModeNotice is the one sentence that must appear everywhere a hook is
+// shown while its test mode is armed: the hook is accepting real alarms and
+// throwing them away, which is the one state this product must never let
+// somebody be in without knowing. Shared by the Setup credentials card and
+// the Webhooks tab so the two cannot say different things.
+function testModeNotice(cr) {
+  var armed = cr && cr.test_armed_until && !/^0001/.test(cr.test_armed_until);
+  if (!armed) return null;
+  var when = new Date(cr.test_armed_until);
+  return callout("Alarms arriving here are being accepted and THROWN AWAY -- a real " +
+    "alarm at this hook would raise nothing right now. It ends by itself.",
+    "warn", "TEST MODE until " + when.toLocaleTimeString());
+}
+
+// evidenceBadges says whether anything has ever actually arrived through a
+// hook. Evidence beats configuration: a rule that looks perfect at the UniFi
+// end and has never fired is the failure this panel exists to make visible.
+function evidenceBadges(cr) {
+  var out = [];
+  if (!cr) return out;
+  if (cr.count > 0) out.push(badge(cr.count + " received", "ok"));
+  else out.push(badge("nothing received yet", "warn"));
+  if (cr.rejected > 0) out.push(badge(cr.rejected + " rejected", "crit"));
+  if (cr.test_armed_until && !/^0001/.test(cr.test_armed_until)) out.push(badge("test mode", "warn"));
+  return out;
+}
+
 // hookTestControls answers the two questions a new hook actually raises, and
-// they are different questions needing different buttons.
+// they are different questions needing different buttons -- so they are
+// drawn as two panels, each with its button and what pressing it proves.
 //
 //   CAN UNIFI REACH US?   Arm test mode, press Test on the rule, watch the
 //                         count rise. Nothing is raised, nobody is woken, and
@@ -1051,17 +2233,12 @@ function refreshSetup() {
 // real alarms and discarding them, which is the one state this product must
 // never let somebody be in without knowing.
 function hookTestControls(h, cr) {
-  var wrap = el("div", "");
+  var wrap = el("div", "stack");
   var name = (h.name || "").trim();
   var armed = cr.test_armed_until && !/^0001/.test(cr.test_armed_until);
 
-  if (armed) {
-    var when = new Date(cr.test_armed_until);
-    wrap.appendChild(el("div", "delivery-error",
-      "TEST MODE until " + when.toLocaleTimeString() + ". Alarms arriving here " +
-      "are being accepted and THROWN AWAY -- a real alarm at this hook would " +
-      "raise nothing right now. It ends by itself."));
-  }
+  var notice = testModeNotice(cr);
+  if (notice) wrap.appendChild(notice);
   if (cr.test_count > 0) {
     wrap.appendChild(el("div", "note",
       cr.test_count + " arrival(s) accepted and discarded in test mode" +
@@ -1072,9 +2249,12 @@ function hookTestControls(h, cr) {
   }
 
   var msg = el("div", "msg");
-  var bar = el("div", "formbar");
+  var grid = el("div", "grid-2 test-panels");
 
-  var tm = el("button", "act", armed ? "End test mode" : "Test mode for 15 minutes");
+  var reach = el("div", "card test-panel");
+  reach.appendChild(el("div", "title", "Can the console reach this machine?"));
+  var tm = el("button", "act" + (armed ? "" : " primary"), armed ? "End test mode" : "Test mode for 15 minutes");
+  tm.type = "button";
   tm.addEventListener("click", function () {
     tm.disabled = true;
     msg.className = "msg"; msg.textContent = "";
@@ -1090,9 +2270,17 @@ function hookTestControls(h, cr) {
       refreshWebhooks();
     });
   });
-  bar.appendChild(tm);
+  var rb = el("div", "formbar"); rb.appendChild(tm); reach.appendChild(rb);
+  reach.appendChild(el("div", "note",
+    "Test mode proves the console can reach this machine. Arm it, then press " +
+    "Test on the rule in UniFi: arrivals are counted and thrown away, nothing " +
+    "is raised and nobody is woken."));
+  grid.appendChild(reach);
 
+  var told = el("div", "card test-panel");
+  told.appendChild(el("div", "title", "And is somebody actually told?"));
   var fire = el("button", "act", "Fire a test alarm");
+  fire.type = "button";
   fire.addEventListener("click", function () {
     // Confirmed, because this one is not free: it pages whoever the ladder
     // pages, and with voice on a rung it places a billed phone call.
@@ -1117,14 +2305,22 @@ function hookTestControls(h, cr) {
       refreshStatus();
     });
   });
-  bar.appendChild(fire);
+  var fb = el("div", "formbar"); fb.appendChild(fire); told.appendChild(fb);
+  told.appendChild(el("div", "note",
+    "Firing a test alarm proves that when an alarm arrives, somebody is " +
+    "actually told -- which depends on your rules, ladder and channels, and " +
+    "is the part an arriving alarm does not prove until it matters. It raises " +
+    "a real incident and a phone really rings."));
+  grid.appendChild(told);
+  wrap.appendChild(grid);
 
-  wrap.appendChild(bar);
+  // The reconciliation. The Setup step says pressing Test in UniFi raises a
+  // real incident; this tab offers a mode in which it raises nothing. Both
+  // are true, and this is the line that says when each applies.
   wrap.appendChild(el("div", "note",
-    "Test mode proves the console can reach this machine. Firing a test alarm " +
-    "proves that when it does, somebody is actually told -- which depends on " +
-    "your rules, ladder and channels, and is the part an arriving alarm does " +
-    "not prove until it matters."));
+    "UniFi's own Test button on the rule sends a real alarm. With test mode " +
+    "armed it is counted above and discarded; with test mode off it raises a " +
+    "real incident, exactly as a genuine alarm would."));
   wrap.appendChild(msg);
   return wrap;
 }
@@ -1139,57 +2335,70 @@ function hookTestControls(h, cr) {
 // where somebody pasted "the link" is a way to raise false alarms on this
 // installation.
 function hooksCard(hooks, authed) {
-  var card = el("div", "card");
-  card.appendChild(el("strong", "", "Inbound webhooks"));
-  card.appendChild(el("div", "muted small",
+  var card = el("div", "card hooks");
+  var title = el("div", "card-title");
+  title.appendChild(icon("link"));
+  title.appendChild(document.createTextNode("URLs and headers for the rules"));
+  card.appendChild(title);
+  card.appendChild(el("p", "",
     "Paste each URL and header into the matching UniFi Alarm Manager rule. " +
     "No API can create those rules, so this is the only way the alarms they " +
-    "carry reach this product at all."));
+    "carry reach this product at all. Hooks are added under Settings > Webhooks."));
 
   hooks.forEach(function (h) {
-    var box = el("div", "card");
+    var box = el("div", "card hook");
     var head = el("div", "row");
     head.appendChild(el("strong", "", h.name));
     if (h.product) head.appendChild(badge(h.product, ""));
-    // Evidence beats configuration: a rule that looks perfect at the UniFi end
-    // and has never fired is the failure this panel exists to make visible.
-    if (h.count > 0) {
-      head.appendChild(badge(h.count + " received", "ok"));
-    } else {
-      head.appendChild(badge("nothing received yet", "warn"));
-    }
-    if (h.rejected > 0) head.appendChild(badge(h.rejected + " rejected", "crit"));
+    evidenceBadges(h).forEach(function (b) { head.appendChild(b); });
     box.appendChild(head);
 
+    var notice = testModeNotice(h);
+    if (notice) box.appendChild(notice);
+
     if (!authed) {
-      box.appendChild(el("div", "muted small",
+      box.appendChild(el("div", "note",
         "Sign in to see this hook's URL and header."));
       card.appendChild(box);
       return;
     }
 
     box.appendChild(el("div", "label", "URL"));
-    box.appendChild(el("pre", "cred", h.url || "(not available)"));
+    box.appendChild(credRow(h.url || "(not available)", !!h.url));
     if (h.header_name) {
-      box.appendChild(el("div", "label", "Header"));
-      box.appendChild(el("pre", "cred", h.header_name + ": " + h.header_value));
+      var hl = el("div", "label", "Header");
+      // The warning belongs AT the header, because the mistake it stops is
+      // pasting the URL and skipping this.
+      hl.appendChild(why("Both are passwords. The header is not optional -- a URL " +
+        "travels through the console backup, browser history and every proxy " +
+        "log on the path, and a header does not.", { label: "why both?", tone: "warn" }));
+      box.appendChild(hl);
+      box.appendChild(credRow(h.header_name + ": " + h.header_value, true));
     }
-    box.appendChild(el("div", "note",
-      "Both are passwords. The header is not optional -- a URL travels through " +
-      "the console backup, browser history and every proxy log on the path, " +
-      "and a header does not."));
     if (h.last_reject) {
-      box.appendChild(el("div", "msg err", "Last refusal: " + h.last_reject));
+      box.appendChild(callout("Last refusal: " + h.last_reject, "err"));
     }
     card.appendChild(box);
   });
   return card;
 }
 
+// credRow is a credential with a Copy button beside it. The text is still
+// selectable -- the button is a convenience and the clipboard API is absent
+// on plain http, which is what most of these installs are.
+function credRow(text, copyable) {
+  var row = el("div", "cred-row");
+  row.appendChild(el("pre", "cred", text));
+  if (copyable) row.appendChild(copyButton(text));
+  return row;
+}
+
+// statusClass maps a checklist status to the badge's legacy tone class.
 function statusClass(status) {
   if (status === "done") return "ok";
   if (status === "todo") return "crit";
   if (status === "unverified") return "warn";
+  if (status === "optional") return "optional";
   return "";
 }
 
@@ -1198,30 +2407,54 @@ function statusClass(status) {
 function refreshTab() {
   if (state.tab === "incidents") refreshIncidents();
   else if (state.tab === "setup") refreshSetup();
-  else if (state.tab === "webhooks") refreshWebhooks();
   else if (state.tab === "settings") refreshSettings();
-  else if (state.tab === "audit") refreshAudit();
+  else if (state.tab === "activity") refreshAudit();
 }
 function refreshAll() { refreshStatus(); refreshTab(); }
 
-var TAB_NAMES = ["incidents", "setup", "health", "webhooks", "settings", "audit"];
+var TAB_NAMES = ["incidents", "health", "setup", "settings", "activity"];
 
-// tabFromHash reads #health and friends, so a tab can be linked to.
+// Old hashes keep working. "webhooks" was a tab and is a Settings section
+// now; "audit" was the Activity tab's old name. A link somebody wrote down
+// or pasted into a runbook must not land on an empty board.
+var HASH_ALIASES = { webhooks: "settings/webhooks", audit: "activity" };
+
+// routeFromHash reads #health, #settings/channels and friends: a tab, and
+// for Settings an optional section after the slash. An operator telling
+// somebody else to "look at Health" should be able to send them there, and
+// a Setup step should be able to land on the one Settings section that
+// finishes it rather than at the top of a long page.
 //
-// An operator telling somebody else to "look at Health" should be able to send
-// them there, rather than describing which tab to click. An unknown or absent
-// fragment falls back to the board, which is the page worth landing on.
-function tabFromHash() {
+// An unknown or absent fragment returns no tab at all; the caller decides
+// where to land, because the right default depends on whether the
+// installation is set up yet (see landingTab).
+function routeFromHash() {
   var h = (location.hash || "").replace(/^#/, "").toLowerCase();
-  return TAB_NAMES.indexOf(h) >= 0 ? h : "incidents";
+  if (HASH_ALIASES[h]) h = HASH_ALIASES[h];
+  var parts = h.split("/");
+  var tab = parts[0], section = parts[1] || "";
+  if (TAB_NAMES.indexOf(tab) < 0) return { tab: "", section: "" };
+  return { tab: tab, section: tab === "settings" ? section : "" };
+}
+// tabFromHash is the old name for the same question, kept for callers that
+// only want the tab.
+function tabFromHash() { return routeFromHash().tab; }
+
+// landingTab: Setup while the installation cannot deliver, the board once
+// it can. A fresh install used to land on an empty board that said "check
+// Health", and Health said "no sources are configured" and pointed nowhere.
+function landingTab() {
+  return (state.setupKnown && !state.ready) ? "setup" : "incidents";
 }
 
-function selectTab(name) {
+function selectTab(name, section) {
   state.tab = name;
-  if (location.hash.replace(/^#/, "") !== name) {
+  state.section = section || "";
+  var want = name + (state.section ? "/" + state.section : "");
+  if (location.hash.replace(/^#/, "") !== want) {
     // replaceState rather than a hash assignment: this must not add an entry
     // to the history for every tab click, or Back becomes useless.
-    try { history.replaceState(null, "", "#" + name); } catch (e) { /* file:// */ }
+    try { history.replaceState(null, "", "#" + want); } catch (e) { /* file:// */ }
   }
   var tabs = document.querySelectorAll("nav.tabs button");
   for (var i = 0; i < tabs.length; i++) {
@@ -1233,6 +2466,18 @@ function selectTab(name) {
   refreshTab();
 }
 
+// scrollToSection lands on a Settings section once it exists. The sections
+// are rendered after a fetch, so this is called from the renderer as well
+// as from the hash handler; scroll-margin-top in the style sheet keeps the
+// heading out from under the sticky header.
+function scrollToSection(section) {
+  if (!section) return;
+  var target = byId("settings-" + section);
+  if (!target || !target.scrollIntoView) return;
+  target.scrollIntoView({ block: "start" });
+  markRail(section);
+}
+
 document.addEventListener("DOMContentLoaded", function () {
   var tabs = document.querySelectorAll("nav.tabs button");
   for (var i = 0; i < tabs.length; i++) {
@@ -1240,9 +2485,34 @@ document.addEventListener("DOMContentLoaded", function () {
       b.addEventListener("click", function () { selectTab(b.getAttribute("data-tab")); });
     })(tabs[i]);
   }
-  selectTab(tabFromHash());
-  window.addEventListener("hashchange", function () { selectTab(tabFromHash()); });
-  refreshAll();
+  window.addEventListener("hashchange", function () {
+    var r = routeFromHash();
+    if (!r.tab) return;
+    if (r.tab === state.tab && r.tab === "settings") {
+      // Same tab, different section: a rail click. Scroll, do not redraw --
+      // redrawing would throw away whatever is typed in the other sections.
+      state.section = r.section;
+      scrollToSection(r.section);
+      return;
+    }
+    selectTab(r.tab, r.section);
+  });
+
+  // The first status poll decides where to land when the URL says nothing:
+  // it carries whether the installation is set up. Until it answers, the
+  // board is shown (it is the page a wall display wants), and if the answer
+  // is "not ready" the page moves to Setup once, before anybody has read
+  // the board. A hash in the URL always wins.
+  var r = routeFromHash();
+  if (r.tab) {
+    selectTab(r.tab, r.section);
+    refreshStatus();
+  } else {
+    selectTab("incidents");
+    refreshStatus(function () {
+      if (landingTab() !== state.tab) selectTab(landingTab());
+    });
+  }
   // A wall display is left on this page for months. Polling is what keeps it
   // honest, and the interval is short because the board IS the product.
   setInterval(function () {
@@ -1317,25 +2587,54 @@ function enabledChannels(draft) {
   return out;
 }
 
-function renderPolicies(body, draft) {
+// renderPolicies draws the escalation editor: the matrix in the simple
+// view, one structured ladder per severity in the advanced one. saved is
+// the last-saved settings, so the matrix can warn when a column is a
+// channel enabled in the draft but not yet saved -- a ladder naming it
+// would be refused. view remembers which editor is open across redraws.
+function renderPolicies(body, draft, saved, view) {
   var pols = draft.policies || (draft.policies = {});
   var card = el("div", "card");
-  card.appendChild(el("div", "muted small",
-    "What happens after an alarm is raised, and how long it keeps asking."));
+  card.appendChild(el("p", "",
+    "Who is told when an alarm of each severity is raised, how often it keeps " +
+    "asking until somebody acknowledges, and when it gives up."));
 
   var live = enabledChannels(draft);
+  var savedLive = enabledChannels(saved || {});
   if (!live.length) {
-    card.appendChild(el("div", "note",
-      "No channel is enabled, so there is nothing to escalate ON to. Enable one " +
-      "above and save, then come back."));
+    var none = el("span", "");
+    none.appendChild(document.createTextNode("No channel is enabled, so there is nothing to escalate on to. "));
+    var a = el("a", null, "Enable one under Channels");
+    a.href = "#settings/channels";
+    none.appendChild(a);
+    none.appendChild(document.createTextNode(" and it appears here as a column."));
+    card.appendChild(callout(none, "warn", "Nothing to tick"));
+  }
+  var unsaved = live.filter(function (n) { return savedLive.indexOf(n) < 0; });
+  if (unsaved.length) {
+    card.appendChild(callout(unsaved.join(", ") + " " + (unsaved.length === 1 ? "is" : "are") +
+      " enabled under Channels but not saved yet. Save channels first, or a " +
+      "ladder naming " + (unsaved.length === 1 ? "it" : "them") + " will be refused.", "warn"));
   }
 
   var advanced = el("input");
   advanced.type = "checkbox";
   advanced.style.width = "auto";
-  advanced.checked = policiesNeedAdvanced(pols);
+  // The matrix is the default view, always. The editor used to open in the
+  // advanced view whenever a ladder had more than one stage, on the theory
+  // that the simple view would flatten it on save -- but the matrix edits
+  // only the first stage and carries the rest through untouched, marking
+  // the row "+1 stage". And the shipped defaults for critical and high ARE
+  // two-stage ladders, so ticking one box in the matrix and saving made the
+  // matrix vanish on the next visit, on first use, for everybody.
+  view = view || {};
+  advanced.checked = !!view.advanced;
+  advanced.addEventListener("change", function () { view.advanced = advanced.checked; });
   var advRow = el("div", "row");
-  advRow.appendChild(labelled("Advanced: edit the escalation ladder itself", advanced));
+  advRow.appendChild(labelled("Advanced: edit the escalation ladder itself", advanced,
+    "A ladder can have several stages -- ntfy now, ntfy and email after fifteen " +
+    "minutes. The matrix edits the first stage of each; the advanced view " +
+    "edits every stage."));
   card.appendChild(advRow);
 
   var panel = el("div");
@@ -1344,133 +2643,203 @@ function renderPolicies(body, draft) {
 
   var draw = function () {
     clear(panel);
-    SEVERITIES.forEach(function (sev) {
-      panel.appendChild(policyCard(sev, pols, advanced.checked, draw, live));
-    });
+    if (advanced.checked) {
+      SEVERITIES.forEach(function (sev) {
+        panel.appendChild(policyCard(sev, pols, draw, live));
+      });
+    } else {
+      panel.appendChild(policyMatrix(pols, live, draw));
+    }
   };
   advanced.addEventListener("change", draw);
   draw();
 }
 
-// policiesNeedAdvanced reports whether anything configured cannot be shown in
-// the guided form. Opening the simple view over a multi-stage ladder and then
-// saving would silently flatten it, so the editor opens in whichever mode can
-// represent what is already there.
-function policiesNeedAdvanced(pols) {
-  for (var sev in pols) {
-    if (!Object.prototype.hasOwnProperty.call(pols, sev)) continue;
-    var p = pols[sev];
-    if (p && p.stages && p.stages.length > 1) return true;
-  }
-  return false;
+// ownerOf returns the function that makes a severity's policy editable.
+//
+// Editing a default must turn it into an override FIRST, or the edit lands
+// on the shared template object and changes every severity at once.
+// Materialising a default has to filter it to channels that are actually
+// enabled, exactly as config.filterToEnabled does when the daemon builds the
+// shipped defaults at runtime. Without that, ticking one box in the simple
+// view wrote out the two-stage default verbatim -- including a second rung
+// naming a channel this installation does not have -- and the save was
+// refused citing "stage 1", a thing the simple view never showed.
+//
+// It materialises WITHOUT redrawing. Redrawing here re-rendered the panel
+// before the caller had applied its change, so the freshly drawn checkbox
+// showed the pre-change model and the model then moved underneath it.
+// Callers redraw AFTER their mutation, which is the only order in which the
+// two can agree.
+function ownerOf(sev, pols, live) {
+  return function () {
+    if (!Object.prototype.hasOwnProperty.call(pols, sev)) {
+      pols[sev] = filterLadder(clone(DEFAULT_LADDERS[sev]), live);
+    }
+    return pols[sev];
+  };
 }
 
-function policyCard(sev, pols, advanced, redraw, live) {
+// policyMatrix is THE matrix: severities down, channels across, a checkbox
+// where they meet, and beside each row how often it repeats and when it
+// gives up. It is one screen instead of five identical cards, and it is the
+// product's mental model drawn as a picture -- the thing the name promised
+// and nothing showed.
+function policyMatrix(pols, live, redraw) {
+  var box = el("div", "scroll-x");
+  var t = document.createElement("table");
+  t.className = "matrix";
+  var head = t.createTHead().insertRow();
+  var th = function (text, cls) {
+    var h = document.createElement("th");
+    h.textContent = text;
+    if (cls) h.className = cls;
+    head.appendChild(h);
+    return h;
+  };
+  th("Severity");
+  live.forEach(function (name) { th(name, "chan"); });
+  th("Repeat every", "dur");
+  th("Give up after", "dur");
+  th("Quiet hours");
+  th("");
+  var tb = t.createTBody();
+
+  var multi = [];
+  SEVERITIES.forEach(function (sev) {
+    var overridden = Object.prototype.hasOwnProperty.call(pols, sev);
+    var p = overridden ? pols[sev] : DEFAULT_LADDERS[sev];
+    var own = ownerOf(sev, pols, live);
+    var stages = (p.stages && p.stages.length) ? p.stages : [{ after: "0s", channels: [] }];
+    var first = stages[0];
+    if (stages.length > 1) multi.push({ sev: sev, n: stages.length });
+
+    var row = tb.insertRow();
+    row.className = "sev-" + sev + (overridden ? " customised" : "");
+    var sc = row.insertCell();
+    sc.appendChild(badge(sev, "sev-" + sev));
+    if (stages.length > 1) sc.appendChild(badge("+" + (stages.length - 1) + " stage" + (stages.length > 2 ? "s" : ""), "info"));
+
+    live.forEach(function (name) {
+      var c = row.insertCell();
+      var b = boxFor(first.channels, name, function (on) {
+        var tgt = own();
+        if (!tgt.stages || !tgt.stages.length) tgt.stages = [{ after: "0s", channels: [] }];
+        toggleIn(tgt.stages[0].channels || (tgt.stages[0].channels = []), name, on);
+        redraw();
+      });
+      b.setAttribute("aria-label", "tell " + name + " on " + sev);
+      c.appendChild(b);
+    });
+
+    var rc = row.insertCell();
+    var rep = durationField(p, "repeat_every", own);
+    rep.placeholder = "once";
+    rep.setAttribute("aria-label", sev + ": repeat every");
+    rc.appendChild(rep);
+    var gc = row.insertCell();
+    var giveUp = durationField(p, "give_up_after", own);
+    giveUp.placeholder = "never";
+    giveUp.setAttribute("aria-label", sev + ": give up after");
+    gc.appendChild(giveUp);
+
+    var qc = row.insertCell();
+    var q = el("input");
+    q.type = "checkbox";
+    q.checked = !!p.respect_quiet_hours;
+    q.disabled = (sev === "critical");
+    q.setAttribute("aria-label", sev + ": respect quiet hours");
+    if (sev === "critical") q.title = "Quiet hours never apply to critical. That control does not exist.";
+    q.addEventListener("change", function () {
+      own().respect_quiet_hours = q.checked;
+      redraw();
+    });
+    qc.appendChild(q);
+
+    var st = row.insertCell();
+    st.className = "rowstate";
+    st.appendChild(badge(overridden ? "customised" : "default", overridden ? "info" : "is-muted"));
+    if (overridden) {
+      var reset = el("button", "act ghost small", "reset");
+      reset.type = "button";
+      reset.title = "Back to the default";
+      reset.addEventListener("click", function () { delete pols[sev]; redraw(); });
+      st.appendChild(reset);
+    }
+  });
+  box.appendChild(t);
+
+  var wrap = el("div", "matrix-wrap");
+  wrap.appendChild(box);
+  var legend = el("div", "note");
+  legend.textContent = "A tick means that channel is told the moment an alarm of that " +
+    "severity is raised. Repeat every: how often it keeps asking until somebody " +
+    "acknowledges (blank = once). Give up after: when it stops (never = keep going). " +
+    "Critical never respects quiet hours.";
+  wrap.appendChild(legend);
+  multi.forEach(function (m) {
+    wrap.appendChild(el("div", "note",
+      m.sev + " has " + m.n + " stages. The matrix edits the first; tick Advanced to see the rest."));
+  });
+  return wrap;
+}
+
+// policyCard is one severity in the advanced view: every stage of its
+// ladder, the repeat and give-up, and quiet hours.
+function policyCard(sev, pols, redraw, live) {
   var overridden = Object.prototype.hasOwnProperty.call(pols, sev);
   var p = overridden ? pols[sev] : DEFAULT_LADDERS[sev];
+  var own = ownerOf(sev, pols, live);
 
   var c = el("div", "card");
   var head = el("div", "row");
   head.appendChild(badge(sev, "sev-" + sev));
   head.appendChild(el("div", "grow"));
-  head.appendChild(badge(overridden ? "customised" : "default", overridden ? "on" : ""));
+  head.appendChild(badge(overridden ? "customised" : "default", overridden ? "info" : "is-muted"));
   c.appendChild(head);
 
-  // Editing a default must turn it into an override FIRST, or the edit lands
-  // on the shared template object and changes every severity at once.
-  // Materialising a default has to filter it to channels that are actually
-  // enabled, exactly as config.filterToEnabled does when the daemon builds the
-  // shipped defaults at runtime.
-  //
-  // Without that, ticking one box in the simple view wrote out the two-stage
-  // default verbatim -- including a second rung naming a channel this
-  // installation does not have -- and the save was refused citing "stage 1",
-  // a thing the simple view never showed and gave no way to fix.
-  // Materialises WITHOUT redrawing.
-  //
-  // Redrawing here re-rendered the panel before the caller had applied its
-  // change, so the freshly drawn checkbox showed the pre-change model and the
-  // model then moved underneath it: the box read ticked while the stage it
-  // stood for had no channels, and the save was refused for a state the screen
-  // said was not there. Callers that need the card redrawn do it AFTER their
-  // mutation, which is the only order in which the two can agree.
-  var own = function () {
-    if (!overridden) {
-      pols[sev] = filterLadder(clone(DEFAULT_LADDERS[sev]), live);
-      overridden = true;
-    }
-    return pols[sev];
-  };
-
-  if (!advanced) {
-    var stages = (p.stages && p.stages.length) ? p.stages : [{ after: "0s", channels: [] }];
-    var first = stages[0];
-    c.appendChild(el("div", "label", "Tell me on"));
-    var chRow = el("div", "row");
+  (p.stages || []).forEach(function (st, idx) {
+    var sc = el("div", "card");
+    var sf = el("div", "fields");
+    sf.appendChild(labelled(idx === 0 ? "Straight away (0s)" : "After",
+      durationField(st, "after", own)));
+    sc.appendChild(sf);
+    var r = el("div", "row");
     (live.length ? live : []).forEach(function (name) {
-      chRow.appendChild(labelled(name, boxFor(first.channels, name, function (on) {
-        var t = own();
-        if (!t.stages || !t.stages.length) t.stages = [{ after: "0s", channels: [] }];
-        toggleIn(t.stages[0].channels || (t.stages[0].channels = []), name, on);
+      r.appendChild(labelled(name, boxFor(st.channels, name, function (on) {
+        own();
+        toggleIn(st.channels || (st.channels = []), name, on);
         redraw();
       })));
     });
-    c.appendChild(chRow);
-
-    var f = el("div", "fields");
-    f.appendChild(labelled("Keep asking every (blank = ask once)",
-      durationField(p, "repeat_every", own)));
-    f.appendChild(labelled("Give up after (never = keep going)",
-      durationField(p, "give_up_after", own)));
-    c.appendChild(f);
-
-    if (stages.length > 1) {
-      c.appendChild(el("div", "note",
-        "This severity has " + stages.length + " stages. The simple view edits the " +
-        "first; tick Advanced to see the rest."));
-    }
-  } else {
-    (p.stages || []).forEach(function (st, idx) {
-      var sc = el("div", "card");
-      var sf = el("div", "fields");
-      sf.appendChild(labelled(idx === 0 ? "Straight away (0s)" : "After",
-        durationField(st, "after", own)));
-      sc.appendChild(sf);
-      var r = el("div", "row");
-      (live.length ? live : []).forEach(function (name) {
-        r.appendChild(labelled(name, boxFor(st.channels, name, function (on) {
-          own();
-          toggleIn(st.channels || (st.channels = []), name, on);
-          redraw();
-        })));
-      });
-      sc.appendChild(r);
-      var rm = el("button", "act", "Remove this stage");
-      rm.addEventListener("click", function () {
-        own().stages.splice(idx, 1);
-        redraw();
-      });
-      var rb = el("div", "formbar"); rb.appendChild(rm);
-      sc.appendChild(rb);
-      c.appendChild(sc);
-    });
-
-    var addBar = el("div", "formbar");
-    var add = el("button", "act", "Add a stage");
-    add.addEventListener("click", function () {
-      var t = own();
-      t.stages = t.stages || [];
-      t.stages.push({ after: "15m", channels: [] });
+    sc.appendChild(r);
+    var rm = el("button", "act", "Remove this stage");
+    rm.type = "button";
+    rm.addEventListener("click", function () {
+      own().stages.splice(idx, 1);
       redraw();
     });
-    addBar.appendChild(add);
-    c.appendChild(addBar);
+    var rb = el("div", "formbar"); rb.appendChild(rm);
+    sc.appendChild(rb);
+    c.appendChild(sc);
+  });
 
-    var af = el("div", "fields");
-    af.appendChild(labelled("Repeat every", durationField(p, "repeat_every", own)));
-    af.appendChild(labelled("Give up after", durationField(p, "give_up_after", own)));
-    c.appendChild(af);
-  }
+  var addBar = el("div", "formbar");
+  var add = el("button", "act", "Add a stage");
+  add.type = "button";
+  add.addEventListener("click", function () {
+    var t = own();
+    t.stages = t.stages || [];
+    t.stages.push({ after: "15m", channels: [] });
+    redraw();
+  });
+  addBar.appendChild(add);
+  c.appendChild(addBar);
+
+  var af = el("div", "fields");
+  af.appendChild(labelled("Repeat every (blank = ask once)", durationField(p, "repeat_every", own)));
+  af.appendChild(labelled("Give up after (never = keep going)", durationField(p, "give_up_after", own)));
+  c.appendChild(af);
 
   var q = el("input");
   q.type = "checkbox";
@@ -1491,6 +2860,7 @@ function policyCard(sev, pols, advanced, redraw, live) {
 
   if (overridden) {
     var reset = el("button", "act", "Back to the default");
+    reset.type = "button";
     reset.addEventListener("click", function () { delete pols[sev]; redraw(); });
     var rb2 = el("div", "formbar"); rb2.appendChild(reset);
     c.appendChild(rb2);
@@ -1557,14 +2927,17 @@ function renderRules(body, draft, vocab, seen) {
   var draw = function () {
     clear(panel);
     if (!rules.length) {
-      panel.appendChild(el("div", "empty",
-        "No rules. Every event is treated as its source proposed."));
+      panel.appendChild(emptyState("No rules",
+        "Every event is treated as its source proposed. A rule can silence a " +
+        "noisy camera or make one door critical.",
+        null, { icon: "list", compact: true }));
     }
     rules.forEach(function (r, idx) {
       panel.appendChild(ruleCard(r, idx, rules, advanced.checked, draw, vocab || [], seen || []));
     });
     var bar = el("div", "formbar");
-    var add = el("button", "act primary", "Add a rule");
+    var add = el("button", "act" + (rules.length ? "" : " primary"), "Add a rule");
+    add.type = "button";
     add.addEventListener("click", function () {
       rules.push({ name: "", sources: [], conditions: [], entities: [] });
       draw();
@@ -1884,10 +3257,10 @@ function firstOf(obj, key) {
 // up; what it can do is own the endpoint each one posts to, and say what an
 // arrival there MEANS.
 //
-// The URL and the Authorization header are not here. They are credentials, and
-// they are shown on the Setup tab behind a session: a credential with two ways
-// out has two ways to leak, and Setup is the surface already designed and
-// tested for showing them.
+// The URL and the Authorization header come from the checklist, not the
+// settings view: they are credentials, the settings API never returns a
+// token, and the checklist is the one endpoint that gates them behind a
+// session. They are shown here, on the card for the hook they belong to.
 
 var HOOK_PRODUCTS = ["network", "protect", "access"];
 var HOOK_SEVERITIES = ["", "critical", "high", "medium", "low", "info"];
@@ -1895,26 +3268,27 @@ var HOOK_SEVERITIES = ["", "critical", "high", "medium", "low", "info"];
 function renderHooks(body, draft, conditions, creds) {
   var hooks = draft.hooks || (draft.hooks = []);
   var card = el("div", "card");
-  card.appendChild(el("div", "muted small",
+  card.appendChild(el("p", "",
     "One endpoint per Alarm Manager rule. Add it here, then paste its URL and " +
     "header into the rule -- both are shown on the hook's own card below."));
 
-  var panel = el("div");
+  var panel = el("div", "stack");
   card.appendChild(panel);
 
   var draw = function () {
     clear(panel);
     if (!hooks.length) {
-      panel.appendChild(el("div", "empty",
-        "No inbound hooks. Network alarms have no other way in: the Integration " +
-        "API publishes no events at all, so anything from Alarm Manager arrives " +
-        "here or not at all."));
+      panel.appendChild(emptyState("No inbound hooks",
+        "Network alarms have no other way in: the Integration API publishes no " +
+        "events at all, so anything from Alarm Manager arrives here or not at all.",
+        null, { icon: "link", compact: true }));
     }
     hooks.forEach(function (h, idx) {
       panel.appendChild(hookCard(h, idx, hooks, conditions, draw, creds || {}));
     });
     var bar = el("div", "formbar");
     var add = el("button", "act primary", "Add a hook");
+    add.type = "button";
     add.addEventListener("click", function () {
       hooks.push({ name: "", product: "network", condition: conditions[0] || "" });
       draw();
@@ -1926,75 +3300,94 @@ function renderHooks(body, draft, conditions, creds) {
   body.appendChild(card);
 }
 
+// The name is the handle the credentials are carried by -- the browser is
+// never sent a token, so it cannot send one back, and a renamed hook is
+// indistinguishable from a new one. It therefore gets fresh credentials and
+// its old URL stops working, which the console will not tell anybody: the
+// rule keeps posting to a dead endpoint and the alarms it carried simply
+// stop arriving. It is said AT the name field, as a disclosure, because that
+// is the control the mistake is made at; it used to be a grid cell that
+// looked like another field.
+var HOOK_RENAME_WARNING =
+  "Renaming this hook issues new credentials and its current URL stops " +
+  "working. The Alarm Manager rule would keep posting to the old one and " +
+  "those alarms would stop arriving, silently. Re-paste the new URL and " +
+  "header from this card afterwards.";
+
 function hookCard(h, idx, hooks, conditions, redraw, creds) {
-  var c = el("div", "card");
+  var c = el("div", "card hook");
+  var ready = h.token_set && h.bearer_set;
+  var cr = ready ? creds[(h.name || "").trim()] : null;
+
+  var head = el("div", "row");
+  head.appendChild(el("strong", "grow", (h.name || "").trim() || "New hook"));
+  // "URL issued" rather than "endpoint live": the badge answers whether
+  // there is a URL to paste yet, which is the only thing it knows.
+  head.appendChild(badge(ready ? "URL issued" : "URL issued on save", ready ? "on" : "off"));
+  evidenceBadges(cr).forEach(function (b) { head.appendChild(b); });
+  c.appendChild(head);
 
   var f = el("div", "fields");
-  f.appendChild(labelled("Name (match the Alarm Manager rule)", bind(h, "name")));
-  // The name is the handle the credentials are carried by -- the browser is
-  // never sent a token, so it cannot send one back, and a renamed hook is
-  // indistinguishable from a new one. It therefore gets fresh credentials and
-  // its old URL stops working, which the console will not tell anybody: the
-  // rule keeps posting to a dead endpoint and the alarms it carried simply
-  // stop arriving. Said here because the server-side comment claimed it was,
-  // and it was not said anywhere at all.
-  if (h.token_set || h.bearer_set) {
-    f.appendChild(el("div", "note",
-      "Renaming this hook issues new credentials and its current URL stops " +
-      "working. The Alarm Manager rule would keep posting to the old one and " +
-      "those alarms would stop arriving, silently. Re-paste the new URL and " +
-      "header from this card afterwards."));
-  }
+  f.appendChild(labelled("Name (match the Alarm Manager rule)", bind(h, "name"),
+    (h.token_set || h.bearer_set) ? { text: HOOK_RENAME_WARNING, label: "before renaming", tone: "warn" } : null));
   f.appendChild(labelled("UniFi application", pick(h, "product", HOOK_PRODUCTS, null)));
-  f.appendChild(labelled("What an arrival here means", pick(h, "condition", conditions, null)));
-  f.appendChild(labelled("How loud", pick(h, "severity", HOOK_SEVERITIES, "high (default)")));
-  f.appendChild(labelled("What it is about (blank = the rule's name)", bind(h, "entity")));
+  f.appendChild(labelled("Alarm type", pick(h, "condition", conditions, null),
+    "What an arrival at this URL means. The rule at the UniFi end decides when " +
+    "to post; this decides what the post is recorded as."));
+  f.appendChild(labelled("Severity", pick(h, "severity", HOOK_SEVERITIES, "high (default)")));
+  var ent = bind(h, "entity");
+  ent.placeholder = "blank = the rule's name";
+  f.appendChild(labelled("Device or place (optional)", ent,
+    "What the alarm is about -- a WAN name, a switch, a site. Blank uses the " +
+    "rule's name."));
   c.appendChild(f);
-
-  var r = el("div", "row");
-  var ready = h.token_set && h.bearer_set;
-  r.appendChild(badge(ready ? "endpoint live" : "endpoint not created yet", ready ? "on" : "off"));
-  c.appendChild(r);
 
   if (!ready) {
     c.appendChild(el("div", "note",
       "Its URL and header are created when you save, and appear here afterwards."));
-  } else {
+  } else if (cr && cr.url) {
     // Shown HERE, on the card for the hook it belongs to. It used to say
     // "appear on the Setup tab", and the Setup tab did not render them either:
     // the interface promised a credential in one place, pointed at another,
     // and showed it in neither. The only way to get the URL was a terminal.
-    var cr = creds[(h.name || "").trim()];
-    if (cr && cr.url) {
-      c.appendChild(el("div", "label", "URL for the Alarm Manager rule"));
-      c.appendChild(el("pre", "cred", cr.url));
-      if (cr.header_name) {
-        c.appendChild(el("div", "label", "Header the rule must send"));
-        c.appendChild(el("pre", "cred", cr.header_name + ": " + cr.header_value));
-      }
-      // Evidence, not configuration. A rule that looks right at the UniFi end
-      // and has never fired is the failure this is here to make visible.
-      if (cr.count > 0) {
-        c.appendChild(el("div", "note",
-          cr.count + " alarm(s) have arrived through this hook."));
-      } else {
-        c.appendChild(el("div", "note",
-          "Nothing has arrived through this hook yet. Until something does, " +
-          "the rule at the UniFi end is unproven -- it can look perfectly " +
-          "correct there and deliver nothing."));
-      }
-      if (cr.rejected > 0) {
-        c.appendChild(el("div", "delivery-error",
-          cr.rejected + " request(s) were refused" +
-          (cr.last_reject ? ": " + cr.last_reject : "") +
-          ". That is usually the header being absent or wrong."));
-      }
-      c.appendChild(hookTestControls(h, cr));
-    } else {
-      c.appendChild(el("div", "note",
-        "Its URL and header exist. Save and restart the service if they are " +
-        "not shown here yet -- hooks are built when the daemon starts."));
+    var creds1 = el("div", "stack");
+    var notice = testModeNotice(cr);
+    if (notice) creds1.appendChild(notice);
+    var ul = el("div", "");
+    ul.appendChild(el("div", "label", "URL for the Alarm Manager rule"));
+    ul.appendChild(credRow(cr.url, true));
+    if (cr.header_name) {
+      var hl = el("div", "label", "Header the rule must send");
+      hl.appendChild(why("Both are passwords. The header is not optional -- a URL " +
+        "travels through the console backup, browser history and every proxy " +
+        "log on the path, and a header does not.", { label: "why both?", tone: "warn" }));
+      ul.appendChild(hl);
+      ul.appendChild(credRow(cr.header_name + ": " + cr.header_value, true));
     }
+    creds1.appendChild(ul);
+    // Evidence, not configuration. A rule that looks right at the UniFi end
+    // and has never fired is the failure this is here to make visible.
+    if (cr.count > 0) {
+      creds1.appendChild(el("div", "note",
+        cr.count + " alarm(s) have arrived through this hook."));
+    } else {
+      creds1.appendChild(callout(
+        "Nothing has arrived through this hook yet. Until something does, " +
+        "the rule at the UniFi end is unproven -- it can look perfectly " +
+        "correct there and deliver nothing.", "warn"));
+    }
+    if (cr.rejected > 0) {
+      creds1.appendChild(callout(
+        cr.rejected + " request(s) were refused" +
+        (cr.last_reject ? ": " + cr.last_reject : "") +
+        ". That is usually the header being absent or wrong.", "err"));
+    }
+    creds1.appendChild(hookTestControls(h, cr));
+    c.appendChild(creds1);
+  } else {
+    c.appendChild(el("div", "note",
+      "Its URL and header exist. Save and restart the service if they are " +
+      "not shown here yet -- hooks are built when the daemon starts."));
   }
 
   // Regenerating is destructive in a way that is easy not to see coming: the
@@ -2002,30 +3395,33 @@ function hookCard(h, idx, hooks, conditions, redraw, creds) {
   // rule looks fine at the UniFi end and silently delivers nothing.
   var reg = el("input");
   reg.type = "checkbox";
-  reg.style.width = "auto";
   reg.checked = !!h.regenerate;
   reg.addEventListener("change", function () { h.regenerate = reg.checked; redraw(); });
-  var rr = el("div", "row");
-  rr.appendChild(labelled("Replace its URL and header on save", reg));
-  c.appendChild(rr);
+  c.appendChild(labelled("Replace its URL and header on save", reg,
+    { text: "The Alarm Manager rule pointing at the old URL stops working until " +
+            "you re-paste the new URL and header from this card.", tone: "warn" }));
   if (h.regenerate) {
-    c.appendChild(el("div", "delivery-error",
+    c.appendChild(callout(
       "This breaks the Alarm Manager rule pointing at the old URL. The console " +
       "will keep posting and this end will keep refusing, which looks like " +
       "nothing happening rather than like an error. Re-paste the new URL and " +
-      "header from this card afterwards."));
+      "header from this card afterwards.", "err", "On save"));
   }
 
   var bar = el("div", "formbar");
   var rm = el("button", "act", "Remove");
+  rm.type = "button";
   rm.addEventListener("click", function () { hooks.splice(idx, 1); redraw(); });
   bar.appendChild(rm);
-  c.appendChild(bar);
   if (ready) {
-    c.appendChild(el("div", "note",
+    // At the button, not under the card: it is the consequence of pressing
+    // this one control.
+    bar.appendChild(why(
       "Removing this stops accepting anything at its URL. The Alarm Manager rule " +
-      "will keep posting into a refusal until you delete it in UniFi too."));
+      "will keep posting into a refusal until you delete it in UniFi too.",
+      { label: "what happens?", tone: "warn" }));
   }
+  c.appendChild(bar);
   return c;
 }
 
@@ -2033,14 +3429,34 @@ function hookCard(h, idx, hooks, conditions, redraw, creds) {
 // choice. A fixed list because these values become part of a stored dedup key:
 // a typo would make an alarm that never merges with itself and nags separately
 // for ever.
-function pick(obj, key, choices, emptyLabel) {
+// pick is a <select> over a fixed list.
+//
+// THERE WERE TWO OF THESE, declared in the same file with the same name, and
+// the later one won for every caller. They behaved differently: one always
+// offered a blank entry so a value could be cleared back to its default, the
+// other never did. The casualty was the voice channel -- VOICE_SAY_VOICES is
+// ["man","woman"] with no blank member, so once a voice was chosen there was
+// no way to return it to the default, and the "man (default)" label the caller
+// passed was never rendered at all. HOOK_SEVERITIES happens to carry its own
+// "" member, which is why that dropdown looked fine and hid the bug.
+//
+// One function now, doing both jobs:
+//   blankLabel non-null -> a blank entry is offered, labelled with it
+//   blankLabel null     -> the choice is mandatory (a hook's product must be
+//                          one of three; "no product" is not a hook)
+// and, either way, a value the server sent that this page does not know about
+// stays visible and selected, or opening the form would silently change it on
+// the next save.
+function pick(obj, key, choices, blankLabel) {
   var sel = el("select");
   var cur = obj[key] || "";
   var seen = false;
-  choices.forEach(function (s) {
+  var opts = (choices || []).slice();
+  if (blankLabel != null && opts.indexOf("") < 0) opts.unshift("");
+  opts.forEach(function (s) {
     var o = document.createElement("option");
     o.value = s;
-    o.textContent = s === "" ? (emptyLabel || "any") : s;
+    o.textContent = s === "" ? (blankLabel || "any") : s;
     if (cur === s) { o.selected = true; seen = true; }
     sel.appendChild(o);
   });
@@ -2069,134 +3485,39 @@ function renderDemoBanner(text) {
     return;
   }
   if (existing) { existing.textContent = text; return; }
-  var b = el("div", "delivery-error", text);
+  var b = el("div", "banner is-err", text);
   b.id = "demo-banner";
-  b.style.margin = "0";
-  b.style.borderRadius = "0";
-  b.style.textAlign = "center";
-  b.style.fontWeight = "600";
   document.body.insertBefore(b, document.body.firstChild);
 }
 
-// ---------- the Webhooks tab ----------
+// ---------- outbound webhooks ----------
 //
-// Both directions in one place, because they are the same idea pointing
-// opposite ways and an operator thinking about webhooks is thinking about
-// both. Inbound used to live buried in Settings under a heading nobody found,
-// and outbound was one endpoint filed as a notification channel, which is
-// where nobody looked for it either.
-//
-// IN  -- one endpoint per UniFi Alarm Manager rule. This is the only way
-//        Network alarms exist at all: the Integration API publishes no events.
 // OUT -- one or more endpoints this pushes an alert document to, each
-//        addressable by name from an escalation rung.
-
-// webhookNotice survives the re-render a save triggers.
-//
-// Setting the message and then reloading wiped it in the same tick, so a
-// successful save looked like nothing happening -- which, on a page whose job
-// is telling you whether something worked, is the worst available outcome.
-var webhookNotice = null;
-
-function refreshWebhooks() {
-  var body = byId("webhooks-body");
-  // The settings API deliberately never returns a hook's token -- it returns
-  // token_set, like every other credential -- so the URL an Alarm Manager rule
-  // needs is not in it. The checklist is the one endpoint that renders those,
-  // and only to a signed-in caller. Fetching both here means the URL is on the
-  // screen where the hook was CREATED, rather than on another tab the operator
-  // has to be told about.
-  Promise.all([api("GET", "api/settings"), api("GET", "/api/checklist")])
-    .then(function (both) {
-    var res = both[0], list = both[1];
-    if (res.status === 401) { renderSignIn(body); return; }
-    if (!res.ok) {
-      clear(body);
-      body.appendChild(el("div", "card err", res.data.error || "could not load webhooks"));
-      return;
-    }
-    var creds = {};
-    if (list && list.ok && list.data && list.data.hooks) {
-      list.data.hooks.forEach(function (h) { creds[h.name] = h; });
-    }
-    renderWebhooksTab(body, res.data, creds);
-    if (webhookNotice) {
-      var n = el("div", webhookNotice.cls, webhookNotice.text);
-      body.appendChild(n);
-      webhookNotice = null;
-    }
-  });
-}
-
-function renderWebhooksTab(body, s, creds) {
-  clear(body);
-  var draft = JSON.parse(JSON.stringify(s));
-
-  body.appendChild(el("h3", null, "Incoming — UniFi pushes to us"));
-  body.appendChild(el("div", "note",
-    "WAN outages, threat detections, PoE faults and Protect's own hardware " +
-    "alarms are not readable by any API. They exist ONLY as Alarm Manager " +
-    "rules that push to a URL, and no API can create those rules -- so these " +
-    "endpoints are the only way those alarms reach this product at all."));
-  renderHooks(body, draft, s.hook_conditions || [], creds || {});
-
-  body.appendChild(el("h3", null, "Outgoing — we push to you"));
-  body.appendChild(el("div", "note",
-    "One JSON POST per alert, to anything you run. Each endpoint has a name, " +
-    "and an escalation rung refers to it by that name -- so a home automation " +
-    "box and an on-call service can be told about different severities."));
-  renderOutboundWebhooks(body, draft);
-
-  var msg = el("div", "msg");
-  var save = el("button", "act primary", "Save webhooks");
-  save.addEventListener("click", function () {
-    msg.className = "msg"; msg.textContent = "";
-    save.disabled = true;
-    // Only the two sections this tab owns are posted. Everything absent is
-    // left alone by the server, which is what makes a tab that edits part of
-    // the configuration safe to have at all.
-    api("POST", "api/settings", {
-      hooks: draft.hooks || [],
-      channels: { webhooks: (draft.channels && draft.channels.webhooks) || [] }
-    }).then(function (res) {
-      save.disabled = false;
-      if (!res.ok) {
-        msg.className = "msg err";
-        msg.textContent = (res.data && res.data.error) || "that was refused";
-        return;
-      }
-      webhookNotice = {
-        cls: "msg",
-        text: "Saved. Channel changes take effect when the service restarts.",
-      };
-      refreshWebhooks();
-    });
-  });
-  var bar = el("div", "formbar");
-  bar.appendChild(save);
-  body.appendChild(bar);
-  body.appendChild(msg);
-}
+// addressable by name from an escalation rung. Rendered under Webhooks in
+// Settings beside the inbound hooks, because they are the same idea
+// pointing opposite ways and an operator thinking about one is thinking
+// about both.
 
 function renderOutboundWebhooks(body, draft) {
   var chans = draft.channels || (draft.channels = {});
   var list = chans.webhooks || (chans.webhooks = []);
   var card = el("div", "card");
-  var panel = el("div");
+  var panel = el("div", "stack");
   card.appendChild(panel);
 
   var draw = function () {
     clear(panel);
     if (!list.length) {
-      panel.appendChild(el("div", "empty",
-        "Nothing is pushed out. Incidents are still tracked and still " +
-        "delivered through whatever channels you have enabled."));
+      panel.appendChild(emptyState("Nothing is pushed out",
+        "Incidents are still tracked and still delivered through whatever " +
+        "channels you have enabled.", null, { icon: "plug", compact: true }));
     }
     list.forEach(function (h, idx) {
       panel.appendChild(outboundCard(h, idx, list, draw));
     });
     var bar = el("div", "formbar");
     var add = el("button", "act primary", "Add an endpoint");
+    add.type = "button";
     add.addEventListener("click", function () {
       list.push({ name: "", enabled: true, url: "", headers: {} });
       draw();
@@ -2210,20 +3531,27 @@ function renderOutboundWebhooks(body, draft) {
 
 function outboundCard(h, idx, list, redraw) {
   var c = el("div", "card");
+  var head = el("div", "row");
+  head.appendChild(el("strong", "grow", (h.name || "").trim() || "New endpoint"));
+  head.appendChild(badge(h.enabled ? "enabled" : "disabled", h.enabled ? "on" : "off"));
+  c.appendChild(head);
+
   var f = el("div", "fields");
-  f.appendChild(labelled("Name (an escalation rung refers to this)", bind(h, "name")));
-  if (h.secret_set) {
-    f.appendChild(el("div", "note",
-      "Renaming this endpoint drops its signing secret, because the secret is " +
+  // The rename warning belongs at the name field, as a disclosure, for the
+  // same reason as the inbound one: it is the control the mistake is made at.
+  f.appendChild(labelled("Name (an escalation rung refers to this)", bind(h, "name"),
+    h.secret_set ? { text: "Renaming this endpoint drops its signing secret, because the secret is " +
       "carried across by name. A receiver that checks signatures would start " +
-      "rejecting real alarms. Set it again below if you rename it."));
-  }
+      "rejecting real alarms. Set it again below if you rename it.",
+      label: "before renaming", tone: "warn" } : null));
   f.appendChild(labelled("URL", bind(h, "url")));
   c.appendChild(f);
 
   var r = el("div", "row");
   r.appendChild(labelled("Enabled", check(h, "enabled")));
-  r.appendChild(labelled("Skip certificate check", check(h, "insecure_skip_verify")));
+  r.appendChild(labelled("Skip certificate check", check(h, "insecure_skip_verify"),
+    "Accepts any certificate the receiver presents. Only for a receiver on " +
+    "your own network with a self-signed certificate."));
   c.appendChild(r);
 
   secretRow(c, h.secret_set, "signing secret", h, "secret_new");
@@ -2234,7 +3562,13 @@ function outboundCard(h, idx, list, redraw) {
     "often a credential, because most receivers put a token in it."));
 
   // Static headers, for receivers that want an API key or a routing hint.
-  c.appendChild(el("div", "label", "Extra headers"));
+  var hlab = el("div", "label", "Extra headers");
+  hlab.appendChild(why(
+    "For receivers that want an API key or a routing hint. The signature and " +
+    "timestamp headers cannot be overridden here -- setting them by hand " +
+    "breaks every receiver's verification, in the direction where the " +
+    "receiver rejects real alarms.", "which headers?"));
+  c.appendChild(hlab);
   var hdrs = h.headers || (h.headers = {});
   var hp = el("div");
   var drawHeaders = function () {
@@ -2250,14 +3584,18 @@ function outboundCard(h, idx, list, redraw) {
         drawHeaders();
       });
       vv.addEventListener("input", function () { hdrs[k] = vv.value; });
-      row.appendChild(labelled("Header", kv));
-      row.appendChild(labelled("Value", vv));
-      var rm = el("button", "act", "Remove");
+      var kc = labelled("Header", kv); kc.className = "grow";
+      var vc = labelled("Value", vv); vc.className = "grow";
+      row.appendChild(kc);
+      row.appendChild(vc);
+      var rm = el("button", "act small", "Remove");
+      rm.type = "button";
       rm.addEventListener("click", function () { delete hdrs[k]; drawHeaders(); });
       row.appendChild(rm);
       hp.appendChild(row);
     });
-    var addH = el("button", "act", "Add a header");
+    var addH = el("button", "act small", "Add a header");
+    addH.type = "button";
     addH.addEventListener("click", function () {
       var n = 1;
       while (hdrs["header-" + n] !== undefined) n++;
@@ -2269,15 +3607,12 @@ function outboundCard(h, idx, list, redraw) {
   };
   drawHeaders();
   c.appendChild(hp);
-  c.appendChild(el("div", "note",
-    "The signature and timestamp headers cannot be overridden here -- setting " +
-    "them by hand breaks every receiver's verification, in the direction " +
-    "where the receiver rejects real alarms."));
 
   if (h.name) testRow(c, h.name);
 
   var bar = el("div", "formbar");
   var rm = el("button", "act", "Remove this endpoint");
+  rm.type = "button";
   rm.addEventListener("click", function () { list.splice(idx, 1); redraw(); });
   bar.appendChild(rm);
   c.appendChild(bar);

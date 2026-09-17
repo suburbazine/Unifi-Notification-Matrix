@@ -12,6 +12,7 @@ import (
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
 )
 
 // maxBody bounds a request body. Nothing this API accepts is large, and an
@@ -216,7 +217,32 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"min_password_length": MinPasswordLength,
 		"incidents":           counts,
 		"health":              s.healthView(s.deps.Health()),
+		"setup":               s.setupSummary(),
 	})
+}
+
+// setupSummary is the two numbers the page needs on EVERY poll, not only
+// when the Setup tab is open: whether this installation can deliver at all,
+// and how many steps are still to do.
+//
+// The header used to say "all clear", in green, on an installation watching
+// nothing -- because the status endpoint knew about incidents and nothing
+// about setup, and no incidents is what "nothing configured" looks like.
+// Carrying readiness here lets the header say "not set up", the Setup tab
+// carry its count, and a fresh install land on Setup instead of an empty
+// board -- all from one source, so they cannot disagree.
+func (s *Server) setupSummary() map[string]any {
+	if s.deps.Checklist == nil {
+		return map[string]any{"available": false, "ready": true, "todo": 0}
+	}
+	in := s.deps.Checklist()
+	todo := 0
+	for _, st := range setup.Steps(in) {
+		if st.Status == setup.Todo {
+			todo++
+		}
+	}
+	return map[string]any{"available": true, "ready": setup.Ready(in), "todo": todo}
 }
 
 // handleIncidents lists the board. Public: the whole reason for the public

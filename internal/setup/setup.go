@@ -50,6 +50,14 @@ const (
 
 // Step is one thing to do, with the reason and the exact actions.
 type Step struct {
+	// Key names the step stably: "console", "sources", "channel", "ack",
+	// "hooks", "password", "service". The interface used to find the hooks
+	// step by matching its title text, which meant a rewording of the title
+	// silently moved the hook credentials to the wrong place. A renderer that
+	// needs to know WHICH step it has -- to put the credentials under it, or
+	// to offer a button to the screen that finishes it -- reads this.
+	Key string
+
 	// Title is the short name of the step.
 	Title string
 
@@ -66,7 +74,75 @@ type Step struct {
 	// How are the exact actions, in order. Written for somebody who has not
 	// used UniFi's interface before: named menus, named buttons, and the
 	// literal text to paste.
+	//
+	// A line that leads with a word in CAPITALS is a warning, not an action
+	// -- see KindOf. That convention predates the interface: the CLI prints
+	// these as plain text and capitals were the only emphasis it had, so the
+	// warnings in this file were always written that way. Making it a rule
+	// means the web page can give those lines a bordered callout without
+	// this package keeping a second, parallel list of which lines matter.
 	How []string
+
+	// Reference is the material behind How: the reasoning, the alternatives,
+	// the discussion an operator reads once and never again. It was in How.
+	// The acknowledgement step's How ran to twelve items because seven of
+	// them were the off-site discussion -- VPN versus port forward, why a
+	// forward cannot be scoped by path, why TLS -- and an operator on a LAN
+	// with no off-site need had to read past all of it to find "set two
+	// fields and open the page on your phone". The CLI still prints every
+	// topic in full, under its title; the interface folds each behind it.
+	Reference []Topic
+}
+
+// Topic is one titled block of reference material under a step.
+type Topic struct {
+	Title string
+	Lines []string
+}
+
+// LineKind is what a line of How is for: something to do, or something to
+// know before doing it.
+type LineKind string
+
+const (
+	// Action is an instruction: a numbered thing to do.
+	Action LineKind = "action"
+
+	// Warning is a line that exists to stop a specific mistake, and is drawn
+	// with a border so it is not the same weight as the step beside it.
+	Warning LineKind = "warning"
+
+	// Aside is an option or a fact, with the same border in a calmer tone:
+	// "BEST: a VPN" is a recommendation, not a hazard.
+	Aside LineKind = "aside"
+)
+
+// KindOf classifies one line of How by the convention this file has always
+// used: a line whose first word is two or more capital letters is a
+// callout. "IF YOU MUST FORWARD A PORT", "ADD THE HEADER TOO", "TWO settings
+// have to agree" are warnings; a leading word ending in a colon -- "BEST: a
+// VPN" -- introduces an option and is an aside. Everything else is an action.
+//
+// The first word only, so that a sentence starting "A guessable topic" or
+// naming an acronym mid-line is not promoted. A line that must be a callout
+// is written to lead with its capitals, which the CLI renders as emphasis
+// anyway.
+func KindOf(line string) LineKind {
+	word, _, _ := strings.Cut(strings.TrimSpace(line), " ")
+	colon := strings.HasSuffix(word, ":")
+	word = strings.TrimRight(word, ":,.")
+	if len(word) < 2 {
+		return Action
+	}
+	for _, r := range word {
+		if r < 'A' || r > 'Z' {
+			return Action
+		}
+	}
+	if colon {
+		return Aside
+	}
+	return Warning
 }
 
 // Input is everything the assessment needs to know.
@@ -199,6 +275,7 @@ func Ready(in Input) bool {
 
 func consoleStep(in Input) Step {
 	s := Step{
+		Key:   "console",
 		Title: "Add your UniFi console",
 		Why: "Without a console there is nothing to watch, and this product " +
 			"will run happily forever without ever raising anything.",
@@ -208,9 +285,10 @@ func consoleStep(in Input) Step {
 			"Create an API key for each application you want watched. Protect, " +
 				"Access and Network each issue their OWN key -- one key does not " +
 				"cover the others.",
-			"Copy the key immediately. The console shows it once and never again.",
-			"Open " + in.ConfigPath + " and add a console entry with its address " +
-				"and key, or add it in the interface at http://" + listenOr(in.Listen) + "/.",
+			"COPY THE KEY IMMEDIATELY. The console shows it once and never again.",
+			"Add a console entry with its address and key: under Settings in the " +
+				"interface at http://" + listenOr(in.Listen) + "/, or in " +
+				in.ConfigPath + ".",
 		},
 	}
 	switch {
@@ -226,6 +304,7 @@ func consoleStep(in Input) Step {
 
 func sourcesStep(in Input) Step {
 	s := Step{
+		Key:   "sources",
 		Title: "Choose what to watch",
 		Why: "A console with no sources enabled is polled for nothing. This is " +
 			"the setting people most often leave empty, because the console " +
@@ -259,6 +338,7 @@ func sourcesStep(in Input) Step {
 
 func channelStep(in Input) Step {
 	s := Step{
+		Key:   "channel",
 		Title: "Set up a way to be told",
 		Why: "With no channel enabled, incidents are still tracked but nobody is " +
 			"ever told about them -- which is the one failure this product exists " +
@@ -266,8 +346,8 @@ func channelStep(in Input) Step {
 		How: []string{
 			"ntfy is the quickest: install the ntfy app on your phone, subscribe " +
 				"to a topic name nobody could guess, and put that topic in the config.",
-			"A guessable topic on the public ntfy.sh server is readable by anyone " +
-				"who guesses it. Treat the topic name as a password.",
+			"TREAT THE TOPIC NAME AS A PASSWORD. A guessable topic on the public " +
+				"ntfy.sh server is readable by anyone who guesses it.",
 			"pushover is the other good phone option. It needs TWO credentials and " +
 				"they are easy to swap: the application token you create at " +
 				"pushover.net/apps/build, and your own user key from the dashboard. " +
@@ -309,27 +389,33 @@ func ackStep(in Input) Step {
 	}
 
 	s := Step{
+		Key:   "ack",
 		Title: "Make the acknowledgement links work",
 		Why: "Alerts carry a link that stops the escalation. If this address is " +
 			"wrong, the link in a 3am notification opens nothing on the phone " +
 			"holding it, and the only way to stop the alert is to reach a computer " +
 			"on the same network -- which, if nobody is at the site, means nobody " +
 			"can stop it at all.",
+		// The actions are not numbered in the text. They were ("1. Set
+		// web.listen..."), and the interface put them in a numbered list, so
+		// item 2 read "1. Set web.listen" and item 3 read "2. Set
+		// web.ack_base_url": three numbering systems on one card. The
+		// renderer numbers; the text does not.
 		How: []string{
 			"TWO settings have to agree, and getting either alone is the usual " +
 				"failure: web.listen decides where this program ACCEPTS " +
 				"connections, and web.ack_base_url is the address put into the " +
 				"link. A perfect address with nothing listening for it produces a " +
 				"link that times out.",
-			"1. Set web.listen to 0.0.0.0:" + port + " -- every interface. Binding " +
+			"Set web.listen to 0.0.0.0:" + port + " -- every interface. Binding " +
 				"it to one address instead (for example " + orExample(lan, "192.168.1.50") +
 				":" + port + ") works from the network and STOPS 127.0.0.1 from " +
 				"working, so the interface looks dead from this machine while the " +
 				"process is plainly running.",
-			"2. Set web.ack_base_url to " + example + " -- this machine's own " +
+			"Set web.ack_base_url to " + example + " -- this machine's own " +
 				"address, not 127.0.0.1, because the phone holding the notification " +
 				"is not this machine.",
-			"3. Use http:// unless something else is terminating TLS. This program " +
+			"Use http:// unless something else is terminating TLS. This program " +
 				"serves plain HTTP; an https:// address pointing straight at its " +
 				"port cannot connect at all, and that is a configuration that looks " +
 				"entirely correct and answers nothing.",
@@ -339,35 +425,40 @@ func ackStep(in Input) Step {
 	}
 
 	// The off-site case, which is the one that turns a configuration question
-	// into a security question.
-	s.How = append(s.How,
-		"IF SOMEBODY MAY BE AWAY FROM THE SITE, that address has to be reachable "+
-			"from outside, and there are two ways to do it.",
-		"BEST: a VPN. WireGuard or Tailscale, on the phone. Nothing is forwarded, "+
-			"nothing is exposed, and the ack address is just the VPN address of "+
-			"this machine. Tailscale in particular needs no firewall change at all.",
-		"IF YOU MUST FORWARD A PORT, scope it. A NAT forward CANNOT restrict by "+
-			"path -- forwarding the main port publishes the status page, which "+
-			"names your cameras, doors and open alarms, and the settings sign-in, "+
-			"to the entire internet.",
-		"So set web.ack_listen to \"auto\". A second listener starts on a random "+
-			"high port that serves ONLY /ack/ -- everything else on it is a 404. "+
-			"The port is written back to the configuration on first start and then "+
-			"never changes, so the firewall rule and the links already sent stay "+
-			"valid.",
-		"Forward ONLY that port, from the internet to this machine, TCP only. Do "+
-			"not forward web.listen. Do not put this machine in a DMZ.",
-		"Put TLS in front of it. The acknowledgement token travels in the URL, so "+
-			"over plain http anyone on the path can read it and silence an alarm. "+
-			"A reverse proxy that obtains a certificate automatically (Caddy, "+
-			"nginx with certbot) is the usual answer -- and THAT is what makes an "+
-			"https:// ack address work, because the proxy speaks TLS and this "+
-			"program does not. If that is more than you want to run, use the VPN "+
-			"option instead: it is genuinely easier.",
-		"Then set web.ack_base_url to the public address, and check it from a "+
-			"phone on mobile data with Wi-Fi off. That is the only test that "+
-			"matches the situation it exists for.",
-	)
+	// into a security question. Reference rather than How: an operator whose
+	// phone never leaves the Wi-Fi does not need it, and when it was in How it
+	// made the five actions above items 1 to 5 of twelve.
+	s.Reference = []Topic{{
+		Title: "Away from the site: reaching the link from outside",
+		Lines: []string{
+			"IF SOMEBODY MAY BE AWAY FROM THE SITE, that address has to be reachable " +
+				"from outside, and there are two ways to do it.",
+			"BEST: a VPN. WireGuard or Tailscale, on the phone. Nothing is forwarded, " +
+				"nothing is exposed, and the ack address is just the VPN address of " +
+				"this machine. Tailscale in particular needs no firewall change at all.",
+			"IF YOU MUST FORWARD A PORT, scope it. A NAT forward CANNOT restrict by " +
+				"path -- forwarding the main port publishes the status page, which " +
+				"names your cameras, doors and open alarms, and the settings sign-in, " +
+				"to the entire internet.",
+			"So set web.ack_listen to \"auto\". A second listener starts on a random " +
+				"high port that serves ONLY /ack/ -- everything else on it is a 404. " +
+				"The port is written back to the configuration on first start and then " +
+				"never changes, so the firewall rule and the links already sent stay " +
+				"valid.",
+			"FORWARD ONLY THAT PORT, from the internet to this machine, TCP only. Do " +
+				"not forward web.listen. Do not put this machine in a DMZ.",
+			"Put TLS in front of it. The acknowledgement token travels in the URL, so " +
+				"over plain http anyone on the path can read it and silence an alarm. " +
+				"A reverse proxy that obtains a certificate automatically (Caddy, " +
+				"nginx with certbot) is the usual answer -- and THAT is what makes an " +
+				"https:// ack address work, because the proxy speaks TLS and this " +
+				"program does not. If that is more than you want to run, use the VPN " +
+				"option instead: it is genuinely easier.",
+			"Then set web.ack_base_url to the public address, and check it from a " +
+				"phone on mobile data with Wi-Fi off. That is the only test that " +
+				"matches the situation it exists for.",
+		},
+	}}
 
 	switch {
 	case strings.TrimSpace(in.AckBaseURL) == "":
@@ -421,8 +512,8 @@ func ackStep(in Input) Step {
 	return s
 }
 
-// hooksTitle is referenced by Render, so the URLs are printed under the right
-// step without matching on prose.
+// hooksTitle is the hooks step's title. Render and the interface find the
+// step by its Key ("hooks"), not by this text, so it can be reworded.
 const hooksTitle = "Create the UniFi Alarm Manager rules"
 
 // orExample returns the real value when there is one, and a placeholder
@@ -436,6 +527,7 @@ func orExample(real, fallback string) string {
 
 func hooksStep(in Input) Step {
 	s := Step{
+		Key:   "hooks",
 		Title: hooksTitle,
 		Why: "WAN outages, threat detections, PoE faults and Protect's own " +
 			"hardware alarms are not readable by any API. They exist ONLY as " +
@@ -479,13 +571,23 @@ func hooksStep(in Input) Step {
 			"to turn that off.",
 		"In Alarm Manager's webhook action, add a custom header with the name " +
 			"and value shown below.",
-		"Save the rule, then press Test. This screen will say the alarm arrived.",
-		"A test alarm raises a REAL incident here, on purpose: that is what proves " +
-			"the whole chain works, including the notification on your phone. " +
-			"Acknowledge it and you are done.",
-		"If nothing arrives, look at the line below each URL. \"Refused\" means " +
-			"the console IS reaching us and the header is wrong or missing -- " +
-			"which is a different problem from the rule not firing at all.",
+		"Save the rule, then press Test in UniFi. The hook's card below will " +
+			"say the alarm arrived.",
+		// One account of what Test does, not two. This line used to say a
+		// test raises a real incident, full stop, while the Webhooks tab
+		// offered a test mode whose whole point is that nothing is raised --
+		// and both were true, in different states the operator was never
+		// told about. Now the line says which state does which.
+		"PRESSING TEST RAISES A REAL INCIDENT here, on purpose: it goes through " +
+			"your rules, your ladder and your channels, so the notification " +
+			"reaches your phone and the whole chain is proven. Acknowledge it " +
+			"and you are done. To prove only that the console can reach this " +
+			"machine, without waking anybody, arm Test mode on the hook's card " +
+			"first -- arrivals are then counted and discarded, and nothing is " +
+			"raised until it lapses.",
+		"IF NOTHING ARRIVES, look at the line under each URL below. \"Refused\" " +
+			"means the console IS reaching us and the header is wrong or missing " +
+			"-- which is a different problem from the rule not firing at all.",
 	}
 	s.How = append(s.How,
 		"The URL for each hook is listed separately below. They are credentials: "+
@@ -528,6 +630,7 @@ func hooksStep(in Input) Step {
 
 func passwordStep(in Input) Step {
 	s := Step{
+		Key:   "password",
 		Title: "Set a password for the settings page",
 		Why: "Anyone on your network can read the status page. That is deliberate " +
 			"-- it makes a wall display useful -- but changing settings, " +
@@ -581,6 +684,7 @@ func passwordStep(in Input) Step {
 
 func serviceStep(in Input) Step {
 	s := Step{
+		Key:   "service",
 		Title: "Install it as a service",
 		Why: "Run from a terminal, it stops when you close the window, when you " +
 			"log out, and when the machine reboots -- and it will not be watching " +
@@ -666,7 +770,16 @@ func Render(w io.StringWriter, in Input, full bool) {
 		for _, h := range s.How {
 			_, _ = w.WriteString("         - " + wrap(h, 66, "           ") + "\n")
 		}
-		if s.Title == hooksTitle {
+		// Reference material prints in full here, under its title. A terminal
+		// has no disclosure to fold it behind, and the CLI's reader is the
+		// one doing the off-site setup on a machine with no browser.
+		for _, topic := range s.Reference {
+			_, _ = w.WriteString("\n         " + topic.Title + "\n")
+			for _, line := range topic.Lines {
+				_, _ = w.WriteString("         - " + wrap(line, 66, "           ") + "\n")
+			}
+		}
+		if s.Key == "hooks" {
 			renderHookURLs(w, in)
 		}
 		_, _ = w.WriteString("\n")

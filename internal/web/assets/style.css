@@ -1,146 +1,804 @@
-/* The operator's house style. These custom properties are theirs and are
-   matched exactly so this page reads as part of the same family. */
+/* The operator interface's visual system.
+   ============================================================================
+
+   Everything on the page is built from the tokens in :root, and every status
+   colour comes from ONE mapping (the tone classes at the bottom of the file).
+   The first version of this sheet had neither: most text was 13px grey
+   regardless of what it was, and the Setup badges were grey because the
+   classes app.js produced (ok / warn / crit) were never defined -- so the most
+   important state on the onboarding screen was invisible and the whole thing
+   read as a wall. This sheet exists so that cannot happen again: a new state
+   picks a tone, and every component that displays state already knows what
+   to do with it.
+
+   Sections, in order:
+     1. tokens          palette (theirs), derived surfaces, type, space
+     2. base            body, links, headings, prose measure
+     3. shell           header, tabs, main, section rail
+     4. surfaces        cards, callouts, banners, credentials
+     5. status          badges, dots, segments, pipeline
+     6. controls        buttons, inputs, selects, checkboxes, forms
+     7. tables
+     8. states          empty / loading / error blocks, skeletons
+     9. affordances     "why?" disclosures, accordions, icons
+    10. utilities       layout helpers
+    11. tones           the one status->colour mapping. LAST so it wins.
+    12. responsive      phone width
+   ============================================================================ */
+
+
+/* ---------- 1. tokens ------------------------------------------------------ */
+
 :root{
+  /* The operator's house style. These nine are theirs and are matched exactly
+     so this page reads as part of the same family. Nothing below adds a hue:
+     every other colour is one of these at a different alpha or one step
+     lighter, and says so. */
   --bg:#14161a; --card:#1c1f25; --line:#2c313a;
   --fg:#e6e8ec; --muted:#949bab; --accent:#4a9eff;
   --warn:#f0b429; --err:#ff6b6b; --ok:#3ddc84;
+
+  /* Derived surfaces. A card inside a card used to be the same colour as its
+     parent, so a hook nested in the hooks panel was one hairline away from
+     invisible; --card-2 is --card lifted a step toward --line for exactly that.
+     --line-strong is the hover border: --line is fine at rest but reads as
+     "nothing happened" under a pointer. --fg-2 is --fg dimmed a step for
+     long prose -- body text in --muted was most of the "wall" complaint, but
+     full --fg on every paragraph makes instructions shout over the controls. */
+  --card-2:#232730;
+  --line-strong:#3a404b;
+  --fg-2:#c9ced8;
+
+  /* Tints: the palette colours as 8-digit hex with an alpha byte (1f = 12%).
+     Used as the fill behind a badge, callout or selected row so state is a
+     shape and not only a word. Kept as literals rather than color-mix() so
+     a custom property never becomes invalid-at-computed-value on an older
+     phone browser and silently falls back to nothing. */
+  --ok-tint:#3ddc841f; --warn-tint:#f0b4291f; --err-tint:#ff6b6b1f;
+  --accent-tint:#4a9eff1f; --muted-tint:#949bab1a;
+  --ring:#4a9eff59;                       /* focus ring: accent at 35% */
+
+  /* Type. One family, one scale. The old sheet had 15, 13, 12.5, 12 and 11px
+     scattered as literals, and because almost all content landed on 13 grey
+     there was no way to tell a warning from a caption from a label. Sizes:
+       xs   eyebrow headings, badges, table headers   (uppercase, spaced)
+       sm   captions, notes, metadata
+       md   prose, controls, body copy in cards
+       base card titles, the default
+       lg   tab ledes
+       xl   panel headings
+       2xl  figures ("4 of 7")                                            */
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --fs-xs:11px; --fs-sm:12.5px; --fs-md:14px; --fs-base:15px;
+  --fs-lg:17px; --fs-xl:20px; --fs-2xl:26px;
+  --lh-tight:1.25; --lh:1.45; --lh-prose:1.6;
+  /* The measure. Instructions in a 70rem card ran to 150+ characters a line;
+     nobody can track a line that long, and that -- more than the word count
+     -- is what made the checklist a wall. Prose stops at ~64 characters;
+     controls and tables still use the full width. */
+  --measure:64ch;
+  /* ch scales with the font, so 64ch of 12.5px caption is a 400px column --
+     narrow enough that a two-sentence note under a full-width field looked
+     like a mistake. Small type gets a longer measure to land at the same
+     physical width. */
+  --measure-sm:76ch;
+
+  /* Spacing rhythm, 4px base. Use the tokens; a literal 7px is a smell. */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px;
+
+  --r-sm:4px; --r:8px; --r-lg:12px; --r-pill:999px;
+  /* A hairline highlight along the top edge is what lifts a dark card off a
+     dark page; a drop shadow alone is invisible at these luminances. */
+  --shadow:inset 0 1px 0 #ffffff08,0 1px 2px #0000004d;
+  --header-h:46px;                        /* sticky offsets key off this */
+  --ease:.14s ease;
 }
+
+
+/* ---------- 2. base -------------------------------------------------------- */
+
 *{box-sizing:border-box}
+html{color-scheme:dark}
 html,body{height:100%}
 body{
   margin:0;background:var(--bg);color:var(--fg);
-  font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,sans-serif;
+  font:var(--fs-base)/var(--lh) var(--font);
+  -webkit-text-size-adjust:100%;
 }
-a{color:var(--accent)}
+a{color:var(--accent);text-underline-offset:2px}
+a:hover{text-decoration-thickness:2px}
+p{margin:var(--sp-2) 0;max-width:var(--measure);line-height:var(--lh-prose);font-size:var(--fs-md);color:var(--fg-2)}
+p:first-child{margin-top:0}
+p:last-child{margin-bottom:0}
+strong{font-weight:600;color:var(--fg)}
+code,kbd{
+  font-family:var(--mono);font-size:.92em;color:var(--fg);
+  background:var(--muted-tint);border-radius:var(--r-sm);padding:1px 5px;
+}
+code.cond{color:var(--accent);background:var(--accent-tint)}
+hr{border:0;border-top:1px solid var(--line);margin:var(--sp-4) 0}
 
-/* Slim header: product on the left, state on the right. */
+/* Keyboard focus is drawn once, here, for everything. :focus-visible so a
+   mouse click does not leave a ring behind, but a Tab press always does --
+   a page that must work from a phone must also work from a keyboard. */
+:focus{outline:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--r-sm)}
+
+/* Section eyebrow. Small, spaced, uppercase and muted so it labels the group
+   without competing with the cards in it. */
+h3{
+  margin:var(--sp-5) 0 var(--sp-2);font-size:var(--fs-xs);font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
+}
+h3:first-child,.lede+h3,.lede-mount:empty+h3{margin-top:var(--sp-1)}
+/* Panel heading, for a settings section or a Help page. */
+h2{margin:0 0 var(--sp-3);font-size:var(--fs-xl);font-weight:600;letter-spacing:-.01em;line-height:var(--lh-tight)}
+h4{margin:var(--sp-3) 0 var(--sp-1);font-size:var(--fs-base);font-weight:600}
+.section-head{display:flex;align-items:baseline;gap:var(--sp-3);margin:var(--sp-5) 0 var(--sp-2)}
+.section-head h3{margin:0}
+.section-head .spacer{flex:1}
+
+
+/* ---------- 3. shell ------------------------------------------------------- */
+
 header.bar{
-  display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:9px 16px;background:var(--card);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3);
+  min-height:var(--header-h);padding:0 var(--sp-4);
+  background:var(--card);border-bottom:1px solid var(--line);
   position:sticky;top:0;z-index:5;
 }
-header.bar .brand{font-weight:600;letter-spacing:.01em}
-header.bar .brand .ver{color:var(--muted);font-weight:400;font-size:12px;margin-left:6px}
-header.bar .right{display:flex;align-items:center;gap:10px;font-size:13px}
+header.bar .brand{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:.01em;min-width:0}
+header.bar .brand .mark{width:20px;height:20px;color:var(--accent);flex:none}
+header.bar .brand .ver{color:var(--muted);font-weight:400;font-size:var(--fs-sm);margin-left:2px}
+header.bar .right{display:flex;align-items:center;gap:10px;font-size:var(--fs-sm)}
+/* The headline badge is a link to the board. It says "2 ALERTING" and used to
+   be inert -- the one figure on the page somebody wants to act on. */
+a#headline{text-decoration:none}
+a#headline:hover{filter:brightness(1.15)}
 
-nav.tabs{display:flex;gap:4px;padding:10px 16px 0;flex-wrap:wrap}
+/* Tabs. An underline indicator rather than a filled pill: the pill read as a
+   button, and the row of them as a toolbar. */
+nav.tabs{
+  display:flex;gap:2px;padding:0 var(--sp-4);flex-wrap:wrap;
+  border-bottom:1px solid var(--line);background:var(--bg);
+}
 nav.tabs button{
-  font:inherit;font-size:13px;color:var(--muted);background:transparent;
-  border:1px solid transparent;border-radius:6px;padding:5px 10px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;
+  font:inherit;font-size:var(--fs-md);font-weight:500;color:var(--muted);
+  background:transparent;border:0;border-bottom:2px solid transparent;
+  margin-bottom:-1px;padding:10px 12px;cursor:pointer;
+  transition:color var(--ease);
 }
 nav.tabs button:hover{color:var(--fg)}
-nav.tabs button[aria-selected="true"]{
-  color:var(--fg);background:var(--card);border-color:var(--line);
+nav.tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent)}
+nav.tabs button:focus-visible{outline-offset:-2px}
+/* A count on a tab ("Setup 3"): a small tone-coloured pill. Set from JS via
+   setTabCount(); the tone says whether the number is good news. */
+nav.tabs .count{
+  --tone:var(--muted);--tint:var(--muted-tint);
+  font-size:var(--fs-xs);font-weight:600;line-height:1;padding:3px 6px;
+  border-radius:var(--r-pill);color:var(--tone);background:var(--tint);
+  font-variant-numeric:tabular-nums;
 }
 
-main{padding:12px 16px 40px;max-width:70rem;margin:0 auto}
+main{padding:var(--sp-3) var(--sp-4) 48px;max-width:70rem;margin:0 auto}
 section[hidden]{display:none}
 
-h3{
-  margin:18px 0 8px;font-size:11px;font-weight:600;letter-spacing:.09em;
-  text-transform:uppercase;color:var(--muted);
+/* The tab lede: one line that says which question this tab answers, with a
+   glyph and a live figure. Every tab has an empty mount for it in index.html
+   (#lede-<tab>) so the renderers can fill it with setLede(). */
+.lede{display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-1) 0 var(--sp-4)}
+.lede>.icon{width:30px;height:30px;color:var(--accent);flex:none}
+.lede.is-ok>.icon,.lede.is-warn>.icon,.lede.is-err>.icon,.lede.is-muted>.icon{color:var(--tone)}
+.lede-q{font-size:var(--fs-lg);font-weight:600;letter-spacing:-.01em;line-height:var(--lh-tight)}
+.lede-fig{color:var(--muted);font-size:var(--fs-md);margin-top:2px;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center}
+
+/* A settings-style page with a section rail: sticky list of anchors on the
+   left at desktop width, a horizontal chip strip at phone width (see 12).
+   The rail marks the section in view with aria-current="true". */
+.railed{display:grid;grid-template-columns:11rem minmax(0,1fr);gap:var(--sp-5);align-items:start}
+.rail{position:sticky;top:calc(var(--header-h) + var(--sp-3));display:flex;flex-direction:column;gap:2px}
+.rail a{
+  display:block;padding:6px 10px;border-radius:var(--r);border-left:2px solid transparent;
+  color:var(--muted);text-decoration:none;font-size:var(--fs-md);
+  transition:color var(--ease),background var(--ease);
 }
-h3:first-child{margin-top:4px}
+.rail a:hover{color:var(--fg);background:var(--muted-tint)}
+.rail a[aria-current="true"]{color:var(--fg);border-left-color:var(--accent);background:var(--accent-tint)}
+/* Anchor targets land under the sticky header unless told otherwise. */
+[id]{scroll-margin-top:calc(var(--header-h) + var(--sp-3))}
+
+
+/* ---------- 4. surfaces ---------------------------------------------------- */
 
 .card{
-  background:var(--card);border:1px solid var(--line);border-radius:8px;
-  padding:12px 14px;margin:0 0 10px;
+  --tone:var(--line);
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+  padding:var(--sp-3) var(--sp-4);margin:0 0 var(--sp-3);box-shadow:var(--shadow);
 }
-.card.acked{border-left:3px solid var(--warn)}
-.card.crit{border-left:3px solid var(--err)}
+.card .card{background:var(--card-2);box-shadow:none}
+/* A left rule carries the card's state. .acked and .crit are the incident
+   board's original names and stay; the is-* forms are the general ones. */
+.card.acked{--tone:var(--warn)}
+.card.crit,.card.err{--tone:var(--err)}
+.card.is-ok,.card.is-warn,.card.is-err,.card.is-info,.card.acked,.card.crit,.card.err{
+  border-left:3px solid var(--tone);
+}
+.card.err{background:var(--err-tint);color:var(--err)}
+/* A closed incident is history: still legible, clearly not live. */
 .card.done{opacity:.62}
-.row{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
-.grow{flex:1 1 auto;min-width:0}
-.title{font-weight:600}
-.muted{color:var(--muted)}
-.small{font-size:12.5px}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
-.detail{
-  white-space:pre-wrap;margin-top:6px;color:var(--muted);font-size:13px;
-}
-.err{color:var(--err)}
-.ok{color:var(--ok)}
-.warn{color:var(--warn)}
+.card.done:hover{opacity:.85}
+.card>.title,.card>.row>.title{font-size:var(--fs-base)}
+.card-title{display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-lg);font-weight:600;margin:0 0 var(--sp-2)}
+.card-title>.icon{color:var(--muted)}
 
-/* The delivery error is the thing an operator must not miss. */
+/* Callout: a warning or a fact that belongs to the control it sits beside.
+   The rule for this UI is that copy may leave the primary screen only if it
+   stays reachable AT the thing it explains; a callout is how a warning
+   survives inside an instruction list without being the same weight as the
+   instructions. The left rule and tint carry the tone; the glyph repeats it
+   for anybody who does not see colour. */
+.callout{
+  --tone:var(--accent);--tint:var(--accent-tint);
+  display:flex;gap:10px;align-items:flex-start;
+  margin:var(--sp-2) 0;padding:9px 12px;
+  border:1px solid var(--tone);border-left-width:3px;border-radius:var(--r);
+  background:var(--tint);color:var(--fg);
+  font-size:var(--fs-md);line-height:var(--lh);
+  overflow-wrap:anywhere;
+}
+.callout>.icon{flex:none;width:18px;height:18px;color:var(--tone);margin-top:2px}
+.callout .callout-title{display:block;font-weight:600;margin-bottom:2px}
+.callout .callout-body{color:var(--fg-2);white-space:pre-line}
+.callout p{max-width:none}
+/* The delivery error is the thing an operator must not miss; it has always
+   been the loudest element on the board, and now it is a red callout. */
 .delivery-error{
-  margin-top:8px;padding:7px 9px;border:1px solid var(--err);border-radius:6px;
-  color:var(--err);font-size:13px;word-break:break-word;
+  --tone:var(--err);--tint:var(--err-tint);
+  margin-top:var(--sp-2);padding:8px 12px;
+  border:1px solid var(--tone);border-left-width:3px;border-radius:var(--r);
+  background:var(--tint);color:var(--tone);
+  font-size:var(--fs-md);font-weight:500;word-break:break-word;
+}
+/* A full-width strip above the header: the demo warning. Edge to edge and
+   centred, because it is about the whole page and not a card on it. */
+.banner{
+  --tone:var(--accent);--tint:var(--accent-tint);
+  padding:8px var(--sp-4);text-align:center;font-weight:600;font-size:var(--fs-md);
+  color:var(--tone);background:var(--tint);border-bottom:1px solid var(--tone);
 }
 
+/* A credential meant to be selected and pasted, not read. Wrapped rather
+   than scrolled: a hook URL that runs off the edge of the box gets
+   half-copied, and half a token fails in a way that looks like the rule is
+   wrong at the UniFi end. */
+.cred{
+  font-family:var(--mono);font-size:var(--fs-sm);line-height:1.5;
+  background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:8px 10px;margin:var(--sp-1) 0 var(--sp-2);
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-all;
+  user-select:all;
+}
+.cred-row{display:flex;gap:var(--sp-2);align-items:flex-start}
+.cred-row .cred{flex:1 1 auto;margin:var(--sp-1) 0 var(--sp-2)}
+.cred-row .act{margin-top:var(--sp-1);flex:none}
+
+
+/* ---------- 5. status ------------------------------------------------------ */
+
+/* Badge: a state as a pill. It declares its OWN default tone so a card's
+   tone never leaks into it through inheritance -- a red incident card must
+   not turn its "ntfy" channel badge red. The legacy class names app.js has
+   always produced (ok / warn / crit / on / off / done / todo / sev-* / st-*)
+   are mapped here, alongside the general is-* forms. This is the fix for the
+   grey Setup pills: the mapping is now one table, not a scatter. */
 .badge{
-  display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;
-  letter-spacing:.06em;text-transform:uppercase;border:1px solid var(--line);
-  color:var(--muted);white-space:nowrap;
+  --tone:var(--muted);--tint:transparent;
+  display:inline-flex;align-items:center;gap:5px;vertical-align:middle;
+  padding:2px 8px;border-radius:var(--r-pill);
+  font:600 var(--fs-xs)/1.5 var(--font);letter-spacing:.06em;text-transform:uppercase;
+  border:1px solid var(--tone);color:var(--tone);background:var(--tint);
+  white-space:nowrap;font-variant-numeric:tabular-nums;
 }
-.badge.sev-critical{color:var(--err);border-color:var(--err)}
-.badge.sev-high{color:var(--warn);border-color:var(--warn)}
-.badge.sev-medium{color:var(--accent);border-color:var(--accent)}
-.badge.sev-low,.badge.sev-info{color:var(--muted)}
-.badge.st-open,.badge.st-alerting{color:var(--err);border-color:var(--err)}
-.badge.st-acknowledged{color:var(--warn);border-color:var(--warn)}
-.badge.st-resolved{color:var(--accent);border-color:var(--accent)}
-.badge.st-closed{color:var(--muted)}
-.badge.on{color:var(--ok);border-color:var(--ok)}
-.badge.off{color:var(--err);border-color:var(--err)}
+.badge>.icon{width:12px;height:12px;margin-left:-2px}
+.badge.ok,.badge.on,.badge.done,.badge.is-ok{--tone:var(--ok);--tint:var(--ok-tint)}
+.badge.warn,.badge.unverified,.badge.sev-high,.badge.st-acknowledged,.badge.is-warn{--tone:var(--warn);--tint:var(--warn-tint)}
+.badge.crit,.badge.err,.badge.off,.badge.todo,.badge.sev-critical,.badge.st-open,.badge.st-alerting,.badge.is-err{--tone:var(--err);--tint:var(--err-tint)}
+.badge.info,.badge.sev-medium,.badge.st-resolved,.badge.is-info{--tone:var(--accent);--tint:var(--accent-tint)}
+.badge.sev-low,.badge.sev-info,.badge.st-closed,.badge.optional,.badge.is-muted{--tone:var(--muted);--tint:transparent}
+/* Solid: filled with the tone, for the one badge that must be seen from
+   across a room (the header's ALERTING). */
+.badge.solid{background:var(--tone);color:var(--bg);border-color:var(--tone)}
+.badge.solid.is-muted,.badge.solid.sev-low{color:var(--fg);background:var(--line)}
 
-table{border-collapse:collapse;width:100%;font-size:13px}
-th,td{text-align:left;padding:5px 10px 5px 0;vertical-align:top}
+/* A dot: state with no word, for a row that already says what it is. */
+.dot{
+  --tone:var(--muted);--tint:var(--muted-tint);
+  display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:var(--tone);vertical-align:middle;flex:none;
+  box-shadow:0 0 0 3px var(--tint);
+}
+
+/* Segments: "4 of 7 done" as a bar, one segment per step, each in its
+   step's tone. Six pixels tall, because it is a summary and not a control. */
+.segments{display:flex;gap:3px;height:6px;margin:var(--sp-2) 0}
+.seg{--tone:var(--line);flex:1 1 0;background:var(--tone);border-radius:2px;min-width:6px}
+
+/* The pipeline: UniFi console -> this machine -> channels -> your phone.
+   Four nodes, each in the tone of the setup step that proves it. Stacks
+   vertically at phone width (see 12); the arrows rotate with it. */
+.pipeline{display:flex;align-items:stretch;margin:var(--sp-2) 0 var(--sp-4)}
+.pipeline .node{
+  --tone:var(--muted);--tint:var(--muted-tint);
+  flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:3px;
+  padding:10px 8px;text-align:center;
+  border:1px solid var(--tone);border-radius:var(--r);background:var(--tint);
+}
+.pipeline .node>.icon{width:22px;height:22px;color:var(--tone);margin-bottom:2px}
+.pipeline .node-title{font-size:var(--fs-md);font-weight:600;color:var(--fg);line-height:var(--lh-tight)}
+.pipeline .node-sub{font-size:var(--fs-sm);color:var(--muted);line-height:var(--lh-tight)}
+.pipeline .link{flex:0 0 26px;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.pipeline .link>.icon{width:16px;height:16px}
+
+/* Figures and KPI tiles: a number big enough to be the point. */
+.figure{font-size:var(--fs-2xl);font-weight:700;letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:var(--sp-2);margin:0 0 var(--sp-3)}
+.kpi{--tone:var(--fg);padding:10px 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--card)}
+.kpi .figure{color:var(--tone)}
+.kpi-label{font-size:var(--fs-xs);font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:4px}
+
+
+/* ---------- 6. controls ---------------------------------------------------- */
+
+/* Buttons. Three weights and no more: primary (filled) for the one action a
+   card is for, secondary (outlined) for the rest, ghost for a link-like
+   "Go ->". Primary used to be an outlined blue that was hard to tell from a
+   secondary under a pointer. Text on the filled accent is --bg rather than
+   white: white on #4a9eff is 3.3:1, --bg on it is 8:1. */
+.act{
+  --btn-bg:transparent;--btn-fg:var(--fg);--btn-line:var(--line);
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  font:500 var(--fs-md)/1.3 var(--font);color:var(--btn-fg);
+  background:var(--btn-bg);border:1px solid var(--btn-line);border-radius:var(--r);
+  padding:6px 12px;cursor:pointer;white-space:nowrap;text-decoration:none;
+  transition:background var(--ease),border-color var(--ease),color var(--ease);
+}
+.act>.icon{width:16px;height:16px;margin:0 -2px}
+.act:hover{--btn-line:var(--line-strong);--btn-bg:var(--muted-tint)}
+.act:active{transform:translateY(1px)}
+.act.primary{--btn-bg:var(--accent);--btn-fg:var(--bg);--btn-line:var(--accent);font-weight:600}
+.act.primary:hover{--btn-bg:var(--accent);--btn-line:var(--accent);filter:brightness(1.1)}
+.act.danger{--btn-fg:var(--err);--btn-line:var(--err)}
+.act.danger:hover{--btn-bg:var(--err-tint);--btn-line:var(--err)}
+.act.ghost{--btn-line:transparent;--btn-fg:var(--accent)}
+.act.ghost:hover{--btn-bg:var(--accent-tint);--btn-line:transparent}
+.act.small{font-size:var(--fs-sm);padding:3px 9px;border-radius:6px}
+.act.small>.icon{width:14px;height:14px}
+.act[disabled],.act[aria-disabled="true"]{opacity:.45;cursor:not-allowed;transform:none;filter:none}
+
+/* Inputs. Sunken (page background inside a card) so a field reads as a
+   place to type. Hover lifts the border; focus draws a ring in the accent;
+   invalid draws it in red -- :user-invalid so the ring appears after the
+   operator has been in the field, not the moment the form renders. */
+label{display:block;font-size:var(--fs-sm);font-weight:500;color:var(--muted);margin:10px 0 4px;line-height:var(--lh)}
+label .key{font-family:var(--mono);font-weight:400;color:var(--muted);opacity:.85;margin-left:6px;font-size:var(--fs-xs)}
+input,select,textarea{
+  font:inherit;font-size:var(--fs-md);line-height:1.35;color:var(--fg);
+  background:var(--bg);border:1px solid var(--line);border-radius:var(--r);
+  padding:7px 10px;width:100%;min-width:0;
+  transition:border-color var(--ease),box-shadow var(--ease);
+}
+input::placeholder,textarea::placeholder{color:var(--muted);opacity:.75}
+input:hover,select:hover,textarea:hover{border-color:var(--line-strong)}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--ring)}
+input:user-invalid,select:user-invalid,textarea:user-invalid,
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"],
+input.invalid,select.invalid,textarea.invalid{border-color:var(--err);box-shadow:0 0 0 3px var(--err-tint)}
+input[disabled],select[disabled],textarea[disabled]{opacity:.55;cursor:not-allowed}
+input[readonly]{color:var(--muted)}
+textarea{min-height:7rem;font-family:var(--mono);font-size:var(--fs-sm);resize:vertical}
+input[type=number]{font-variant-numeric:tabular-nums}
+/* The select's own arrow is the platform's and ignores the theme; a data:
+   URI (allowed by the CSP's img-src) draws one in --muted. */
+select{
+  appearance:none;-webkit-appearance:none;padding-right:30px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23949bab' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat:no-repeat;background-position:right 9px center;
+}
+input[type=checkbox],input[type=radio]{
+  width:16px;height:16px;margin:0;padding:0;flex:none;accent-color:var(--accent);cursor:pointer;
+}
+input[type=checkbox]:focus,input[type=radio]:focus{box-shadow:none}
+input[type=checkbox]:focus-visible,input[type=radio]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:0 var(--sp-4)}
+/* A checkbox and its label are one thing and read left to right. Stacking
+   them turned every row of toggles into a row of headings with stray boxes
+   underneath. flex-wrap so a why() disclosure appended to the row drops to
+   its own line beneath the pair rather than beside it. */
+.checkrow{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:5px var(--sp-4) 5px 0}
+.checkrow label{margin:0;white-space:nowrap;color:var(--fg);font-size:var(--fs-md);font-weight:400;cursor:pointer}
+.checkrow input[type=checkbox]{margin:0}
+.checkrow>.why{display:contents}
+.checkrow>.why>.why-body{flex:1 1 100%}
+.note{font-size:var(--fs-sm);color:var(--muted);margin-top:5px;max-width:var(--measure-sm);line-height:1.5}
+.label{
+  font-size:var(--fs-xs);font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--muted);margin:var(--sp-3) 0 var(--sp-1);
+}
+.formbar{display:flex;align-items:center;gap:var(--sp-2);margin-top:var(--sp-3);flex-wrap:wrap}
+.signin{max-width:24rem}
+.msg{font-size:var(--fs-md);margin-top:var(--sp-2);line-height:var(--lh)}
+.msg:empty{display:none}
+.msg.ok{color:var(--ok)}
+.msg.err{color:var(--err)}
+
+
+/* ---------- 7. tables ------------------------------------------------------ */
+
+table{border-collapse:collapse;width:100%;font-size:var(--fs-md)}
+th,td{text-align:left;padding:7px 12px 7px 0;vertical-align:top}
+th{
+  color:var(--muted);font-weight:600;font-size:var(--fs-xs);
+  letter-spacing:.08em;text-transform:uppercase;padding-bottom:6px;
+  border-bottom:1px solid var(--line);
+}
 /* An audit detail can be an entire URL-encoded ntfy request: hundreds of
-   characters with no space anywhere to break at. Without an explicit rule the
-   cell simply runs off the page and takes the layout with it, and the audit
-   record is the one screen whose whole job is being readable after the fact. */
+   characters with no space anywhere to break at. Without an explicit rule
+   the cell simply runs off the page and takes the layout with it, and the
+   audit record is the one screen whose whole job is being readable after
+   the fact. */
 td{overflow-wrap:anywhere;word-break:break-word}
+tbody tr+tr td{border-top:1px solid var(--line)}
+tbody tr:hover td{background:var(--muted-tint)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 /* Audit only: its first three columns are short and fixed in shape and must
    not be squeezed to nothing by a long fourth. Scoped, because the health
    tables have their own shapes and would be wrecked by this. */
 table.audit td:nth-child(-n+3),table.audit th:nth-child(-n+3){white-space:nowrap;width:1%}
-th{color:var(--muted);font-weight:500;font-size:11px;letter-spacing:.07em;text-transform:uppercase}
-tr+tr td{border-top:1px solid var(--line)}
+/* A table wider than a phone scrolls inside its card instead of pushing the
+   page sideways. wrap() in app.js puts every table in one of these. */
+.scroll-x{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 calc(-1 * var(--sp-2));padding:0 var(--sp-2)}
+/* The matrix: severities down, channels across, a checkbox at each cell. */
+table.matrix th,table.matrix td{text-align:center;padding:8px 10px;vertical-align:middle}
+table.matrix th:first-child,table.matrix td:first-child{text-align:left;padding-left:0}
+table.matrix td input[type=checkbox]{width:18px;height:18px}
+table.matrix td input:not([type=checkbox]){min-width:4.5rem;max-width:7rem;padding:4px 8px;font-size:var(--fs-sm);text-align:center}
 
-button.act{
-  font:inherit;font-size:13px;color:var(--fg);background:transparent;
-  border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer;
-}
-button.act:hover{border-color:var(--accent);color:var(--accent)}
-button.act.primary{border-color:var(--accent);color:var(--accent)}
-button.act[disabled]{opacity:.5;cursor:default}
 
-label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
-input,select,textarea{
-  font:inherit;font-size:13px;color:var(--fg);background:var(--bg);
-  border:1px solid var(--line);border-radius:6px;padding:6px 8px;width:100%;
+/* ---------- 8. states ------------------------------------------------------ */
+
+/* Empty, loading and error, drawn as a designed block rather than a stray
+   sentence in grey. A dashed border says "nothing is here" in a way a line
+   of text does not; a tone says whether that is fine ("nothing open") or a
+   problem ("no sources configured"). An empty state that is somebody's next
+   step carries a button, so "no sources" can lead to Setup instead of
+   describing it. */
+.state{
+  --tone:var(--muted);--tint:transparent;
+  display:flex;flex-direction:column;align-items:center;text-align:center;gap:4px;
+  padding:var(--sp-5) var(--sp-4);margin:0 0 var(--sp-3);
+  border:1px dashed var(--line);border-radius:var(--r);background:var(--tint);
+  color:var(--muted);
 }
-input:focus,select:focus,textarea:focus{outline:1px solid var(--accent);border-color:var(--accent)}
-textarea{min-height:7rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:0 14px}
-/* A checkbox and its label are one thing and read left to right. Stacking
-   them turned every row of toggles into a row of headings with stray boxes
-   underneath. */
-.checkrow{display:flex;align-items:center;gap:6px;margin:4px 14px 4px 0}
-.checkrow label{margin:0;white-space:nowrap}
-.checkrow input[type=checkbox]{margin:0}
-.note{font-size:12px;color:var(--muted);margin-top:4px}
-/* A credential meant to be selected and pasted, not read.
-   Wrapped rather than scrolled: a hook URL that runs off the edge of the box
-   gets half-copied, and half a token fails in a way that looks like the rule
-   is wrong at the UniFi end. */
-.cred{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  font-size:12px;background:var(--bg);border:1px solid var(--line);
-  border-radius:4px;padding:8px;margin:4px 0 8px;
-  white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-all;
-  user-select:all}
-.formbar{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
-.signin{max-width:24rem}
-.msg{font-size:13px;margin-top:8px}
-.empty{color:var(--muted);font-size:13px;padding:2px 0 10px}
+.state>.icon{width:28px;height:28px;color:var(--tone);margin-bottom:4px}
+.state-title{font-size:var(--fs-base);font-weight:600;color:var(--fg)}
+.state-text{font-size:var(--fs-md);max-width:var(--measure);line-height:var(--lh)}
+.state .formbar{justify-content:center;margin-top:var(--sp-2)}
+.state.is-ok,.state.is-warn,.state.is-err,.state.is-info{border-style:solid;border-color:var(--tone)}
+.state.compact{flex-direction:row;text-align:left;padding:10px 12px;gap:10px;align-items:flex-start}
+.state.compact>.icon{width:20px;height:20px;margin:1px 0 0}
+.state.compact .formbar{margin:0 0 0 auto;justify-content:flex-end}
+/* The legacy one-liner. Kept for the call sites that still use it, and given
+   the same dashed frame so an old empty state and a new one look related. */
+.empty{
+  color:var(--muted);font-size:var(--fs-md);padding:12px 14px;margin:0 0 var(--sp-3);
+  border:1px dashed var(--line);border-radius:var(--r);
+}
+.spinner{
+  display:inline-block;width:16px;height:16px;flex:none;vertical-align:-3px;
+  border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;
+  animation:spin .8s linear infinite;
+}
+.skeleton{
+  height:12px;margin:8px 0;border-radius:var(--r-sm);
+  background:linear-gradient(90deg,var(--card) 0%,var(--card-2) 50%,var(--card) 100%);
+  background-size:200% 100%;animation:shimmer 1.4s linear infinite;
+}
+.skeleton.w-50{width:50%}.skeleton.w-75{width:75%}.skeleton.w-25{width:25%}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){
+  .spinner{animation-duration:1.6s}
+  .skeleton{animation:none}
+  *{transition:none!important}
+}
+
+
+/* ---------- 9. affordances ------------------------------------------------- */
+
+/* Icons. Built by icon() in app.js as inline SVG on a 24 grid, one stroke
+   weight, currentColor -- so a glyph in a red callout is red without anybody
+   saying so. Sized in em so it scales with the text it sits beside. */
+.icon{
+  display:inline-block;width:1.25em;height:1.25em;flex:none;
+  vertical-align:-.28em;fill:none;stroke:currentColor;
+  stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;
+}
+.icon.sm{width:1em;height:1em;vertical-align:-.15em}
+.icon.lg{width:1.6em;height:1.6em}
+.icon.chev{transition:transform var(--ease)}
+.icon.is-ok,.icon.is-warn,.icon.is-err,.icon.is-info,.icon.is-muted{color:var(--tone)}
+
+/* "why?" -- an inline disclosure. A small button beside a label or a
+   title; pressing it reveals the explanation directly beneath, in flow.
+   Why not a native title= tooltip: it never appears on a phone, it never
+   appears on keyboard focus, it cannot be styled or wrapped, and it
+   vanishes after a few seconds. Why not a floating popover: it needs
+   positioning and viewport-edge logic, it covers the control it explains on
+   a phone, and its text is not in the document until it opens -- so the
+   snapshot harness that guards this UI's copy would not see it. An inline
+   disclosure has none of those problems: it works by tap, by click and by
+   keyboard, it pushes the page down instead of covering it, and the text is
+   always in the DOM. The trigger is a real <button>, so it is focusable and
+   announced with its expanded state. */
+.why{display:inline}
+.why-btn{
+  display:inline-flex;align-items:center;gap:3px;vertical-align:baseline;
+  font:600 var(--fs-xs)/1.4 var(--font);letter-spacing:.02em;text-transform:none;
+  color:var(--accent);background:transparent;border:0;border-radius:var(--r-sm);
+  padding:1px 5px;margin-left:4px;cursor:pointer;white-space:nowrap;
+  transition:background var(--ease),color var(--ease);
+}
+.why-btn>.icon{width:13px;height:13px;vertical-align:0}
+.why-btn:hover{background:var(--accent-tint)}
+.why-btn[aria-expanded="true"]{color:var(--fg);background:var(--muted-tint)}
+.why-body{
+  --tone:var(--accent);--tint:var(--accent-tint);
+  display:block;margin:6px 0 var(--sp-2);padding:8px 12px;max-width:var(--measure-sm);
+  border-left:2px solid var(--tone);border-radius:0 var(--r-sm) var(--r-sm) 0;
+  background:var(--tint);color:var(--fg-2);
+  font:400 var(--fs-sm)/var(--lh-prose) var(--font);letter-spacing:0;text-transform:none;
+  white-space:pre-line;overflow-wrap:anywhere;
+}
+.why-body[hidden]{display:none}
+
+/* Accordion rows, for the Setup steps: a <details> whose <summary> is one
+   line -- glyph, title, state, chevron -- and whose body is the instruction.
+   The default marker is hidden because it cannot be styled or placed. */
+details.step{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+  margin:0 0 var(--sp-2);box-shadow:var(--shadow);
+}
+details.step>summary{
+  display:flex;align-items:center;gap:10px;padding:10px var(--sp-4);
+  cursor:pointer;list-style:none;font-size:var(--fs-base);font-weight:600;
+  border-radius:var(--r);
+}
+details.step>summary::-webkit-details-marker{display:none}
+details.step>summary:hover{background:var(--muted-tint)}
+details.step>summary:focus-visible{outline-offset:-2px}
+details.step>summary>.icon.chev{margin-left:auto;color:var(--muted);width:18px;height:18px}
+details.step[open]>summary{border-bottom:1px solid var(--line);border-radius:var(--r) var(--r) 0 0}
+details.step[open]>summary>.icon.chev{transform:rotate(90deg)}
+details.step>.body{padding:var(--sp-3) var(--sp-4) var(--sp-4)}
+details.step.is-ok>summary>.icon:first-child{color:var(--ok)}
+details.step.is-err>summary>.icon:first-child{color:var(--err)}
+details.step.is-warn>summary>.icon:first-child{color:var(--warn)}
+details.step.is-muted>summary>.icon:first-child{color:var(--muted)}
+.step-state{margin-left:auto;font-weight:400;color:var(--muted);font-size:var(--fs-sm)}
+.step-state+.icon.chev{margin-left:0}
+/* The summary's parts, left to right: glyph, title, state, badges, chevron.
+   The title takes the slack so the state and badges sit at the right edge;
+   the state is one truncated line, because the acknowledgement step's state
+   can be a whole diagnosis ("...but web.listen is 127.0.0.1:8330, which
+   accepts connections only from this machine...") and a summary row that
+   wraps to four lines is no longer a summary. The full text is the first
+   line of the body. */
+details.step>summary>.step-title{flex:1 1 auto;min-width:0}
+details.step>summary>.step-state{
+  flex:0 1 auto;min-width:0;max-width:40%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+details.step>summary>.badge{flex:none}
+/* "Now: <state>" -- what is true right now, as the first line of the body.
+   A dot in the step's tone rather than a badge, because the badge is already
+   in the summary a line above. */
+.step-now{display:flex;align-items:flex-start;gap:8px;font-size:var(--fs-md);color:var(--fg);max-width:var(--measure);line-height:var(--lh)}
+.step-now>.dot{margin:7px 2px 0 0}
+.step-now-k{margin-top:3px}
+.step-now-k{font-size:var(--fs-xs);font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);flex:none}
+.step-why{color:var(--fg-2)}
+/* The instruction lines with their weight: numbered lists broken by
+   callouts. A callout between two lists is the width of the list, so the
+   column reads as one thing. */
+.how-list>ol.how{margin-top:0}
+.how-list>*+*{margin-top:var(--sp-2)}
+.how-list>.callout{max-width:var(--measure);margin:var(--sp-2) 0}
+
+/* A reference topic: a lighter accordion INSIDE a step's body, for the
+   material behind the instructions (the off-site discussion under the
+   acknowledgement step). Dashed like an empty state, because it is a door
+   and not a card; the operator who needs it opens it, the one who does not
+   reads past one line instead of seven paragraphs. */
+details.aside{
+  border:1px dashed var(--line-strong);border-radius:var(--r);
+  max-width:var(--measure);margin:var(--sp-3) 0 0;
+}
+details.aside>summary{
+  display:flex;align-items:center;gap:8px;padding:8px 12px;
+  cursor:pointer;list-style:none;font-size:var(--fs-md);font-weight:500;color:var(--fg);
+  border-radius:var(--r);
+}
+details.aside>summary::-webkit-details-marker{display:none}
+details.aside>summary:hover{background:var(--muted-tint)}
+details.aside>summary:focus-visible{outline-offset:-2px}
+details.aside>summary>.icon:first-child{color:var(--accent);flex:none}
+details.aside>summary>.icon.chev{margin-left:auto;color:var(--muted);flex:none}
+details.aside[open]>summary{border-bottom:1px dashed var(--line-strong);border-radius:var(--r) var(--r) 0 0}
+details.aside[open]>summary>.icon.chev{transform:rotate(90deg)}
+details.aside>.body{padding:var(--sp-2) 12px var(--sp-3)}
+
+/* The Setup progress header: the figure beside the ready/not-ready callout,
+   the bar beneath, the pipeline beneath that. */
+.setup-progress>.row.top{gap:var(--sp-4);align-items:center}
+.setup-progress .figure{color:var(--fg)}
+.setup-progress .callout{margin:0}
+.setup-progress .segments{margin:var(--sp-3) 0}
+/* A hook inside the credentials card: the name row, then the URL and the
+   header as credential rows. .card .card already lifts the surface. */
+.card.hook>.row>strong{font-size:var(--fs-base)}
+/* The two test panels on a hook card: one question each, its button, and
+   what pressing it proves. Nested cards on --card-2, so they read as two
+   choices and not as two more fields. */
+.test-panels{margin-top:var(--sp-2)}
+.test-panel{margin:0;padding:var(--sp-3)}
+.test-panel>.title{font-size:var(--fs-md)}
+.test-panel>.formbar{margin-top:var(--sp-2)}
+.test-panel>.note{margin-top:var(--sp-2)}
 
 /* The setup checklist. Instructions are read once, carefully, by somebody who
-   has not done this before -- so they get more line height and more room than
-   the operational surfaces beside them, which are scanned rather than read. */
-ol.how{
-  margin:8px 0 0;padding-left:20px;color:var(--muted);
-  font-size:13px;line-height:1.55;
-}
-ol.how li{margin:0 0 5px}
+   has not done this before -- so they get more line height and more room
+   than the operational surfaces beside them, which are scanned rather than
+   read. Bounded by the measure, and the marker is dimmed so the numbers do
+   not compete with the text. */
+ol.how{margin:var(--sp-2) 0 0;padding-left:22px;color:var(--fg-2);font-size:var(--fs-md);line-height:var(--lh-prose);max-width:var(--measure)}
+ol.how li{margin:0 0 6px;padding-left:2px}
+ol.how li::marker{color:var(--muted);font-weight:600;font-variant-numeric:tabular-nums}
 ol.how li:last-child{margin-bottom:0}
+ol.how .callout{margin:6px 0 2px}
+
+
+/* The Settings page: sections down the right of the rail, each with its
+   heading, its cards and its own Save. A rule between sections rather than
+   a card around each: the cards inside are the surfaces, and a card of
+   cards is the nesting the rest of this sheet avoids. */
+.sections{min-width:0}
+.settings-section{padding:0 0 var(--sp-5);margin:0 0 var(--sp-5);border-bottom:1px solid var(--line)}
+.settings-section:last-child{border-bottom:0}
+.settings-section>h2{display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-3)}
+.settings-section>h2>.icon{color:var(--muted);width:20px;height:20px}
+.settings-section .section-body>h3:first-child{margin-top:0}
+.section-foot{margin-top:var(--sp-3)}
+.section-foot .formbar{margin-top:0}
+/* "Saved. ... takes effect when the service restarts." with the button in
+   it, so the save and the restart are one motion instead of two tabs. */
+.restart-offer{margin-top:var(--sp-3)}
+.restart-offer .formbar{margin-top:var(--sp-2)}
+.restart-offer .msg{margin-top:var(--sp-1)}
+
+/* The matrix, continued: the row's severity and its state badges sit at the
+   ends, the boxes in between are centred, and a customised row is marked
+   by a left rule the same way a card is. */
+.matrix-wrap{margin-top:var(--sp-2)}
+table.matrix{min-width:34rem}
+table.matrix td:first-child{white-space:nowrap}
+table.matrix td:first-child .badge+.badge{margin-left:4px}
+table.matrix th.dur{min-width:6rem}
+table.matrix td.rowstate{text-align:right;white-space:nowrap;padding-right:0}
+table.matrix td.rowstate .act{margin-left:6px}
+table.matrix tr.customised td:first-child{box-shadow:inset 3px 0 0 var(--accent);padding-left:10px}
+table.matrix input[type=checkbox]:disabled{opacity:.3}
+
+
+/* ---------- 10. utilities -------------------------------------------------- */
+
+.row{display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap}
+.row.top{align-items:flex-start}
+.grow{flex:1 1 auto;min-width:0}
+.push-right{margin-left:auto}
+.title{font-weight:600}
+.title.lg{font-size:var(--fs-lg)}
+.muted{color:var(--muted)}
+.dim{color:var(--fg-2)}
+.small{font-size:var(--fs-sm)}
+.mono{font-family:var(--mono);font-size:var(--fs-sm)}
+.detail{white-space:pre-wrap;margin-top:6px;color:var(--fg-2);font-size:var(--fs-md);line-height:var(--lh);max-width:var(--measure)}
+.err{color:var(--err)}
+.ok{color:var(--ok)}
+.warn{color:var(--warn)}
+.stack>*+*{margin-top:var(--sp-3)}
+.cluster{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center}
+.grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(18rem,1fr));gap:var(--sp-3)}
+.measure{max-width:var(--measure)}
+.nowrap{white-space:nowrap}
+.tabular{font-variant-numeric:tabular-nums}
+.vh{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+
+/* ---------- 11. tones ------------------------------------------------------ */
+
+/* The one status->colour mapping. Anything that displays state consumes
+   --tone and --tint; these classes set them. They sit at the END of the
+   sheet so that, at equal specificity, a tone class beats a component's
+   own default (.badge sets --tone to --muted; .badge.is-err must win).
+   Meanings:
+     ok    working, done, delivered            green
+     warn  needs a look, unverified, acked     amber
+     err   failing, missing, alerting          red
+     info  neutral emphasis, in progress       accent blue
+     muted nothing to say                      grey                        */
+.is-ok{--tone:var(--ok);--tint:var(--ok-tint)}
+.is-warn{--tone:var(--warn);--tint:var(--warn-tint)}
+.is-err{--tone:var(--err);--tint:var(--err-tint)}
+.is-info{--tone:var(--accent);--tint:var(--accent-tint)}
+.is-muted{--tone:var(--muted);--tint:var(--muted-tint)}
+
+
+/* ---------- 12. responsive ------------------------------------------------- */
+
+/* Wide desktop. The measure relaxes one step (64 -> 72 characters: still a
+   readable line, no longer a column in the middle of a field), and an open
+   setup step lays its lead beside its instructions. The button stays under
+   the lead so the eye goes: what is true, why, do this, then go. */
+@media (min-width:1100px){
+  :root{--measure:72ch}
+  details.step>.body{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);grid-template-rows:auto 1fr;gap:var(--sp-3) var(--sp-6);align-items:start}
+  details.step>.body>.step-lead{grid-column:1;grid-row:1}
+  details.step>.body>.step-do{grid-column:2;grid-row:1 / span 2}
+  details.step>.body>.step-go{grid-column:1;grid-row:2;margin-top:0}
+  details.step>.body>.step-do .how-list>.callout,details.step>.body>.step-do ol.how,details.step>.body>.step-do details.aside{max-width:none}
+}
+
+@media (max-width:760px){
+  .railed{grid-template-columns:1fr;gap:var(--sp-3)}
+  .settings-section>h2{font-size:var(--fs-lg)}
+  /* The rail becomes a chip strip pinned under the header. Negative margins
+     let it run edge to edge so the last chip peeks in from the right, which
+     is the only hint a strip can be scrolled. */
+  .rail{
+    position:sticky;top:var(--header-h);z-index:4;flex-direction:row;overflow-x:auto;
+    gap:6px;margin:0 calc(-1 * var(--sp-4));padding:8px var(--sp-4);
+    background:var(--bg);border-bottom:1px solid var(--line);scrollbar-width:none;
+  }
+  .rail::-webkit-scrollbar{display:none}
+  .rail a{
+    white-space:nowrap;border:1px solid var(--line);border-left-width:1px;
+    border-radius:var(--r-pill);padding:4px 12px;font-size:var(--fs-sm);
+  }
+  .rail a[aria-current="true"]{border-color:var(--accent)}
+  .pipeline{flex-direction:column}
+  .pipeline .link{flex-basis:22px}
+  .pipeline .link>.icon{transform:rotate(90deg)}
+}
+@media (max-width:600px){
+  :root{--sp-4:12px}
+  header.bar{padding:0 var(--sp-3)}
+  header.bar .brand .ver{display:none}
+  nav.tabs{padding:0 var(--sp-1)}
+  nav.tabs button{padding:9px 9px;font-size:var(--fs-sm)}
+  main{padding:var(--sp-3) var(--sp-3) 40px}
+  .card{padding:var(--sp-3)}
+  .fields{grid-template-columns:1fr}
+  .lede-q{font-size:var(--fs-base)}
+  .state{padding:var(--sp-4) var(--sp-3)}
+  .cred-row{flex-direction:column}
+  .cred-row .act{align-self:flex-end;margin-top:0}
+  /* A phone has no room for the state on the summary row; the body's
+     "Now" line carries it. The figure stacks above the ready callout. */
+  details.step>summary>.step-state{display:none}
+  details.step>summary{padding:10px var(--sp-3)}
+  details.step>.body{padding:var(--sp-3)}
+  .setup-progress>.row.top{flex-direction:column;align-items:stretch;gap:var(--sp-3)}
+}
