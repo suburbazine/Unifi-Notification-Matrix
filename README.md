@@ -24,6 +24,10 @@
   </sub>
 </p>
 
+<p align="center">
+  <img alt="How a change becomes a release: change, verify on Linux and Windows, build three targets reproducibly, a human approval gate before anything is signed, sign with Authenticode and cosign with provenance attested, publish and rebuild from the tag byte for byte — and what breaks on somebody's site becomes the next change" src="docs/images/cycle.svg" width="100%">
+</p>
+
 > **Status: all three products ingest.** Protect, Access and Network.
 > Built and tested: the incident lifecycle, the durable store, the escalation
 > scheduler, the rule engine, acknowledgement, the secret store, configuration,
