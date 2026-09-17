@@ -413,6 +413,71 @@ function copyButton(text, label) {
 
 // ---------- incidents ----------
 
+// ENTITY_ICONS maps the entity kind the rule engine title-cases into the
+// detail ("Camera: Front Door Cam") onto a glyph.
+var ENTITY_ICONS = {
+  camera: "camera", door: "door", site: "network", service: "server",
+  sensor: "plug", light: "plug", chime: "bell", client: "network"
+};
+
+// incidentDetail splits the stored detail into prose and the facts appended
+// after it, and renders them differently.
+//
+// The rule engine builds a detail by putting the source's own description
+// first and then appending "Camera: Front Door Cam", "At: <RFC3339>" and
+// "Rule: <names>" on their own lines. That shape is right for an email and
+// wrong for a screen: the stored text is canonical and goes out in every
+// notification, so it is parsed for presentation here rather than changed at
+// the source, where it would alter what arrives on somebody's phone.
+//
+// Parsed from the END and only while lines keep matching "Word: value", so a
+// description that happens to contain a colon cannot be eaten. Anything not
+// recognised stays in the prose, which is the safe direction: the worst case
+// is that it looks exactly as it did before.
+function incidentDetail(card, detail) {
+  var lines = String(detail).split(/\r?\n/);
+  var facts = [];
+  while (lines.length > 1) {
+    var m = /^([A-Z][A-Za-z ]{0,18}): (.+)$/.exec(lines[lines.length - 1]);
+    if (!m) break;
+    facts.unshift({ key: m[1], value: m[2] });
+    lines.pop();
+    if (facts.length >= 4) break;
+  }
+
+  var prose = lines.join("\n").trim();
+  if (prose) card.appendChild(el("div", "detail", prose));
+  if (!facts.length) return;
+
+  var row = el("div", "facts");
+  facts.forEach(function (f) {
+    var k = f.key.toLowerCase();
+    var chip = el("span", "fact");
+    if (k === "at" || k === "received") {
+      // The stored form is RFC 3339 in UTC, which is correct in a
+      // notification and unreadable on a screen where every other time is
+      // local. Shown local, with the original kept on hover -- and the
+      // engine's distinction preserved, because "received" means the source
+      // supplied no time of its own and scrubbing footage to it would send
+      // somebody to a moment that means nothing.
+      chip.appendChild(icon("clock", "sm"));
+      var when = new Date(f.value);
+      chip.appendChild(el("span", "", (k === "received" ? "received " : "") +
+        (isNaN(when.getTime()) ? f.value : when.toLocaleString())));
+      chip.setAttribute("title", f.key + ": " + f.value);
+    } else if (k === "rule") {
+      chip.appendChild(icon("list", "sm"));
+      chip.appendChild(el("span", "", "rule: " + f.value));
+    } else {
+      chip.appendChild(icon(ENTITY_ICONS[k] || "info", "sm"));
+      chip.appendChild(el("span", "", f.value));
+      chip.setAttribute("title", f.key);
+    }
+    row.appendChild(chip);
+  });
+  card.appendChild(row);
+}
+
 function incidentCard(inc, showActions) {
   var cls = "card";
   // An acknowledged-but-unresolved incident is an OPEN OBLIGATION, not a
@@ -444,7 +509,7 @@ function incidentCard(inc, showActions) {
     card.appendChild(el("div", "warn small",
       "Acknowledged, but the condition has not cleared. Still open."));
   }
-  if (inc.detail) card.appendChild(el("div", "detail", inc.detail));
+  if (inc.detail) incidentDetail(card, inc.detail);
 
   // The last delivery error is why nothing is arriving. It gets the loudest
   // treatment on the page.
@@ -1798,6 +1863,43 @@ function secretRow(card, isSet, label, obj, key) {
 
 // ---------- audit ----------
 
+// AUDIT_KINDS turns the stored kind into something a person reads, with a
+// tone so a failed delivery does not look like a routine save.
+//
+// The kinds are machine identifiers -- "alert.failed", "incident.recurred" --
+// and they were rendered raw in a column of their own. They are the record's
+// vocabulary, not the operator's, and the one row that matters most on this
+// page looked exactly like the two hundred that do not.
+var AUDIT_KINDS = {
+  "event":                 { label: "Event",                icon: "list",    tone: "is-muted" },
+  "incident.opened":       { label: "Alarm raised",         icon: "warning", tone: "is-warn" },
+  "incident.updated":      { label: "Alarm updated",        icon: "list",    tone: "is-muted" },
+  "incident.recurred":     { label: "Alarm returned",       icon: "refresh", tone: "is-warn" },
+  "incident.ignored":      { label: "Silenced by a rule",   icon: "x",       tone: "is-muted" },
+  "alert.sent":            { label: "Delivered",            icon: "check",   tone: "is-ok" },
+  "alert.failed":          { label: "Delivery failed",      icon: "warning", tone: "is-err" },
+  "alert.held":            { label: "Held for quiet hours", icon: "clock",   tone: "is-info" },
+  "incident.acknowledged": { label: "Acknowledged",         icon: "check",   tone: "is-info" },
+  "incident.resolved":     { label: "Condition cleared",    icon: "check",   tone: "is-ok" },
+  "incident.closed":       { label: "Closed",               icon: "x",       tone: "is-muted" },
+  "config.changed":        { label: "Settings changed",     icon: "gear",    tone: "is-info" },
+  "auth":                  { label: "Sign-in",              icon: "key",     tone: "is-info" },
+  "service":               { label: "Service",              icon: "power",   tone: "is-muted" }
+};
+
+// FIELD_LABELS names the structured fields in words. They were rendered as
+// "channel=email  ·  error=dial tcp: lookup smtp.example.com: no such host",
+// which is a debug dump: the reader has to know the schema to read the row.
+var FIELD_LABELS = {
+  channel: "channel", client: "from", hook: "hook", entity: "about",
+  changed: "sections", action: "action", reason: "reason", until: "until",
+  version: "version", detail: "detail", event: "event", error: "error"
+};
+
+function auditKind(kind) {
+  return AUDIT_KINDS[kind] || { label: kind || "—", icon: "list", tone: "is-muted" };
+}
+
 function refreshAudit() {
   var body = byId("audit-body");
   api("GET", "api/audit?limit=200").then(function (res) {
@@ -1812,32 +1914,123 @@ function refreshAudit() {
     }
     clear(body);
     var entries = res.data.entries || [];
+    var failures = entries.filter(function (e) { return auditKind(e.kind).tone === "is-err"; }).length;
     setLede("activity", "clock", "What happened, and who did it.",
-      entries.length ? entries.length + " recent entries" : "");
+      entries.length ? entries.length + " recent" + (failures ? " · " + failures + " failed" : "") : "");
     if (!entries.length) {
       body.appendChild(emptyState("Nothing recorded yet",
         "Every alarm, delivery, acknowledgement, save and restart lands here.",
         null, { icon: "clock" }));
       return;
     }
-    var t = table(["When", "Kind", "Actor", "Summary"]);
-    t.className = "audit";
-    entries.forEach(function (e) {
-      var row = t.tBodies[0].insertRow();
-      row.insertCell().textContent = stamp(e.at);
-      row.insertCell().textContent = e.kind;
-      row.insertCell().textContent = e.actor || "—";
-      var c = row.insertCell();
-      c.textContent = e.summary;
-      var extra = [];
-      if (e.incident_id) extra.push("incident " + e.incident_id);
-      if (e.fields) {
-        Object.keys(e.fields).forEach(function (k) { extra.push(k + "=" + e.fields[k]); });
-      }
-      if (extra.length) c.appendChild(el("div", "muted small", extra.join("  ·  ")));
+
+    // A filter, because two hundred rows with no way through them is a log
+    // file with borders. "Only failures" is first because it is the reason
+    // somebody opens this page at 3am.
+    var filterText = "";
+    var failuresOnly = false;
+    var listWrap = el("div", "");
+
+    var bar = el("div", "cluster audit-filter");
+    var search = keepOutOfPasswordManagers(el("input"));
+    search.type = "search";
+    search.placeholder = "Filter by anything on the row";
+    search.addEventListener("input", function () {
+      filterText = search.value.trim().toLowerCase();
+      draw();
     });
-    body.appendChild(wrap(t));
+    bar.appendChild(search);
+
+    var onlyFail = el("button", "act small", "Only failures" + (failures ? " (" + failures + ")" : ""));
+    onlyFail.disabled = failures === 0;
+    onlyFail.addEventListener("click", function () {
+      failuresOnly = !failuresOnly;
+      onlyFail.className = failuresOnly ? "act small primary" : "act small";
+      draw();
+    });
+    bar.appendChild(onlyFail);
+    body.appendChild(bar);
+    body.appendChild(listWrap);
+
+    function matches(e) {
+      var k = auditKind(e.kind);
+      if (failuresOnly && k.tone !== "is-err") return false;
+      if (!filterText) return true;
+      var hay = [e.summary, e.actor, e.kind, k.label, e.incident_id].join(" ");
+      if (e.fields) {
+        Object.keys(e.fields).forEach(function (f) { hay += " " + f + " " + e.fields[f]; });
+      }
+      return hay.toLowerCase().indexOf(filterText) >= 0;
+    }
+
+    function draw() {
+      clear(listWrap);
+      var shown = entries.filter(matches);
+      if (!shown.length) {
+        listWrap.appendChild(emptyState("Nothing matches",
+          "No entry in the last " + entries.length + " matches that.",
+          { label: "Clear the filter", onClick: function () {
+            search.value = ""; filterText = ""; failuresOnly = false;
+            onlyFail.className = "act small"; draw();
+          } }, { icon: "list", compact: true }));
+        return;
+      }
+      var t = table(["When", "What", "Who", "Detail"]);
+      t.className = "audit";
+      shown.forEach(function (e) { auditRow(t, e); });
+      listWrap.appendChild(wrap(t));
+    }
+    draw();
   });
+}
+
+function auditRow(t, e) {
+  var k = auditKind(e.kind);
+  var row = t.tBodies[0].insertRow();
+  if (k.tone === "is-err") row.className = "is-err";
+
+  row.insertCell().textContent = stamp(e.at);
+
+  var kc = row.insertCell();
+  var b = badge(k.label, k.tone);
+  b.insertBefore(icon(k.icon, "sm"), b.firstChild);
+  kc.appendChild(b);
+
+  row.insertCell().textContent = e.actor || "—";
+
+  var c = row.insertCell();
+  c.appendChild(el("div", "", e.summary));
+
+  // The error is the thing somebody came here to read, so it is not one of
+  // the key=value pairs; it gets the treatment a failure gets everywhere else.
+  if (e.fields && e.fields.error) {
+    c.appendChild(el("div", "audit-error", e.fields.error));
+  }
+
+  var pairs = el("div", "audit-fields");
+  var any = false;
+  if (e.fields) {
+    Object.keys(e.fields).sort().forEach(function (f) {
+      if (f === "error") return;
+      any = true;
+      var pair = el("span", "pair");
+      pair.appendChild(el("span", "pair-k", FIELD_LABELS[f] || f));
+      pair.appendChild(el("span", "pair-v", e.fields[f]));
+      pairs.appendChild(pair);
+    });
+  }
+  if (e.incident_id) {
+    any = true;
+    // A link, because the record and the board were unreachable from each
+    // other despite every entry carrying the id.
+    var a = el("a", "pair");
+    a.href = "#incidents";
+    a.appendChild(el("span", "pair-k", "incident"));
+    a.appendChild(el("span", "pair-v", String(e.incident_id).slice(0, 8)));
+    a.setAttribute("title", e.incident_id);
+    pairs.appendChild(a);
+  }
+  if (any) c.appendChild(pairs);
 }
 
 // testRow adds a "send a test" button to a channel card.

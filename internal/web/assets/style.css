@@ -802,3 +802,51 @@ table.matrix input[type=checkbox]:disabled{opacity:.3}
   details.step>.body{padding:var(--sp-3)}
   .setup-progress>.row.top{flex-direction:column;align-items:stretch;gap:var(--sp-3)}
 }
+
+/* ---------------------------------------------------------------------------
+   13. Incident facts, and the activity record
+
+   Both screens had the same failing: machine output shown to a person. The
+   incident detail appended "Camera: X / At: <RFC3339> / Rule: Y" in the same
+   weight as the description, and the activity table rendered its kinds raw
+   ("alert.failed") with its structured fields as "channel=email  ·  error=...".
+   Neither was wrong, and neither was written for a reader.
+   --------------------------------------------------------------------------- */
+
+/* Facts appended to an incident's description: the entity, the time, the rule
+   that matched. A quiet row of chips, so the description reads as prose and
+   the facts read as facts. */
+.facts{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin-top:var(--sp-2)}
+.fact{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:2px 8px;border:1px solid var(--line);border-radius:999px;
+  font-size:var(--fs-xs);color:var(--muted);background:var(--card-2);
+}
+.fact .icon{opacity:.8}
+
+/* The filter above the record. Two hundred rows with no way through them is a
+   log file with borders. */
+.audit-filter{margin-bottom:var(--sp-3)}
+.audit-filter input[type=search]{min-width:min(360px,100%)}
+
+/* A failed row is tinted rather than merely coloured: the reason somebody
+   opens this page is usually to find one, and a red word in a grey table is
+   easy to scroll past. */
+table.audit tr.is-err > td{background:color-mix(in srgb,var(--err) 7%,transparent)}
+.audit-error{
+  margin-top:4px;color:var(--err);font-size:var(--fs-sm);
+  overflow-wrap:anywhere;max-width:var(--measure-sm);
+}
+
+/* Structured fields as labelled pairs. The label is the quiet half: an
+   operator scanning for "which channel" wants the value to carry. */
+.audit-fields{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.audit-fields .pair{
+  display:inline-flex;align-items:baseline;gap:5px;
+  padding:1px 7px;border-radius:999px;background:var(--card-2);
+  border:1px solid var(--line);font-size:var(--fs-xs);text-decoration:none;
+}
+.audit-fields a.pair:hover{border-color:var(--accent)}
+.audit-fields .pair-k{color:var(--muted);text-transform:lowercase}
+.audit-fields .pair-v{color:var(--fg-2);overflow-wrap:anywhere}
+a.pair .pair-v{color:var(--accent)}
