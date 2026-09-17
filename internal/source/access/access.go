@@ -376,6 +376,19 @@ func (s *Source) Name() string { return SourceName }
 // resting on the socket alone.
 func (s *Source) Liveness() time.Duration { return s.cfg.LivenessWindow }
 
+// LastContact is the last frame from the notifications socket, or the last
+// successful door or log poll. See event.Contactable: a door that nobody opens
+// all night is not a broken source.
+func (s *Source) LastContact() time.Time {
+	s.mu.Lock()
+	last := s.health.LastMessageAt
+	s.mu.Unlock()
+	if _, lastRun, lastErr, _ := s.poll.stats(); lastErr == "" && lastRun.After(last) {
+		last = lastRun
+	}
+	return last
+}
+
 // Health reports what this source believes about itself.
 func (s *Source) Health() Health {
 	s.mu.Lock()

@@ -113,7 +113,27 @@ type Source interface {
 	// dropped connection.
 	Run(ctx context.Context, out Sink) error
 
-	// Liveness is how long this source may be silent before the deadman
-	// treats the silence as a fault. Zero disables the deadman for it.
+	// Liveness is how long this source may be OUT OF CONTACT before the
+	// deadman treats it as a fault. Zero disables the deadman for it.
 	Liveness() time.Duration
+}
+
+// Contactable is an optional interface a Source may implement to report the
+// last time it was in contact with its console, as distinct from the last time
+// it had something to report.
+//
+// THE TWO ARE NOT THE SAME, and conflating them is how a working installation
+// pages its operator every half hour. The deadman originally measured emitted
+// EVENTS, so a Protect source holding a healthy websocket over a quiet evening
+// -- no motion, no detections, no device changing state -- looked exactly like
+// one whose socket had died, and after thirty minutes it was reported as dead.
+// A dead source and a quiet site looking identical is the confusion this
+// product exists to remove; measuring the wrong thing recreated it, pointed
+// the other way.
+//
+// A source that implements this reports the last frame, poll or sweep that
+// actually reached its console. Nothing arriving THERE is a real fault;
+// nothing worth emitting is a quiet night.
+type Contactable interface {
+	LastContact() time.Time
 }

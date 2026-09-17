@@ -717,9 +717,18 @@ func runDaemon(ctx context.Context, dataDir string) error {
 				}
 				_ = c
 				for _, st := range supervisor.Statuses() {
+					// "Last seen" is the last CONTACT where the source can
+					// tell the difference, because that is the question the
+					// column answers: are we still watching? Showing the last
+					// emitted event made a healthy source over a quiet night
+					// read as hours dead, next to a green badge.
+					lastSeen := st.LastEventAt
+					if !st.LastContactAt.IsZero() {
+						lastSeen = st.LastContactAt
+					}
 					sh := web.SourceHealth{
 						Name:           st.Name,
-						LastSeen:       st.LastEventAt,
+						LastSeen:       lastSeen,
 						ExpectedWithin: st.Expected,
 						Silent:         st.Silent,
 					}
@@ -736,6 +745,12 @@ func runDaemon(ctx context.Context, dataDir string) error {
 							st.Events, st.Restarts)
 					default:
 						sh.Detail = fmt.Sprintf("%d event(s)", st.Events)
+					}
+					// A source in contact with nothing to say is the normal
+					// state of a quiet site, and saying so stops "0 event(s)"
+					// reading as a fault.
+					if !st.Silent && st.Events == 0 && !st.LastContactAt.IsZero() {
+						sh.Detail = "in contact; nothing to report yet"
 					}
 					h.Sources = append(h.Sources, sh)
 				}

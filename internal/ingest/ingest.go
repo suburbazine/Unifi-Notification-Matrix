@@ -252,11 +252,35 @@ func (s *Supervisor) checkLiveness(ctx context.Context) {
 			s.mu.Unlock()
 			continue
 		}
-		quiet := now.Sub(st.lastEventAt)
+		last := st.lastEventAt
+		s.mu.Unlock()
+
+		// CONTACT, not events, wherever the source can tell us.
+		//
+		// Measuring emitted events made a quiet site indistinguishable from a
+		// dead one -- the exact confusion this product exists to remove, only
+		// pointed the other way. A Protect source over a still evening emits
+		// nothing at all while its sockets stay perfectly healthy, and after
+		// thirty minutes it was declared silent and paged about every half
+		// hour until somebody closed it by hand. Observed on a real
+		// installation, repeatedly, for a whole day.
+		//
+		// A source that knows the difference reports the last frame, poll or
+		// sweep that actually reached the console. Nothing arriving THERE is a
+		// fault worth waking somebody for; nothing worth emitting is a quiet
+		// night, and saying so would be crying wolf.
+		if c, ok := src.(event.Contactable); ok {
+			if at := c.LastContact(); at.After(last) {
+				last = at
+			}
+		}
+
+		quiet := now.Sub(last)
+
+		s.mu.Lock()
 		wasSilent := st.silent
 		nowSilent := quiet > window
 		st.silent = nowSilent
-		last := st.lastEventAt
 		s.mu.Unlock()
 
 		switch {
@@ -296,6 +320,15 @@ type Status struct {
 	// can say "quiet for 4 minutes, which is fine" rather than making the
 	// reader guess whether quiet is bad.
 	Expected time.Duration
+
+	// LastContactAt is the last time the source reached its console at all,
+	// where the source can tell the difference. Zero when it cannot.
+	//
+	// Reported separately from LastEventAt because an operator looking at a
+	// healthy source over a quiet night needs to see BOTH: nothing has
+	// happened, and we are still watching. Showing only the last event made a
+	// working installation read as three hours dead.
+	LastContactAt time.Time
 }
 
 // Statuses reports every source, for the operator interface.
@@ -308,11 +341,15 @@ func (s *Supervisor) Statuses() []Status {
 		if st == nil {
 			continue
 		}
-		out = append(out, Status{
+		status := Status{
 			Name: st.name, Events: st.events, LastEventAt: st.lastEventAt,
 			Silent: st.silent, Fatal: st.fatal, Restarts: st.restarts,
 			Since: st.runningFor, Expected: src.Liveness(),
-		})
+		}
+		if c, ok := src.(event.Contactable); ok {
+			status.LastContactAt = c.LastContact()
+		}
+		out = append(out, status)
 	}
 	return out
 }

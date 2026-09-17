@@ -379,3 +379,68 @@ func TestASourceThatStopsOnItsOwnIsRestarted(t *testing.T) {
 			"healthy in the interface: %+v", got)
 	}
 }
+
+// contactableSource reports contact independently of emitting events, the way
+// a real socket-backed source does.
+type contactableSource struct {
+	fakeSource
+	mu      sync.Mutex
+	contact time.Time
+}
+
+func (c *contactableSource) LastContact() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.contact
+}
+
+func (c *contactableSource) sawFrame(at time.Time) {
+	c.mu.Lock()
+	c.contact = at
+	c.mu.Unlock()
+}
+
+// A QUIET SITE IS NOT A DEAD SOURCE.
+//
+// The deadman measured EMITTED EVENTS, so a Protect source holding two healthy
+// websockets over a still evening -- no motion, no detections, nothing
+// changing state -- looked exactly like one whose socket had died. After
+// thirty minutes it was reported as silent at HIGH, and repeated every half
+// hour until somebody closed it by hand. Observed on a real installation, all
+// day, while Protect was working perfectly.
+//
+// Protect's own health had carried the distinction all along: LastMessageAt is
+// any frame at all, LastEmitAt is what reached the sink, and "the gap between
+// them is what tells a mute socket from a quiet site". The deadman was reading
+// the wrong one.
+func TestASourceInContactIsNotSilentEvenWithNothingToReport(t *testing.T) {
+	now := t0
+	src := &contactableSource{fakeSource: fakeSource{
+		name: "protect", liveness: 30 * time.Minute, block: true,
+	}}
+	src.sawFrame(t0)
+	r := &recorder{}
+	s, _ := New([]event.Source{&src.fakeSource}, r.deps(func() time.Time { return now }))
+	// Register the contactable wrapper as the source the supervisor sees.
+	s.sources = []event.Source{src}
+
+	// Four hours of a perfectly healthy, entirely uneventful night. The socket
+	// keeps receiving; nothing is worth emitting.
+	for i := 1; i <= 8; i++ {
+		now = t0.Add(time.Duration(i) * 30 * time.Minute)
+		src.sawFrame(now.Add(-time.Minute))
+		s.checkLiveness(context.Background())
+	}
+	if _, raised, _ := r.counts(); raised != 0 {
+		t.Fatalf("a source in contact was reported silent %d time(s) over a quiet night", raised)
+	}
+
+	// Now contact actually stops -- the socket is dead, not the site quiet.
+	for i := 9; i <= 11; i++ {
+		now = t0.Add(time.Duration(i) * 30 * time.Minute)
+		s.checkLiveness(context.Background())
+	}
+	if _, raised, _ := r.counts(); raised != 1 {
+		t.Errorf("a source that genuinely stopped being in contact raised %d incident(s), want 1", raised)
+	}
+}

@@ -251,6 +251,16 @@ func (s *Source) Name() string { return SourceName }
 // The poll loop's own failures are reported through Health instead.
 func (s *Source) Liveness() time.Duration { return s.cfg.LivenessWindow }
 
+// LastContact is the last poll that actually reached the console. See
+// event.Contactable. This source has no deadman of its own by default, but it
+// reports contact anyway so the interface can show when it last managed to
+// read anything.
+func (s *Source) LastContact() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.health.LastPollAt
+}
+
 // Health reports what this source believes about itself.
 func (s *Source) Health() Health {
 	s.mu.Lock()

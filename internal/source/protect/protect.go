@@ -410,6 +410,26 @@ func (s *Source) Name() string { return SourceName }
 // from "mute".
 func (s *Source) Liveness() time.Duration { return s.cfg.LivenessWindow }
 
+// LastContact is the last time this source heard from the console at all: any
+// frame on either socket, understood or not, or a completed reconciliation
+// sweep.
+//
+// Deliberately NOT the last emitted event. Protect speaks when something
+// happens, so a quiet evening produces no events at all while the socket stays
+// perfectly healthy -- and the deadman, which used to watch emitted events,
+// called that a dead source after thirty minutes and paged about it every half
+// hour thereafter. The sockets are chatty at idle even when nothing is
+// happening, which is exactly what makes them worth watching instead.
+func (s *Source) LastContact() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	last := s.health.LastMessageAt
+	if s.health.LastSweepAt.After(last) {
+		last = s.health.LastSweepAt
+	}
+	return last
+}
+
 // Health reports what this source currently believes about itself. Safe to
 // call from another goroutine.
 func (s *Source) Health() Health {
