@@ -226,3 +226,29 @@ func TestAnUnreadableVersionIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A FOUR-PART VERSION HAS TO COMPARE CORRECTLY.
+//
+// 0.1.2.1 -- a fix to a release, cut before the next one was ready -- is not
+// what the usual three-part shape assumes, and this comparison is what decides
+// whether an installation is offered an update at all. A version that sorts
+// wrong here is an update nobody is told about, which is the same silence this
+// product exists to prevent, aimed at itself.
+func TestAFourPartVersionSortsAfterItsThreePartParent(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"0.1.2.1", "0.1.2", 1},   // the fix is newer than what it fixes
+		{"0.1.2", "0.1.2.1", -1},  // and the other way round
+		{"0.1.2.1", "0.1.2.1", 0}, // itself
+		{"0.1.3", "0.1.2.1", 1},   // the next real release is newer still
+		{"0.1.2.2", "0.1.2.1", 1},
+		{"0.1.2.1", "0.1.1", 1},
+	}
+	for _, c := range cases {
+		if got := Compare(c.a, c.b); got != c.want {
+			t.Errorf("Compare(%q, %q) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
