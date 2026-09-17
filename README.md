@@ -178,10 +178,16 @@ never fire is worse than no rule.
 than against the config file — so "configured" and "actually working" are
 different answers.
 
-![The setup checklist, showing a console configured and an Alarm Manager rule whose header is wrong](docs/images/setup.png)
+![The setup checklist: five of seven steps done, the acknowledgement step open with its instructions and a link to the settings that fix it](docs/images/setup.png)
 
-The webhook URLs are hidden here because this viewer is signed out. They carry
-their token, so anyone holding one can raise an alarm on your system.
+Only the step you are on is open. The rest collapse to a line and a state, and
+the pipeline across the top says which end of the chain is unfinished -- here
+the console has no Alarm Manager rule yet, so it is the console node that is
+marked, not the machine.
+
+Each hook's URL and header live on that hook's own card, and only for a
+signed-in viewer: they carry the token, so anyone holding one can raise an
+alarm on your system.
 
 **Health answers "why is nothing happening"** — per source, per channel, and
 whether the service will come back on its own.
@@ -192,16 +198,23 @@ A channel that has started failing is on the screen, not buried in a log. So is
 the difference between "starts at boot" and "restarts after a crash", which are
 different mechanisms and only one is on by default.
 
-**Escalation is edited, not written.** Who gets told, how often it keeps
-asking, when it gives up — with the full ladder behind an Advanced tick for
-anyone who wants "ntfy now, ntfy and email in fifteen minutes".
+**Escalation is a matrix**, which is what the product is named for. Severities
+down, channels across, how often it keeps asking and when it gives up beside
+them — with the full ladder behind an Advanced tick for anyone who wants "ntfy
+now, ntfy and email in fifteen minutes".
 
-![The escalation editor, per severity, with a simple view and an advanced one](docs/images/escalation.png)
+![The escalation matrix: severities as rows, channels as columns, with repeat and give-up intervals per severity](docs/images/escalation.png)
 
 **Inbound hooks are managed here too** — one endpoint per Alarm Manager rule,
 because that is the only way UniFi Network alarms exist at all.
 
-![The inbound hook editor](docs/images/hooks.png)
+![A hook's card: its URL and header ready to paste, how many alarms have arrived, and the two ways to test it](docs/images/hooks.png)
+
+Each hook can be proved two ways, and they answer different questions. Test
+mode accepts an arrival and throws it away, so you can press Test in UniFi
+without waking anybody. Firing a test alarm sends a real one through your
+rules, your ladder and your channels, which is the half an arriving alarm never
+proves until the night it matters.
 
 ## What it can tell you about
 
