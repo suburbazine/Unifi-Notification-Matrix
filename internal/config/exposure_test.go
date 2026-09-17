@@ -334,3 +334,60 @@ func TestAnHTTPSAckURLThroughAProxyIsNotWarnedAbout(t *testing.T) {
 		}
 	}
 }
+
+// A listener pinned to one LAN address receives a forward perfectly well. The
+// warning used to fire on anything that was not every-interface and told the
+// operator to "use 0.0.0.0 rather than 127.0.0.1" -- about a value with no
+// 127.0.0.1 in it. Advice that is visibly wrong teaches people to skip the
+// next warning too.
+func TestAnAckListenerOnOneLANAddressIsNotCalledLoopback(t *testing.T) {
+	c := publicConfig()
+	c.Web.AckListen = "192.168.20.115:50001"
+	if warnsAbout(c, "will not reach it") || warnsAbout(c, "127.0.0.1") {
+		t.Errorf("a LAN-pinned ack listener was described as loopback-only:\n%v", c.Warnings())
+	}
+
+	c = Default()
+	c.Web.Listen = "127.0.0.1:8322"
+	c.Web.AckBaseURL = "https://alerts.example.com"
+	c.Web.AckListen = "192.168.20.115:50001"
+	if warnsAbout(c, "nothing is listening") {
+		t.Errorf("a LAN-pinned ack listener was called unreachable:\n%v", c.Warnings())
+	}
+}
+
+// When it IS loopback, the warning says which value and what to type instead.
+func TestTheLoopbackWarningNamesTheValueAndTheFix(t *testing.T) {
+	c := publicConfig()
+	c.Web.AckListen = "127.0.0.1:49152"
+	if !warnsAbout(c, "web.ack_listen is 127.0.0.1:49152") || !warnsAbout(c, "0.0.0.0:49152") {
+		t.Errorf("the loopback warning does not name the value and the fix:\n%v", c.Warnings())
+	}
+}
+
+// "Set web.ack_listen to a second port" left the format to the operator, and
+// the natural guess -- the public hostname and port being forwarded -- stopped
+// the service. So the warning names the value.
+func TestTheUnscopedWarningSaysWhatToType(t *testing.T) {
+	c := publicConfig()
+	c.Web.AckBaseURL = "http://notifymatrix.example.com:50001"
+	if !warnsAbout(c, "Set web.ack_listen to 0.0.0.0:50001") {
+		t.Errorf("did not name the value, using the port already in the ack address:\n%v", c.Warnings())
+	}
+	if !warnsAbout(c, "never takes the public hostname") {
+		t.Errorf("did not say where the public hostname does NOT go:\n%v", c.Warnings())
+	}
+
+	// No port of its own in the ack address: nothing to infer, so "auto".
+	c = publicConfig()
+	if !warnsAbout(c, `Set web.ack_listen to "auto"`) {
+		t.Errorf("with no port to infer, did not suggest auto:\n%v", c.Warnings())
+	}
+
+	// The ack address on the main listener's own port is not a second port.
+	c = publicConfig()
+	c.Web.AckBaseURL = "http://notifymatrix.example.com:8322"
+	if !warnsAbout(c, `Set web.ack_listen to "auto"`) {
+		t.Errorf("suggested the main listener's own port as the ack port:\n%v", c.Warnings())
+	}
+}

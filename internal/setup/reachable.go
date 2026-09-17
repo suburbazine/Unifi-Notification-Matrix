@@ -111,6 +111,21 @@ func ListenPort(addr string) string {
 	return port
 }
 
+// SuggestedAckListen is the literal value for web.ack_listen.
+//
+// The step used to say only that web.ack_listen was not set, and the obvious
+// thing to type -- the public hostname and port about to be forwarded -- names
+// an address this machine does not have, which stops the service at its next
+// start. So name the value: when the acknowledgement address already carries
+// a port that is not the main listener's, that is the port being forwarded;
+// otherwise "auto".
+func SuggestedAckListen(ackURL, listen string) string {
+	if p := portOfURL(strings.TrimSpace(ackURL)); p != "" && p != ListenPort(listen) {
+		return "0.0.0.0:" + p
+	}
+	return `"auto"`
+}
+
 // AckURLTargetsThePlainListener reports whether an https acknowledgement URL
 // points at the daemon's own listener, which speaks plain HTTP.
 //

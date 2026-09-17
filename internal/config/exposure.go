@@ -84,6 +84,46 @@ func listensOnEveryInterface(addr string) bool {
 	return host == "" || host == "0.0.0.0" || host == "::"
 }
 
+// listensOnLoopbackOnly reports whether an address accepts connections from
+// this machine and nowhere else.
+//
+// NOT the same as "does not listen on every interface". A listener pinned to
+// one LAN address receives a forward perfectly well, and a warning built on
+// the broader test told an operator to "use 0.0.0.0 rather than 127.0.0.1"
+// about a value that contained no 127.0.0.1 at all -- which is the kind of
+// advice that gets ignored, and then so does the next warning.
+func listensOnLoopbackOnly(addr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		return false
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// suggestedAckListen is the literal value to put in web.ack_listen.
+//
+// A warning that says "set web.ack_listen to a second port" leaves the
+// operator to work out the format, and the natural guess -- the public
+// hostname and port they are about to forward -- names an address this
+// machine does not have and stops the service. So say the value. When the
+// acknowledgement address already carries a port that is not the main
+// listener's, that is the port they mean to forward; otherwise "auto".
+func suggestedAckListen(ackBaseURL, listen string) string {
+	if u, err := url.Parse(strings.TrimSpace(ackBaseURL)); err == nil {
+		if p := u.Port(); p != "" {
+			if _, lp, err := net.SplitHostPort(strings.TrimSpace(listen)); err != nil || lp != p {
+				return "0.0.0.0:" + p
+			}
+		}
+	}
+	return `"auto"`
+}
+
 // WantsRandom reports whether an address is still asking for a port to be
 // chosen. Until it is, there is nothing to say about which interface it binds.
 func WantsRandom(addr string) bool {
@@ -183,8 +223,10 @@ func (c Config) exposureWarnings() []string {
 			"web.ack_listen is not set -- if you have forwarded a port to the "+
 			"main listener, the status page (which names your cameras, doors "+
 			"and open alarms) and the settings sign-in are on the internet "+
-			"too. Set web.ack_listen to a second port and forward THAT; see "+
-			"docs/SETUP.md")
+			"too. Set web.ack_listen to "+suggestedAckListen(c.Web.AckBaseURL, c.Web.Listen)+
+			" and forward only that port. web.ack_listen is where this machine "+
+			"listens, so it never takes the public hostname -- that stays in "+
+			"web.ack_base_url; see docs/SETUP.md")
 	}
 	if public && strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Web.AckBaseURL)), "http://") {
 		// The acknowledgement token travels in the path. Over plain HTTP on
@@ -228,8 +270,7 @@ func (c Config) exposureWarnings() []string {
 	// tunnel or reverse proxy running ON this machine and connecting to
 	// loopback. Only the operator knows whether one exists.
 	if strings.TrimSpace(c.Web.AckBaseURL) != "" && !ackURLIsThisMachine(c.Web.AckBaseURL) &&
-		!forwardable && (!scoped || (!WantsRandom(c.Web.AckListen) &&
-		!listensOnEveryInterface(c.Web.AckListen))) {
+		!forwardable && (!scoped || listensOnLoopbackOnly(c.Web.AckListen)) {
 		w = append(w, "web.ack_base_url points at "+ackHost(c.Web.AckBaseURL)+
 			" but nothing is listening anywhere a phone could reach: web.listen "+
 			"is bound to this machine only"+ackListenNote(c.Web.AckListen)+
@@ -237,10 +278,11 @@ func (c Config) exposureWarnings() []string {
 			"proxy on this machine forwards to it. For a phone on the LAN, set "+
 			"web.listen to 0.0.0.0 and use this machine's LAN address")
 	}
-	if scoped && !WantsRandom(c.Web.AckListen) && !listensOnEveryInterface(c.Web.AckListen) {
-		w = append(w, "web.ack_listen is set but only accepts connections from "+
-			"this machine, so a forwarded port will not reach it -- use "+
-			"0.0.0.0 rather than 127.0.0.1")
+	if scoped && listensOnLoopbackOnly(c.Web.AckListen) {
+		_, port, _ := net.SplitHostPort(strings.TrimSpace(c.Web.AckListen))
+		w = append(w, "web.ack_listen is "+strings.TrimSpace(c.Web.AckListen)+
+			", which only accepts connections from this machine, so a "+
+			"forwarded port will not reach it -- use 0.0.0.0:"+port)
 	}
 	return w
 }

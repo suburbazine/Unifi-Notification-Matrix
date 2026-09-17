@@ -616,3 +616,45 @@ func TestTheHooksStepIsQuietWhenTheListenerIsReachable(t *testing.T) {
 		}
 	}
 }
+
+// Reported from a live install. The step said web.ack_listen was not set and
+// that the status page could be on the internet, and nothing more -- so the
+// operator put the public hostname they were forwarding into web.ack_listen,
+// which names an address the machine does not have, and the service stopped.
+// The step now names the value, and where the hostname does NOT go.
+func TestThePublicAckStepSaysWhatToTypeInAckListen(t *testing.T) {
+	in := Input{
+		Listen:       "0.0.0.0:8322",
+		AckBaseURL:   "http://notifymatrix.example.com:50001",
+		PublicAckURL: true,
+	}
+	s := ackStep(in)
+	if s.Status != Todo {
+		t.Fatalf("an unscoped public ack address was not flagged: %v / %s", s.Status, s.State)
+	}
+	for _, want := range []string{"0.0.0.0:50001", "never takes the public hostname", "web.ack_base_url"} {
+		if !strings.Contains(s.State, want) {
+			t.Errorf("the state does not say %q:\n  %s", want, s.State)
+		}
+	}
+
+	var ref strings.Builder
+	for _, topic := range s.Reference {
+		ref.WriteString(strings.Join(topic.Lines, "\n"))
+	}
+	if !strings.Contains(ref.String(), "never the public") {
+		t.Errorf("the off-site reference does not say the public hostname is not for web.ack_listen:\n%s", ref.String())
+	}
+}
+
+func TestSuggestedAckListen(t *testing.T) {
+	for _, tc := range []struct{ url, listen, want string }{
+		{"http://notifymatrix.example.com:50001", "0.0.0.0:8322", "0.0.0.0:50001"},
+		{"https://alerts.example.com", "0.0.0.0:8322", `"auto"`},           // no port to infer
+		{"http://notifymatrix.example.com:8322", "0.0.0.0:8322", `"auto"`}, // that IS the main port
+	} {
+		if got := SuggestedAckListen(tc.url, tc.listen); got != tc.want {
+			t.Errorf("SuggestedAckListen(%q, %q) = %s, want %s", tc.url, tc.listen, got, tc.want)
+		}
+	}
+}

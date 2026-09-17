@@ -1670,12 +1670,19 @@ function renderWebSection(body, ctx) {
       "no acknowledge link at all, and the only way to stop one is this page.",
       label: "blank?", tone: "warn" }, "web.ack_base_url"));
   var ackListen = bind(w, "ack_listen");
-  ackListen.placeholder = "blank = none \u00b7 auto = pick a port";
+  ackListen.placeholder = "blank = none \u00b7 auto \u00b7 0.0.0.0:PORT";
+  // The warning belongs AT this field, for the same reason as the one above:
+  // the natural thing to type here is the public hostname being forwarded,
+  // and that names an address this machine does not have -- which stopped a
+  // real service and took this page down with it.
   wf.appendChild(labelled("Ack-only listener", ackListen,
-    "Set to \"auto\" and a second listener starts on a random high port that " +
-    "serves ONLY /ack/. That is the port to forward from outside, if you " +
-    "must: a NAT forward cannot pick a path, so forwarding the main listen " +
-    "address publishes the whole status page along with it.", "web.ack_listen"));
+    { text: "Where THIS MACHINE listens for acknowledgements: \"auto\", or " +
+      "0.0.0.0 and a port. Never your public hostname -- that goes in Ack " +
+      "link address above. A second listener starts that serves ONLY /ack/, " +
+      "and that is the port to forward from outside, if you must: a NAT " +
+      "forward cannot pick a path, so forwarding the main listen address " +
+      "publishes the whole status page along with it.",
+      label: "public name?", tone: "warn" }, "web.ack_listen"));
   wc.appendChild(wf);
   var wr = el("div", "row");
   wr.appendChild(badge(w.ack_key_set ? "ack signing key set" : "ack signing key not set",

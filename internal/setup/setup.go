@@ -445,6 +445,11 @@ func ackStep(in Input) Step {
 				"The port is written back to the configuration on first start and then " +
 				"never changes, so the firewall rule and the links already sent stay " +
 				"valid.",
+			"web.ack_listen is where THIS MACHINE listens, not the address anybody " +
+				"types. It takes \"auto\" or 0.0.0.0 and a port -- never the public " +
+				"hostname. That name goes in web.ack_base_url, in the last step below. " +
+				"A name or address this machine does not have is refused, because " +
+				"nothing can listen on it and the service would not start.",
 			"FORWARD ONLY THAT PORT, from the internet to this machine, TCP only. Do " +
 				"not forward web.listen. Do not put this machine in a DMZ.",
 			"Put TLS in front of it. The acknowledgement token travels in the URL, so " +
@@ -490,7 +495,10 @@ func ackStep(in Input) Step {
 		s.Status = Todo
 		s.State = in.AckBaseURL + " looks public, but web.ack_listen is not set -- " +
 			"if a port is forwarded to the main listener then the status page and " +
-			"the settings sign-in are on the internet too"
+			"the settings sign-in are on the internet too. Set web.ack_listen to " +
+			SuggestedAckListen(in.AckBaseURL, in.Listen) + " and forward only that " +
+			"port. It is where this machine listens, so it never takes the public " +
+			"hostname -- that stays in web.ack_base_url"
 
 	case in.PublicAckURL && strings.HasPrefix(strings.ToLower(in.AckBaseURL), "http://"):
 		s.Status = Optional

@@ -393,6 +393,14 @@ protects an acknowledgement.
 
 You can also set it by hand: `ack_listen: 0.0.0.0:49898`.
 
+> **`ack_listen` is where this machine listens — never your public hostname.**
+> It takes `auto`, or `0.0.0.0` and a port. The public name a phone uses goes
+> in `ack_base_url`. It is an easy swap to make, because the public name is
+> exactly what the forward is for; but this machine does not have that address,
+> so nothing can listen on it. A name or address this machine does not have is
+> refused when you save, rather than accepted and left to stop the service at
+> its next start.
+
 #### Scoping the forward
 
 In your router or firewall:

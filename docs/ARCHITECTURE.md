@@ -907,6 +907,17 @@ Three configurations are then **warned about at every start**, not refused:
 | Public ack URL over plain `http` | the ack token is in the URL and readable in transit |
 | `ack_listen` on loopback, or equal to `listen` | it scopes nothing, or cannot receive a forward at all |
 
+"On loopback" means loopback: an `ack_listen` pinned to one LAN address receives
+a forward perfectly well and is not warned about. The first warning names the
+value to type — `0.0.0.0` and the port already in the ack URL, or `auto` —
+because "set a second port" left the format to the operator, and the natural
+guess, the public hostname, stopped a real service.
+
+A **listen address this machine does not have** is the one case here that is
+refused rather than warned about, for `listen` and `ack_listen` alike: nothing
+can bind it, so it is not an exposure trade-off but a service that will not
+start.
+
 The first is deliberately conditioned on the main listener being bound to every
 interface. Somebody running a reverse proxy has it on loopback, is already
 scoping by path, and must not be nagged about a risk they have dealt with.
