@@ -87,6 +87,22 @@ type Deps struct {
 	// has no test button.
 	TestChannel func(ctx context.Context, name string) (summary string, err error)
 
+	// HookTestMode arms a hook's test mode for minutes, or disarms it when
+	// minutes is zero or less. It returns when the mode lapses.
+	//
+	// While armed the hook accepts, counts and DISCARDS arrivals, so an
+	// operator can press Test in Alarm Manager and find out whether the rule
+	// reaches this machine without raising an alarm and without an incident to
+	// close afterwards.
+	HookTestMode func(name string, minutes int) (until time.Time, err error)
+
+	// FireHookTest raises the alarm this hook would raise, through the real
+	// rules, ladder and channels, and returns the incident's title.
+	//
+	// The other half of testing a hook: test mode proves UniFi can reach us,
+	// and this proves that when it does, somebody's phone rings.
+	FireHookTest func(name string) (title string, err error)
+
 	// Checklist reports what is still needed to make this installation work.
 	//
 	// Optional: a build that does not supply it simply has no setup panel. The
@@ -294,6 +310,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/audit", s.requireAuth(http.HandlerFunc(s.handleAudit)))
 	mux.Handle("POST /api/password", s.requireAuth(http.HandlerFunc(s.handleChangePassword)))
 	mux.Handle("POST /api/channels/{name}/test", s.requireAuth(http.HandlerFunc(s.handleTestChannel)))
+	// Gated: arming makes this installation deliberately deaf to one hook, and
+	// firing costs real notifications and possibly a real phone call.
+	mux.Handle("POST /api/hooks/{name}/test-mode", s.requireAuth(http.HandlerFunc(s.handleHookTestMode)))
+	mux.Handle("POST /api/hooks/{name}/fire", s.requireAuth(http.HandlerFunc(s.handleFireHookTest)))
 	mux.Handle("POST /api/incidents/{id}/ack", s.requireAuth(http.HandlerFunc(s.handleAck)))
 	mux.Handle("POST /api/incidents/{id}/close", s.requireAuth(http.HandlerFunc(s.handleClose)))
 	mux.Handle("POST /api/service", s.requireAuth(http.HandlerFunc(s.handleServiceAction)))

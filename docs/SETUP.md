@@ -523,6 +523,34 @@ Run `notifymatrix setup` again. It will say whether the alarm arrived.
 > **unverified** rather than done. A hook that looks right is not evidence that
 > anybody made the rule.
 
+### Proving it works, without waking anybody
+
+Two different questions, and each has its own button on the hook's card.
+
+**Can the console reach this machine?** Press **Test mode for 15 minutes**,
+then press Test on the Alarm Manager rule. The arrival is authenticated,
+counted and thrown away: no incident, nobody woken, nothing to close
+afterwards. The card's counter rising is the proof.
+
+Test mode **ends by itself**, and that is deliberate rather than a
+convenience. While it is armed, a genuine alarm at that hook raises nothing —
+so it is capped at an hour, it is shown in red on the card for as long as it
+is live, and restarting the service clears it. Test arrivals are counted
+separately from real ones, so a round of testing cannot make an untried hook
+look proven.
+
+**And when it does, is anybody actually told?** Press **Fire a test alarm**.
+That raises a real incident through your real rules, your real escalation
+ladder and your real channels — so it notifies whoever a genuine alarm would,
+it keeps escalating until you acknowledge it, and if you have voice on a rung
+it will telephone somebody and charge you for the call. It is titled `TEST` so
+nobody mistakes it at 3am, and it cannot merge into a real alarm already open
+on the same hook.
+
+That second one is the test worth running before you rely on any of this. An
+alarm arriving proves the console found you; it does not prove your ladder
+reaches a human, and the night that matters is a poor time to find out.
+
 ### If the test does nothing
 
 Run `notifymatrix setup` and read the line under the hook:

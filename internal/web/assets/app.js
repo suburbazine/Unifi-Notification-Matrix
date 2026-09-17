@@ -1032,6 +1032,99 @@ function refreshSetup() {
   });
 }
 
+// hookTestControls answers the two questions a new hook actually raises, and
+// they are different questions needing different buttons.
+//
+//   CAN UNIFI REACH US?   Arm test mode, press Test on the rule, watch the
+//                         count rise. Nothing is raised, nobody is woken, and
+//                         there is no incident to close afterwards.
+//   AND THEN WHAT?        Fire a test alarm. It goes through the real rules,
+//                         the real ladder and the real channels, so a phone
+//                         really rings -- the half that an arriving alarm does
+//                         not prove until the night it matters.
+//
+// Test mode is rendered loudly while armed. A hook in test mode is accepting
+// real alarms and discarding them, which is the one state this product must
+// never let somebody be in without knowing.
+function hookTestControls(h, cr) {
+  var wrap = el("div", "");
+  var name = (h.name || "").trim();
+  var armed = cr.test_armed_until && !/^0001/.test(cr.test_armed_until);
+
+  if (armed) {
+    var when = new Date(cr.test_armed_until);
+    wrap.appendChild(el("div", "delivery-error",
+      "TEST MODE until " + when.toLocaleTimeString() + ". Alarms arriving here " +
+      "are being accepted and THROWN AWAY -- a real alarm at this hook would " +
+      "raise nothing right now. It ends by itself."));
+  }
+  if (cr.test_count > 0) {
+    wrap.appendChild(el("div", "note",
+      cr.test_count + " arrival(s) accepted and discarded in test mode" +
+      (cr.last_test_at && !/^0001/.test(cr.last_test_at)
+        ? ", last at " + new Date(cr.last_test_at).toLocaleTimeString() : "") +
+      ". Counted apart from real arrivals, so testing cannot make an untried " +
+      "hook look proven."));
+  }
+
+  var msg = el("div", "msg");
+  var bar = el("div", "formbar");
+
+  var tm = el("button", "act", armed ? "End test mode" : "Test mode for 15 minutes");
+  tm.addEventListener("click", function () {
+    tm.disabled = true;
+    msg.className = "msg"; msg.textContent = "";
+    api("POST", "/api/hooks/" + encodeURIComponent(name) + "/test-mode",
+        { minutes: armed ? 0 : 15 }).then(function (res) {
+      tm.disabled = false;
+      if (!res.ok) {
+        msg.className = "msg err";
+        msg.textContent = (res.data && res.data.error) || "that was refused";
+        return;
+      }
+      msg.textContent = (res.data && res.data.detail) || "Done.";
+      refreshWebhooks();
+    });
+  });
+  bar.appendChild(tm);
+
+  var fire = el("button", "act", "Fire a test alarm");
+  fire.addEventListener("click", function () {
+    // Confirmed, because this one is not free: it pages whoever the ladder
+    // pages, and with voice on a rung it places a billed phone call.
+    if (!window.confirm(
+      "Raise a real incident for \"" + name + "\"?\n\n" +
+      "It goes through your rules, your escalation ladder and your channels, " +
+      "so it will notify whoever a genuine alarm would -- including any phone " +
+      "call, which costs money. It keeps escalating until you acknowledge or " +
+      "close it.")) {
+      return;
+    }
+    fire.disabled = true;
+    msg.className = "msg"; msg.textContent = "";
+    api("POST", "/api/hooks/" + encodeURIComponent(name) + "/fire", {}).then(function (res) {
+      fire.disabled = false;
+      if (!res.ok) {
+        msg.className = "msg err";
+        msg.textContent = (res.data && res.data.error) || "that was refused";
+        return;
+      }
+      msg.textContent = (res.data && res.data.detail) || "Raised.";
+      refreshStatus();
+    });
+  });
+  bar.appendChild(fire);
+
+  wrap.appendChild(bar);
+  wrap.appendChild(el("div", "note",
+    "Test mode proves the console can reach this machine. Firing a test alarm " +
+    "proves that when it does, somebody is actually told -- which depends on " +
+    "your rules, ladder and channels, and is the part an arriving alarm does " +
+    "not prove until it matters."));
+  wrap.appendChild(msg);
+  return wrap;
+}
+
 // hooksCard renders what an Alarm Manager rule needs: the URL, the header, and
 // whether anything has ever actually arrived through it.
 //
@@ -1709,6 +1802,7 @@ function hookCard(h, idx, hooks, conditions, redraw, creds) {
           (cr.last_reject ? ": " + cr.last_reject : "") +
           ". That is usually the header being absent or wrong."));
       }
+      c.appendChild(hookTestControls(h, cr));
     } else {
       c.appendChild(el("div", "note",
         "Its URL and header exist. Save and restart the service if they are " +

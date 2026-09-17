@@ -866,6 +866,19 @@ func runDaemon(ctx context.Context, dataDir string) error {
 			ApplyUpdate: func(ctx context.Context, v string) error {
 				return upd.apply(ctx, v, dataDir)
 			},
+			HookTestMode: func(name string, minutes int) (time.Time, error) {
+				if minutes <= 0 {
+					return time.Time{}, receiver.DisarmTest(name)
+				}
+				return receiver.ArmTest(name, time.Duration(minutes)*time.Minute)
+			},
+			FireHookTest: func(name string) (string, error) {
+				ev, err := receiver.FireTest(name)
+				if err != nil {
+					return "", err
+				}
+				return ev.Title, nil
+			},
 			Checklist: func() setup.Input {
 				cfgMu.RLock()
 				c := current
@@ -890,6 +903,9 @@ func runDaemon(ctx context.Context, dataDir string) error {
 							in.Hooks[i].LastAt = rec.LastAt
 							in.Hooks[i].Rejected = rec.Rejected
 							in.Hooks[i].LastReject = rec.LastReject
+							in.Hooks[i].TestCount = rec.TestCount
+							in.Hooks[i].LastTestAt = rec.LastTestAt
+							in.Hooks[i].TestArmedUntil = receiver.TestArmedUntil(rec.Name)
 						}
 					}
 				}

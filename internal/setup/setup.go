@@ -134,6 +134,17 @@ type HookState struct {
 	// diagnosable.
 	Header string
 
+	// TestArmedUntil is when this hook's test mode lapses, zero when it is not
+	// armed. A hook in test mode accepts real alarms and discards them, so it
+	// is reported everywhere the hook is, and loudly.
+	TestArmedUntil time.Time
+
+	// TestCount and LastTestAt are arrivals that were accepted and discarded
+	// while in test mode, counted apart from real ones so that "nothing has
+	// ever actually arrived" stays answerable after testing.
+	TestCount  int64
+	LastTestAt time.Time
+
 	Count  int64
 	LastAt time.Time
 

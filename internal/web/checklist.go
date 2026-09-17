@@ -45,6 +45,13 @@ func (s *Server) handleChecklist(w http.ResponseWriter, r *http.Request) {
 			// to "I made the rule and nothing happens" -- so they are readable
 			// without a session, like everything else on the status surface.
 			"rejected": h.Rejected, "last_reject": h.LastReject,
+			// Test mode is NOT a credential, and it is the most important
+			// thing on this row: a hook in test mode is accepting real alarms
+			// and throwing them away. Anything that can see the hook can see
+			// that, including a wall display nobody is signed in at.
+			"test_armed_until": h.TestArmedUntil,
+			"test_count":       h.TestCount,
+			"last_test_at":     h.LastTestAt,
 		}
 		if authed {
 			// The URL and the header are BOTH credentials. Either one alone is

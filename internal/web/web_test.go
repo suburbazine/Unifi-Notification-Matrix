@@ -197,6 +197,10 @@ type harness struct {
 	// returns is how a channel says its test did something other than deliver
 	// a message -- voice checks credentials and places no call.
 	testChannel func(context.Context, string) (string, error)
+
+	// hookArmed and hookFired record what the hook test endpoints asked for.
+	hookArmed []string
+	hookFired []string
 }
 
 // testConfig is valid, exercises every secret-bearing field, and plants the
@@ -292,6 +296,21 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 				return "", nil
 			}
 			return fn(ctx, name)
+		},
+		HookTestMode: func(name string, minutes int) (time.Time, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.hookArmed = append(h.hookArmed, fmt.Sprintf("%s:%d", name, minutes))
+			if minutes <= 0 {
+				return time.Time{}, nil
+			}
+			return time.Now().Add(time.Duration(minutes) * time.Minute), nil
+		},
+		FireHookTest: func(name string) (string, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.hookFired = append(h.hookFired, name)
+			return "TEST — Wan down — Head office", nil
 		},
 		Checklist: func() setup.Input {
 			return setup.Input{

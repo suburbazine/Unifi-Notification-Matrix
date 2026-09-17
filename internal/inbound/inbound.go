@@ -21,6 +21,8 @@ package inbound
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -103,6 +105,14 @@ type Receipt struct {
 	LastAt   time.Time
 	LastFrom string
 
+	// TestCount and LastTestAt record arrivals that were ACCEPTED AND
+	// DISCARDED because the hook was in test mode. Counted separately from
+	// Count so that "nothing real has ever arrived" stays answerable after a
+	// round of testing -- a test that quietly inflates the evidence of working
+	// is worse than no test.
+	TestCount  int64
+	LastTestAt time.Time
+
 	// Rejected counts arrivals that reached this hook's URL and were refused.
 	//
 	// THE DIAGNOSTIC THAT MAKES A CLOSED DOOR DEBUGGABLE. A caller gets a bare
@@ -124,6 +134,15 @@ type Receiver struct {
 
 	mu       sync.Mutex
 	receipts map[string]*Receipt
+
+	// testUntil is when each hook's test mode LAPSES.
+	//
+	// Runtime state rather than configuration, deliberately. Hooks are built
+	// when the daemon starts, so a config field would need a restart to arm
+	// and another to disarm -- which is most of the reason an operator would
+	// skip testing at all. It is also the safer place for it: a daemon restart
+	// clears test mode, where a config flag would survive one.
+	testUntil map[string]time.Time
 }
 
 // Options configure a Receiver.
@@ -143,7 +162,8 @@ func New(hooks []Hook, opts Options) *Receiver {
 	}
 	r := &Receiver{
 		hooks: hooks, emit: opts.Emit, now: opts.Now, logf: opts.Logf,
-		receipts: map[string]*Receipt{},
+		receipts:  map[string]*Receipt{},
+		testUntil: map[string]time.Time{},
 	}
 	for _, h := range hooks {
 		r.receipts[h.Name] = &Receipt{Name: h.Name, Product: h.Product}
@@ -204,10 +224,35 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		rec = &Receipt{Name: hook.Name, Product: hook.Product}
 		r.receipts[hook.Name] = rec
 	}
+	prevLastAt := rec.LastAt
 	rec.Count++
 	rec.LastAt = now
 	rec.LastFrom = clientIP(req)
+	testUntil := r.testArmedLocked(hook.Name, now)
 	r.mu.Unlock()
+
+	// TEST MODE: accepted, recorded, and deliberately NOT turned into an alarm.
+	//
+	// This exists so an operator can press "Test" in Alarm Manager and find out
+	// whether the rule they just wrote can actually reach this machine --
+	// without waking anybody, and without an incident to close afterwards.
+	// Proving the path works is otherwise indistinguishable from a real alarm,
+	// which is a good way to teach somebody to ignore the product.
+	//
+	// The console still gets its 204: as far as the rule is concerned this
+	// worked, which is exactly what is being tested.
+	if !testUntil.IsZero() {
+		r.mu.Lock()
+		rec.TestCount++
+		rec.LastTestAt = now
+		rec.Count-- // not a real arrival; see the Receipt comment
+		rec.LastAt = prevLastAt
+		r.mu.Unlock()
+		r.logf("hook %s: arrival accepted and discarded, test mode until %s",
+			hook.Name, testUntil.Format(time.RFC3339))
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 
 	// Answered immediately and unconditionally. The console is waiting on this
 	// response and will retry or mark the rule failed if it is slow -- and an
@@ -219,6 +264,136 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	r.emit(r.eventFor(hook, payload, now))
+}
+
+// DefaultTestWindow and MaxTestWindow bound how long a hook may stay in test
+// mode.
+//
+// TIME-BOXED, AND THAT IS THE SAFETY PROPERTY, not a convenience. A hook in
+// test mode accepts real alarms and throws them away. Left armed by somebody
+// who got distracted, it is a door sensor whose alarms go nowhere and a status
+// page that says everything is fine -- the precise failure this product was
+// written to make impossible. So it lapses on its own, it cannot be armed for
+// longer than an hour, and a daemon restart clears it.
+const (
+	DefaultTestWindow = 15 * time.Minute
+	MaxTestWindow     = time.Hour
+)
+
+// ErrNoSuchHook is returned for a hook name this receiver does not serve.
+var ErrNoSuchHook = errors.New("no hook by that name")
+
+// ArmTest puts a hook into test mode until the returned time.
+//
+// While armed, arrivals are authenticated, answered and counted -- and raise
+// no alarm. It is how an operator finds out whether the Alarm Manager rule
+// they just wrote can reach this machine, without waking anybody.
+func (r *Receiver) ArmTest(name string, d time.Duration) (time.Time, error) {
+	if d <= 0 {
+		d = DefaultTestWindow
+	}
+	if d > MaxTestWindow {
+		d = MaxTestWindow
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.knownLocked(name) {
+		return time.Time{}, fmt.Errorf("%w: %s", ErrNoSuchHook, name)
+	}
+	until := r.now().Add(d)
+	r.testUntil[name] = until
+	return until, nil
+}
+
+// DisarmTest ends test mode now, so a real alarm is a real alarm again.
+func (r *Receiver) DisarmTest(name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.knownLocked(name) {
+		return fmt.Errorf("%w: %s", ErrNoSuchHook, name)
+	}
+	delete(r.testUntil, name)
+	return nil
+}
+
+// TestArmedUntil reports when a hook's test mode lapses, or the zero time when
+// it is not armed.
+func (r *Receiver) TestArmedUntil(name string) time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.testArmedLocked(name, r.now())
+}
+
+// testArmedLocked returns the expiry when test mode is live, and clears a
+// lapsed one on the way past so it cannot linger in the map.
+func (r *Receiver) testArmedLocked(name string, now time.Time) time.Time {
+	until, ok := r.testUntil[name]
+	if !ok {
+		return time.Time{}
+	}
+	if !now.Before(until) {
+		delete(r.testUntil, name)
+		return time.Time{}
+	}
+	return until
+}
+
+func (r *Receiver) knownLocked(name string) bool {
+	for _, h := range r.hooks {
+		if h.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// FireTest raises the alarm this hook would raise, as if the console had
+// posted to it.
+//
+// THE OTHER HALF OF TESTING A HOOK, and a different question from ArmTest.
+// That one asks "can UniFi reach us"; this asks "and when it does, does
+// anybody's phone ring" -- which depends on the rule set, the severity, the
+// escalation ladder and every channel, none of which an arriving alarm
+// exercises until the night it matters.
+//
+// It goes through the REAL path: the same eventFor this receiver uses, into
+// the same sink, producing a real incident that really escalates and has to be
+// acknowledged. A test that took a shortcut past any of that would prove only
+// that the shortcut works.
+//
+// The entity id carries a /test suffix so the incident cannot merge into a
+// genuine alarm already open on the same hook, and the title says TEST so
+// nobody reads it as a real one at three in the morning.
+func (r *Receiver) FireTest(name string) (event.Event, error) {
+	r.mu.Lock()
+	var hook Hook
+	var found bool
+	for _, h := range r.hooks {
+		if h.Name == name {
+			hook, found = h, true
+			break
+		}
+	}
+	r.mu.Unlock()
+	if !found {
+		return event.Event{}, fmt.Errorf("%w: %s", ErrNoSuchHook, name)
+	}
+
+	now := r.now()
+	ev := r.eventFor(hook, payload{
+		Trigger: "operator test",
+		Message: "Raised deliberately from the interface to prove this hook's " +
+			"alarm reaches somebody. Nothing has happened at the site. It " +
+			"escalates like a real alarm, so acknowledge or close it when you " +
+			"have seen it arrive.",
+	}, now)
+	ev.Title = "TEST — " + ev.Title
+	ev.Entity.ID += "/test"
+
+	if r.emit != nil {
+		r.emit(ev)
+	}
+	return ev, nil
 }
 
 // match finds the hook for a token in constant time with respect to the token.
