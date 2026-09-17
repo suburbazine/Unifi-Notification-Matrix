@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/ntfy"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
@@ -71,8 +72,35 @@ func (c Config) Warnings() []string {
 	}
 	w = append(w, c.unavailableChannelWarnings()...)
 	w = append(w, c.voiceOnNoLadderWarning()...)
+	w = append(w, c.siteZoneWarning()...)
 	w = append(w, c.exposureWarnings()...)
 	return w
+}
+
+// siteZoneWarning reports a time zone this machine cannot resolve.
+//
+// quiet_hours.zone is also the clock every alert is ANNOUNCED in, so a bad one
+// matters even when quiet hours are switched off -- and that is exactly the
+// case QuietHours.Validate returns early on without looking. Times then fall
+// back to this machine's own clock, which is right when the machine sits at
+// the site and wrong when it is a server running on UTC: the voice channel
+// speaks a bare "at 3:14 PM" with no zone in it to give the game away.
+//
+// A warning rather than a problem. Falling back is survivable; refusing to
+// start over a mistyped zone, and delivering nothing at all, is not.
+func (c Config) siteZoneWarning() []string {
+	z := strings.TrimSpace(c.QuietHours.Zone)
+	if z == "" || c.QuietHours.Enabled {
+		// Enabled quiet hours already refuse a bad zone at startup, which is
+		// a better answer than this one.
+		return nil
+	}
+	if _, err := time.LoadLocation(z); err != nil {
+		return []string{fmt.Sprintf("quiet_hours.zone %q is not a time zone this "+
+			"machine knows, so the times in your alerts will use this machine's "+
+			"own clock rather than the site's", z)}
+	}
+	return nil
 }
 
 // unavailableChannelWarnings reports escalation rungs naming a channel that is

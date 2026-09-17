@@ -1631,7 +1631,16 @@ function renderQuietSection(body, ctx) {
   qf.appendChild(labelled("Enabled", check(q, "enabled")));
   qf.appendChild(labelled("Start (HH:MM)", bind(q, "start")));
   qf.appendChild(labelled("End (HH:MM)", bind(q, "end")));
-  qf.appendChild(labelled("Time zone (IANA name)", bind(q, "zone")));
+  // Worth saying that this is not only about quiet hours. It is also the
+  // clock every alert is announced in -- a voice call speaks a bare "at 3:14
+  // PM" with no zone in it -- and an operator whose quiet hours are switched
+  // off would otherwise have no reason to set it at all.
+  qf.appendChild(labelled("Time zone (IANA name)", bind(q, "zone"),
+    "The site's wall clock. Used for quiet hours AND for the times in your " +
+    "alerts, so set it even if quiet hours are off. Leave it blank and this " +
+    "machine's own clock is used, which is right when the machine sits at the " +
+    "site and wrong when it is a server in a datacentre running on UTC. " +
+    "Example: America/New_York."));
   qc.appendChild(qf);
   qc.appendChild(el("div", "note",
     "Held alerts are delivered when the window ends. Only severities whose " +

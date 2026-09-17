@@ -70,6 +70,28 @@ func (q QuietHours) location() (*time.Location, error) {
 	return time.LoadLocation(q.Zone)
 }
 
+// SiteLocation is the wall clock at the site being watched, for anything that
+// shows a person a time.
+//
+// Exported because quiet hours are not the only thing that needs it, and the
+// reason is the one written above: the daemon commonly runs on a server whose
+// clock is UTC while the site it watches is not. Times stored in UTC and
+// rendered without converting come out hours wrong -- a voice call that
+// announced an alarm four hours in the future, reported from a real
+// installation, with nothing in the spoken script to say which zone it meant.
+//
+// Falls back to the host's local zone, which is right on the ordinary case of
+// a machine sitting at the site it watches, and never fails: a bad zone here
+// must not stop an alarm going out. Quiet hours validates the same string at
+// startup and refuses a typo there, which is where an operator finds out.
+func (q QuietHours) SiteLocation() *time.Location {
+	loc, err := q.location()
+	if err != nil || loc == nil {
+		return time.Local
+	}
+	return loc
+}
+
 // Contains reports whether t falls inside the window.
 //
 // Start is inclusive and End is exclusive, so back-to-back windows neither

@@ -25,6 +25,16 @@ type Delivery struct {
 	ackURL string
 	signer *ack.Signer
 
+	// site is the wall clock where the cameras are, used for every time a
+	// channel shows a person.
+	//
+	// Times are stored in UTC, which is right for storage and for sorting,
+	// and they come back out of the store carrying UTC as their location. A
+	// channel that formats one without converting speaks UTC -- reported from
+	// a real installation as a voice call announcing an alarm four hours in
+	// the future, in a spoken script with no zone in it to give the game away.
+	site *time.Location
+
 	// broken records channels that were configured and could not be built.
 	//
 	// They used to abort the whole construction, which meant one malformed
@@ -58,6 +68,9 @@ func BuildDelivery(c *Config, onResult func(channel.Result)) (*Delivery, error) 
 		queues: map[string]*channel.Queue{},
 		broken: map[string]error{},
 		ackURL: c.Web.AckBaseURL,
+		// The operator already tells us this for quiet hours, and it means
+		// the same thing here: the site's wall clock, not the server's.
+		site: c.QuietHours.SiteLocation(),
 	}
 	if !c.Web.AckKey.IsZero() {
 		s, err := ack.NewSigner(c.Web.AckKey)
@@ -290,16 +303,30 @@ func (d *Delivery) alertFor(inc *incident.Incident, stage int) channel.Alert {
 		Severity:   inc.Severity,
 		Title:      inc.Title,
 		Body:       inc.Detail,
-		OpenedAt:   inc.OpenedAt,
-		At:         inc.OpenedAt,
+		OpenedAt:   d.inSiteZone(inc.OpenedAt),
+		At:         d.inSiteZone(inc.OpenedAt),
 		Stage:      stage,
 		Repeat:     inc.AlertCount,
 	}
 	if inc.LastAlertAt != nil {
-		a.At = *inc.LastAlertAt
+		a.At = d.inSiteZone(*inc.LastAlertAt)
 	}
 	a.AckURL = d.AckURL(inc, "")
 	return a
+}
+
+// inSiteZone converts a stored time into the site's wall clock.
+//
+// Done HERE, once, rather than in each channel: alertFor is the only place an
+// Alert is built, so every channel present and future gets it right, and none
+// of them has to know that the store hands back UTC. A channel that wants to
+// print the zone still can -- ntfy and Pushover do -- and it now prints the
+// site's rather than the server's.
+func (d *Delivery) inSiteZone(t time.Time) time.Time {
+	if t.IsZero() || d.site == nil {
+		return t
+	}
+	return t.In(d.site)
 }
 
 // AckURL builds the signed acknowledgement link for an incident.
