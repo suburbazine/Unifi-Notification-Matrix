@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 590" width="1280" height="590"
+     role="img" aria-labelledby="flowTitle flowDesc" font-family="system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif">
+  <title id="flowTitle">How an event becomes an acknowledged incident</title>
+  <desc id="flowDesc">Protect, Access and Network are read over a pinned TLS connection, alongside an
+  inbound webhook for the alarms no API exposes. A rule turns those events into one deduplicated
+  incident held in SQLite. Five severities — info, low, medium, high and critical — each carry an
+  escalation ladder that widens over time through ntfy, Pushover, email, a JSON webhook and finally
+  a phone call. An acknowledgement returns on its own listener and stops the ladder, but the
+  incident closes only when the condition itself clears.</desc>
+
+  <defs>
+    <marker id="fArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a9eff"/>
+    </marker>
+    <marker id="fArrowBack" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3ddc84"/>
+    </marker>
+    <style>
+      .n    { fill:#1c1f25; stroke:#2c313a; stroke-width:1.5; }
+      .hero { fill:#131c28; stroke:#4a9eff; stroke-width:1.75; }
+      .ack  { fill:#12211a; stroke:#3ddc84; stroke-width:1.75; }
+      .t    { fill:#e6e8ec; font-size:16px; font-weight:600; }
+      .s    { fill:#949bab; font-size:12.5px; }
+      .i    { fill:#cfd3da; font-weight:600; }
+      .sev  { fill:#949bab; font-size:12px; font-weight:600; }
+      .f    { fill:#6f7788; font-size:11.5px; font-style:italic; }
+      .k    { fill:#6f7788; font-size:11px; letter-spacing:.08em; }
+      .flow { stroke:#4a9eff; stroke-width:2; fill:none; }
+      .back { stroke:#3ddc84; stroke-width:1.75; fill:none; stroke-dasharray:6 5; }
+      .g    { fill:none; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="590" rx="14" fill="#14161a" stroke="#2c313a"/>
+
+  <text x="40" y="44" class="t" font-size="19">How an event becomes an acknowledged incident</text>
+  <text x="40" y="68" class="s">UniFi tells you once. This keeps telling you until somebody says they have seen it.</text>
+
+  <!-- ── 1. what UniFi gives you ───────────────────────────────── -->
+  <g transform="translate(40,104)">
+    <rect class="n" width="270" height="242" rx="10"/>
+    <g class="g" stroke="#4a9eff" transform="translate(18,20)">
+      <rect x="1" y="2" width="20" height="7" rx="2"/>
+      <rect x="1" y="13" width="20" height="7" rx="2"/>
+      <path d="M5 5.5 h0.01 M5 16.5 h0.01"/>
+    </g>
+    <text x="18" y="76" class="t">What UniFi gives you</text>
+    <text x="18" y="106" class="s"><tspan class="i">Protect</tspan> &#183; two sockets and a sweep</text>
+    <text x="18" y="128" class="s"><tspan class="i">Access</tspan> &#183; socket, log tail, polling</text>
+    <text x="18" y="150" class="s"><tspan class="i">Network</tspan> &#183; polling; it has no events</text>
+    <text x="18" y="172" class="s"><tspan class="i">Hooks</tspan> &#183; the alarms no API exposes</text>
+    <text x="18" y="222" class="f">TLS pinned to the console&#8217;s certificate.</text>
+  </g>
+
+  <!-- ── 2. one tracked incident ───────────────────────────────── -->
+  <g transform="translate(350,104)">
+    <rect class="hero" width="270" height="242" rx="10"/>
+    <g class="g" stroke="#4a9eff" transform="translate(18,20)">
+      <path d="M1 2 H21 L13.5 11.5 V21 L8.5 18 V11.5 Z"/>
+    </g>
+    <text x="18" y="76" class="t">One tracked incident</text>
+    <text x="18" y="106" class="s">A rule sets severity and a dedup key</text>
+    <text x="18" y="128" class="s">Fifty flaps collapse into one incident</text>
+    <text x="18" y="150" class="s">It re-alerts on its own schedule</text>
+    <text x="18" y="172" class="s">SQLite, so a restart loses nothing</text>
+    <text x="18" y="222" class="f">A clear is just another event.</text>
+    <text x="18" y="-8" class="k" fill="#4a9eff">THIS IS THE PRODUCT</text>
+  </g>
+
+  <!-- ── 3. escalation ─────────────────────────────────────────── -->
+  <g transform="translate(660,104)">
+    <rect class="n" width="270" height="242" rx="10"/>
+    <!-- Five treads, one per severity, each in that severity's own tone from
+         the interface (style.css, the badge.sev-* rules). The colour break
+         between low and medium is not decorative: it is exactly where the
+         default policies stop respecting quiet hours. The row below is its key. -->
+    <g class="g" stroke-width="2.6" transform="translate(18,19)">
+      <path d="M0 22 H6 V17"   stroke="#949bab"/>
+      <path d="M6 17 H12 V12"  stroke="#949bab"/>
+      <path d="M12 12 H18 V7"  stroke="#4a9eff"/>
+      <path d="M18 7 H24 V2"   stroke="#f0b429"/>
+      <path d="M24 2 H30"      stroke="#ff6b6b"/>
+    </g>
+    <text x="18" y="76" class="t">A ladder, not a ping</text>
+    <text x="18" y="106" class="sev"><tspan fill="#949bab">info</tspan> &#183; <tspan fill="#949bab">low</tspan> &#183; <tspan fill="#4a9eff">medium</tspan> &#183; <tspan fill="#f0b429">high</tspan> &#183; <tspan fill="#ff6b6b">critical</tspan></text>
+    <text x="18" y="128" class="s">Each rung widens who gets told</text>
+    <text x="18" y="150" class="s">Repeat and give-up, per severity</text>
+    <text x="18" y="172" class="s">The two quiet tiers respect quiet hours</text>
+    <text x="18" y="194" class="s">A failing rung never stops the climb</text>
+    <text x="18" y="222" class="f">Nothing here can stop the daemon.</text>
+  </g>
+
+  <!-- ── 4. reaching a human ───────────────────────────────────── -->
+  <g transform="translate(970,104)">
+    <rect class="n" width="270" height="242" rx="10"/>
+    <g class="g" stroke="#4a9eff" transform="translate(18,20)">
+      <circle cx="5" cy="11" r="3.5"/>
+      <circle cx="18" cy="4" r="3.5"/>
+      <circle cx="18" cy="18" r="3.5"/>
+      <path d="M8.2 9.3 L14.9 5.7 M8.2 12.7 L14.9 16.3"/>
+    </g>
+    <text x="18" y="76" class="t">Reaching a human</text>
+    <text x="18" y="106" class="s">ntfy &#183; Pushover &#183; email</text>
+    <text x="18" y="128" class="s">A JSON webhook, for what you run</text>
+    <text x="18" y="150" class="s">A Twilio call, if you put it on a rung</text>
+    <text x="18" y="172" class="s">A test that says what it actually did</text>
+    <text x="18" y="222" class="f">Each one sends and reports. Nothing more.</text>
+  </g>
+
+  <!-- forward flow -->
+  <g class="flow" marker-end="url(#fArrow)">
+    <path d="M316 225 H344"/>
+    <path d="M626 225 H654"/>
+    <path d="M936 225 H964"/>
+  </g>
+
+  <!-- the return path: the only thing that stops the ladder -->
+  <path class="back" marker-end="url(#fArrowBack)" d="M1105 354 V388 Q1105 404 1089 404 H993"/>
+  <path class="back" marker-end="url(#fArrowBack)" d="M603 404 H501 Q485 404 485 388 V362"/>
+
+  <g transform="translate(605,376)">
+    <rect class="ack" width="380" height="56" rx="10"/>
+    <g class="g" stroke="#3ddc84" transform="translate(18,17)">
+      <circle cx="11" cy="11" r="10"/>
+      <path d="M6 11 L10 15 L17 7"/>
+    </g>
+    <text x="52" y="27" class="t" font-size="15">Acknowledge</text>
+    <text x="52" y="45" class="s">One tap, no login, on a listener of its own.</text>
+  </g>
+
+  <text x="640" y="462" class="s" text-anchor="middle">
+    An acknowledgement stops the ladder. It does not close the incident &#8212;
+  </text>
+  <text x="640" y="480" class="s" text-anchor="middle">
+    that takes the condition clearing, which arrives as just another event.
+  </text>
+
+  <!-- what the path actually guarantees -->
+  <g transform="translate(40,506)">
+    <rect width="1200" height="44" rx="9" fill="#181b21" stroke="#2c313a"/>
+    <text x="18" y="27" class="s">
+      <tspan fill="#3ddc84">&#10003;</tspan><tspan> Every event, delivery and ack written down</tspan>
+      <tspan fill="#3a3f4a">&#160;&#160;&#124;&#160;&#160;</tspan>
+      <tspan fill="#3ddc84">&#10003;</tspan><tspan> Runs on your LAN &#8212; no account, no relay</tspan>
+      <tspan fill="#3a3f4a">&#160;&#160;&#124;&#160;&#160;</tspan>
+      <tspan fill="#3ddc84">&#10003;</tspan><tspan> A broken channel is reported, never fatal</tspan>
+      <tspan fill="#3a3f4a">&#160;&#160;&#124;&#160;&#160;</tspan>
+      <tspan fill="#3ddc84">&#10003;</tspan><tspan> A silent source becomes an incident itself</tspan>
+    </text>
+  </g>
+</svg>

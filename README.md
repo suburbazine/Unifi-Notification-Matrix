@@ -57,6 +57,10 @@ camera that went dark an hour before a break-in, it is the whole failure.
 **This turns a one-shot UniFi event into a tracked incident that keeps
 escalating until a human closes it.**
 
+<p align="center">
+  <img alt="How an event becomes an acknowledged incident: Protect, Access and Network are read over a pinned TLS connection, alongside an inbound webhook for the alarms no API exposes; a rule turns those events into one deduplicated incident held in SQLite; five severities — info, low, medium, high and critical — each carry an escalation ladder that widens over time through ntfy, Pushover, email, a JSON webhook and finally a phone call; an acknowledgement arrives on its own listener and stops the ladder, but the incident closes only when the condition itself clears" src="docs/images/flow.svg" width="100%">
+</p>
+
 ![The incident board: two critical alarms still escalating, one acknowledged but not cleared, and a delivery that is failing](docs/images/incidents.png)
 
 The board is the product. Note the third row: **acknowledged, and still open.**
