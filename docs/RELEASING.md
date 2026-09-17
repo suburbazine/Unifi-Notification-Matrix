@@ -132,6 +132,18 @@ The two outputs should be identical. In order of likelihood:
 - **`mod ... (devel)` instead of a version** — no VCS information reached the
   build at all. A `git worktree`, an export, or a source tarball does this.
   Use a real clone.
+- **The `mod` line reads `v0.0.0-<date>-<sha>` where the release says
+  `v0.1.3-0.<date>-<sha>`** — your clone has no TAGS. Go derives the main
+  module's version from the nearest semver tag it can reach and compiles it
+  into the binary, so a shallow or tagless clone produces different bytes from
+  identical source. `git clone --depth 1 --branch <tag>` is the usual way to
+  arrive here, and it is a tempting shortcut because it is much faster. Clone
+  normally and `git checkout` the tag, as above.
+
+  Note that a four-part tag such as `v0.1.2.1` is not valid semver, so Go
+  ignores it and bases the pseudo-version on the last three-part tag before it
+  — which is why a release tagged `v0.1.2.1` embeds a version derived from
+  `v0.1.3`. That is expected, and it is not evidence of anything being wrong.
 - **A different `go1.x.y` on the first line** — `.go-version` records the
   toolchain the release used, and it is kept on the **latest** patch of its
   line deliberately: CI runs `govulncheck`, and a Go patch release is the
