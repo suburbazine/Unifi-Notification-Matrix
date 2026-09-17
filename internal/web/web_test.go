@@ -1467,3 +1467,27 @@ func TestAnEmptyBannerLeavesEverythingGated(t *testing.T) {
 func ptrConsoles(v []consoleUpdate) *[]consoleUpdate { return &v }
 func ptrChannels(v channelsUpdate) *channelsUpdate   { return &v }
 func strPtr(v string) *string                        { return &v }
+
+// Found on a real installation. The operator put the public hostname they were
+// forwarding into the ack-only listener; the save was accepted, the restart
+// button restarted the service into a bind failure, and this interface went
+// down with it -- leaving no way to undo the edit from here.
+//
+// 192.0.2.1 is TEST-NET-1: reserved for documentation, so no machine running
+// this test has it.
+func TestASaveNamingAListenAddressThisMachineDoesNotHaveIsRefused(t *testing.T) {
+	cur := testConfig()
+	cur.Web.Listen = "0.0.0.0:8322"
+
+	next, _ := applyUpdate(cur, settingsUpdate{Web: webUpdate{
+		Listen:    "0.0.0.0:8322",
+		AckListen: strPtr("192.0.2.1:50001"),
+	}})
+	err := refusedBy(cur, next)
+	if err == nil {
+		t.Fatal("a save that would stop the service at its next start was accepted")
+	}
+	if !strings.Contains(err.Error(), "web.ack_base_url") {
+		t.Errorf("the refusal does not say where the address belongs instead:\n%s", err)
+	}
+}

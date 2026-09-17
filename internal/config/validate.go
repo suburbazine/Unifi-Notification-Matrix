@@ -477,16 +477,23 @@ func (c Config) validateWeb() Problems {
 	var p Problems
 	if _, _, err := net.SplitHostPort(c.Web.Listen); err != nil {
 		p = append(p, fmt.Sprintf("web.listen %q is not host:port", c.Web.Listen))
+	} else if msg := listenHostProblem("web.listen", c.Web.Listen); msg != "" {
+		p = append(p, msg)
 	}
 	if a := strings.TrimSpace(c.Web.AckListen); a != "" {
 		// "auto" and "host:auto" are legal: the port is chosen at first start
 		// and written back, so the value in the file is only briefly not an
-		// address.
-		if _, wantsRandom := WantsRandomAckPort(a); !wantsRandom {
+		// address. The HOST in "host:auto" is still bound, so it is checked.
+		if host, wantsRandom := WantsRandomAckPort(a); !wantsRandom {
 			if _, _, err := net.SplitHostPort(a); err != nil {
 				p = append(p, fmt.Sprintf("web.ack_listen %q is not host:port "+
 					"(or %q, to pick a port once and keep it)", a, AckListenAuto))
+			} else if msg := listenHostProblem("web.ack_listen", a); msg != "" {
+				p = append(p, msg)
 			}
+		} else if msg := listenHostProblem("web.ack_listen",
+			net.JoinHostPort(host, AckListenAuto)); msg != "" {
+			p = append(p, msg)
 		}
 	}
 
