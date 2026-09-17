@@ -162,7 +162,11 @@ func (w winManager) Uninstall() error {
 			}
 			time.Sleep(300 * time.Millisecond)
 		}
-		return s.Delete()
+		if err := s.Delete(); err != nil {
+			return err
+		}
+		removeEventLogSource()
+		return nil
 	})
 }
 
@@ -300,6 +304,7 @@ func RunAsService(fn func(context.Context) error) (bool, error) {
 	if err := svc.Run(Name, h); err != nil {
 		return true, fmt.Errorf("service: running under the SCM: %w", err)
 	}
+	reportStopToEventLog(h.err)
 	return true, h.err
 }
 

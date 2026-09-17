@@ -395,3 +395,83 @@ func TestOtherFailuresWhilePlacingTheBinaryDoNotAskForElevation(t *testing.T) {
 		t.Errorf("a non-permission failure asked for elevation: %v", err)
 	}
 }
+
+// Found on a real installation. A listen address the machine did not have
+// stopped the service at startup; the reason went to a stderr that under the
+// Windows service manager is nowhere, and the next start said only that the
+// previous run "did not shut down cleanly". The reason now travels in the
+// marker to the start that reports it.
+func TestARunThatStoppedWithAnErrorSaysWhy(t *testing.T) {
+	dir := t.TempDir()
+	m, _, err := Begin(dir, "1.0.0", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := errors.New("cannot listen on notifymatrix.example.com:50001 for acknowledgements: bind: the requested address is not valid in its context")
+	if err := m.Fail("1.0.0", t0, t0, cause); err != nil {
+		t.Fatal(err)
+	}
+
+	_, prev, err := Begin(dir, "1.0.0", t0.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prev == nil {
+		t.Fatal("a run that stopped with an error was reported as clean -- the service was down")
+	}
+	if got := CrashSummary(prev); got != "the previous run could not start" {
+		t.Errorf("CrashSummary() = %q", got)
+	}
+	detail := CrashDetail(prev)
+	for _, want := range []string{"could not start", "requested address is not valid", "not delivered"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("CrashDetail() does not mention %q:\n%s", want, detail)
+		}
+	}
+	if strings.Contains(detail, "did not shut down cleanly") {
+		t.Errorf("an error with a known cause was still described as an unexplained crash:\n%s", detail)
+	}
+}
+
+func TestAnErrorAfterRunningSaysHowLong(t *testing.T) {
+	dir := t.TempDir()
+	m, _, err := Begin(dir, "1.0.0", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Fail("1.0.0", t0, t0.Add(3*time.Hour), errors.New("store: disk full")); err != nil {
+		t.Fatal(err)
+	}
+	_, prev, _ := Begin(dir, "1.0.0", t0.Add(4*time.Hour))
+	if got := CrashSummary(prev); got != "the previous run stopped with an error" {
+		t.Errorf("CrashSummary() = %q", got)
+	}
+	if d := CrashDetail(prev); !strings.Contains(d, "3h0m0s") || !strings.Contains(d, "disk full.") {
+		t.Errorf("CrashDetail() does not say how long and why:\n%s", d)
+	}
+}
+
+// The heartbeat goroutine can outlive the moment the daemon decides to stop.
+// A late beat must not erase the reason.
+func TestAHeartbeatAfterFailKeepsTheReason(t *testing.T) {
+	dir := t.TempDir()
+	m, _, err := Begin(dir, "1.0.0", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = m.Fail("1.0.0", t0, t0, errors.New("the reason"))
+	_ = m.Heartbeat("1.0.0", t0, t0.Add(time.Minute))
+
+	_, prev, _ := Begin(dir, "1.0.0", t0.Add(time.Hour))
+	if prev == nil || prev.Error != "the reason" {
+		t.Errorf("a heartbeat after Fail erased the reason: %+v", prev)
+	}
+}
+
+// A crash with no recorded error is still described exactly as before.
+func TestACrashWithNoRecordedErrorIsUnchanged(t *testing.T) {
+	p := &PreviousRun{PID: 7, Version: "1.0.0", StartedAt: t0, Heartbeat: t0.Add(time.Minute)}
+	if got := CrashSummary(p); got != "the previous run did not shut down cleanly" {
+		t.Errorf("CrashSummary() = %q", got)
+	}
+}

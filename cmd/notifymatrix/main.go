@@ -378,7 +378,7 @@ Channels: ntfy, email, pushover, webhook.
 }
 
 // runDaemon is the supervised process.
-func runDaemon(ctx context.Context, dataDir string) error {
+func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	// ONE instance per data directory. The classic failure is a service and a
 	// logon task both running, both ingesting, both alerting -- on a product
 	// whose credibility depends on not crying wolf.
@@ -393,6 +393,21 @@ func runDaemon(ctx context.Context, dataDir string) error {
 	if err != nil {
 		return err
 	}
+	// From here on, WHY this run stopped survives it.
+	//
+	// Found on a real installation: a listen address this machine did not
+	// have stopped the service at startup, the reason went to a stderr that
+	// under the Windows service manager is nowhere, and the next start
+	// reported only that the previous run "did not shut down cleanly". The
+	// marker carries the reason to that next start; the audit record below
+	// puts it where the interface shows it.
+	defer func() {
+		if retErr != nil {
+			if err := marker.Fail(version, started, time.Now(), retErr); err != nil {
+				fmt.Fprintln(os.Stderr, "warning: could not record why this run stopped:", err)
+			}
+		}
+	}()
 
 	// Opened early: the crash report below is one of the entries that matters
 	// most, and it happens before anything else is up.
@@ -403,6 +418,22 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		return err
 	}
 	defer auditLog.Close()
+	// Registered after Close, so it runs before it.
+	running := false
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		summary := "could not start"
+		if running {
+			summary = "stopped with an error"
+		}
+		// context.Background: ctx may be the very thing that was cancelled.
+		_ = auditLog.Append(context.Background(), audit.Entry{
+			Kind: audit.KindService, Actor: "system", Summary: summary,
+			Fields: map[string]string{"error": retErr.Error()},
+		})
+	}()
 	_ = auditLog.Append(ctx, audit.Entry{
 		Kind: audit.KindService, Actor: "system",
 		Summary: fmt.Sprintf("started, version %s", version),
@@ -577,12 +608,17 @@ func runDaemon(ctx context.Context, dataDir string) error {
 		fmt.Fprintln(os.Stderr, "WARNING: "+service.CrashDetail(prev))
 		_ = auditLog.Append(ctx, audit.Entry{
 			Kind: audit.KindService, Actor: "system",
-			Summary: "the previous run did not shut down cleanly",
+			Summary: service.CrashSummary(prev),
 			Fields:  map[string]string{"detail": service.CrashDetail(prev)},
 		})
+		// Titled by the consequence, which is the same whatever the cause:
+		// it was down, and alarms raised meanwhile were not delivered.
+		title := "NotifyMatrix did not shut down cleanly"
+		if prev.Error != "" {
+			title = "NotifyMatrix was down after an error"
+		}
 		if _, err := engine.RaiseInternal(ctx, event.ConditionUncleanShutdown,
-			incident.SeverityHigh,
-			"NotifyMatrix did not shut down cleanly",
+			incident.SeverityHigh, title,
 			service.CrashDetail(prev)); err != nil {
 			fmt.Fprintln(os.Stderr, "         could not raise it as an incident:", err)
 		}
@@ -1118,6 +1154,7 @@ process elevates. This will do it for you, prompting if it has to:
 		}
 	}()
 
+	running = true
 	runErr := sched.Run(ctx)
 	stopIngest()
 	ingestDone.Wait()

@@ -191,7 +191,7 @@ var catalogue = []ConditionDoc{
 		"A source stopped being in contact with its console for longer than it promised.",
 		[]string{SurfaceInternal}},
 	{ConditionUncleanShutdown, GroupSelf,
-		"The daemon did not shut down cleanly last time, so alarms may have been missed while it was down.",
+		"The daemon did not shut down cleanly last time -- it crashed, or stopped with an error it recorded -- so alarms may have been missed while it was down.",
 		[]string{SurfaceInternal}},
 }
 

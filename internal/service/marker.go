@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,6 +29,11 @@ const MarkerFileName = "running.json"
 // stop in time.
 type RunMarker struct {
 	path string
+
+	// failed stops a late heartbeat overwriting the error Fail recorded. The
+	// heartbeat goroutine can outlive the moment the daemon decides to stop.
+	mu     sync.Mutex
+	failed bool
 }
 
 // PreviousRun is what was found on disk from the last start.
@@ -40,6 +47,16 @@ type PreviousRun struct {
 	// start is a configuration problem; one after six days is something else,
 	// and an operator should not have to guess which they have.
 	Heartbeat time.Time `json:"heartbeat"`
+
+	// Error is why the run stopped, when it stopped by returning one.
+	//
+	// Without it, a service that could not start at all was reported at the
+	// next start as having "not shut down cleanly" -- true, and useless: the
+	// reason was printed to a stderr that under the Windows service manager
+	// goes nowhere, and the operator was left with a stopped service and no
+	// account of why. The marker is the one thing guaranteed to survive to
+	// the next start, so the reason travels in it.
+	Error string `json:"error,omitempty"`
 }
 
 // Unclean reports how long the previous run lasted before dying. Zero when the
@@ -91,6 +108,12 @@ func Begin(dir, version string, now time.Time) (*RunMarker, *PreviousRun, error)
 }
 
 func (m *RunMarker) write(p PreviousRun) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.writeLocked(p)
+}
+
+func (m *RunMarker) writeLocked(p PreviousRun) error {
 	b, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return err
@@ -110,11 +133,37 @@ func (m *RunMarker) Heartbeat(version string, startedAt, now time.Time) error {
 	if m == nil {
 		return nil
 	}
-	return m.write(PreviousRun{
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failed {
+		return nil
+	}
+	return m.writeLocked(PreviousRun{
 		PID:       os.Getpid(),
 		Version:   version,
 		StartedAt: startedAt,
 		Heartbeat: now,
+	})
+}
+
+// Fail records why this run is stopping, and leaves the marker in place.
+//
+// In place, because a run that stopped with an error has NOT ended cleanly:
+// the service is down and alarms are going undelivered, which is exactly what
+// the next start must report. What changes is that the report can now say why.
+func (m *RunMarker) Fail(version string, startedAt, now time.Time, cause error) error {
+	if m == nil || cause == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failed = true
+	return m.writeLocked(PreviousRun{
+		PID:       os.Getpid(),
+		Version:   version,
+		StartedAt: startedAt,
+		Heartbeat: now,
+		Error:     cause.Error(),
 	})
 }
 
@@ -142,6 +191,21 @@ func (m *RunMarker) Path() string {
 	return m.path
 }
 
+// CrashSummary is the one-line headline for a previous unclean run.
+//
+// "Did not shut down cleanly" describes a crash. A run that returned an error
+// did something more specific, and a headline that said otherwise sent the
+// operator looking for a crash that never happened.
+func CrashSummary(p *PreviousRun) string {
+	if p != nil && p.Error != "" {
+		if p.Ran().Round(time.Second) == 0 {
+			return "the previous run could not start"
+		}
+		return "the previous run stopped with an error"
+	}
+	return "the previous run did not shut down cleanly"
+}
+
 // CrashDetail renders a previous unclean run for an incident body.
 func CrashDetail(p *PreviousRun) string {
 	if p == nil {
@@ -155,9 +219,17 @@ func CrashDetail(p *PreviousRun) string {
 	if p.Version != "" {
 		s += ", version " + p.Version
 	}
-	s += ") did not shut down cleanly."
-	if d := p.Ran(); d > 0 {
-		s += fmt.Sprintf(" It had been running for %s.", d.Round(time.Second))
+	d := p.Ran().Round(time.Second)
+	switch {
+	case p.Error != "" && d == 0:
+		s += ") could not start: " + sentence(p.Error)
+	case p.Error != "":
+		s += fmt.Sprintf(") stopped with an error after running for %s: %s", d, sentence(p.Error))
+	default:
+		s += ") did not shut down cleanly."
+		if d > 0 {
+			s += fmt.Sprintf(" It had been running for %s.", d)
+		}
 	}
 	if !p.Heartbeat.IsZero() {
 		s += fmt.Sprintf(" Last seen alive at %s.", p.Heartbeat.UTC().Format(time.RFC3339))
@@ -165,4 +237,14 @@ func CrashDetail(p *PreviousRun) string {
 	s += "\n\nAlarms raised while it was down were not delivered. " +
 		"Check the console's own event history for the gap."
 	return s
+}
+
+// sentence ends an error message with a full stop, so the next sentence does
+// not run into it.
+func sentence(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" || strings.HasSuffix(msg, ".") {
+		return msg
+	}
+	return msg + "."
 }
