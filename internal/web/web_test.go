@@ -301,9 +301,12 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 				ChannelsEnabled: []string{"ntfy"},
 				Hooks: []setup.HookState{{
 					Name: "wan", Product: "network",
-					// The URL carries the token. It must never reach a
-					// signed-out caller.
-					URL: "http://192.168.1.50:8322/hook/" + canary,
+					// The URL carries the token and the header carries the
+					// bearer. BOTH are credentials and neither may reach a
+					// signed-out caller -- and both must reach a signed-in one,
+					// or the operator cannot configure the Alarm Manager rule.
+					URL:    "http://192.168.1.50:8322/hook/" + canary,
+					Header: "Bearer " + canary,
 				}},
 			}
 		},

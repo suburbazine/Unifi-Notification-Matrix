@@ -1,8 +1,11 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -107,5 +110,68 @@ func TestAMissingChecklistIsReportedNotFatal(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"available":false`) {
 		t.Errorf("body = %s", body)
+	}
+}
+
+// A SIGNED-IN READER MUST ACTUALLY BE SHOWN THE HOOK CREDENTIALS.
+//
+// The negative is tested above: a signed-out reader never sees them. The
+// positive was not, and it failed in the place nobody looks -- the server sent
+// url, header_name and header_value, and app.js rendered neither the Setup
+// tab's hook list nor anything on the Webhooks card. So an operator who had
+// just created a hook in the interface was told by that same interface to
+// paste a URL it would not show them, and the only way to get it was
+// `notifymatrix setup` in a terminal, on the screen built so nobody has to
+// open one.
+func TestASignedInReaderIsGivenTheHookURLAndHeader(t *testing.T) {
+	h := newHarness(t)
+	h.setPassword(testPassword)
+	h.signIn()
+
+	_, body := h.do(http.MethodGet, "/api/checklist", nil)
+	var d struct {
+		Authenticated bool `json:"authenticated"`
+		Hooks         []struct {
+			Name        string `json:"name"`
+			URL         string `json:"url"`
+			HeaderName  string `json:"header_name"`
+			HeaderValue string `json:"header_value"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(body, &d); err != nil {
+		t.Fatal(err)
+	}
+	if !d.Authenticated {
+		t.Fatal("the harness did not sign in")
+	}
+	if len(d.Hooks) == 0 {
+		t.Fatal("no hooks in the checklist; this test is checking nothing")
+	}
+	for _, hk := range d.Hooks {
+		if hk.URL == "" {
+			t.Errorf("hook %q has no URL for a signed-in reader", hk.Name)
+		}
+		if hk.HeaderName == "" || hk.HeaderValue == "" {
+			t.Errorf("hook %q has no header for a signed-in reader", hk.Name)
+		}
+	}
+}
+
+// ...AND THE INTERFACE HAS TO RENDER WHAT THE SERVER SENDS.
+//
+// Every field below was served correctly and dropped on the floor by the
+// browser, which is a failure no API test can see: both halves passed while
+// the operator got nothing. This asserts the interface at least references
+// each field, so adding one to the response without rendering it fails here.
+func TestTheInterfaceRendersEveryHookFieldTheServerSends(t *testing.T) {
+	js, err := os.ReadFile(filepath.Join("assets", "app.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"url", "header_name", "header_value", "last_reject"} {
+		if !bytes.Contains(js, []byte(field)) {
+			t.Errorf("the checklist sends hook.%s and app.js never mentions it, "+
+				"so a signed-in operator is never shown it", field)
+		}
 	}
 }

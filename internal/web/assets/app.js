@@ -1002,6 +1002,15 @@ function refreshSetup() {
     }
     body.appendChild(banner);
 
+    // The hook credentials. The banner above promises these to a signed-in
+    // reader and nothing rendered them, so the only way to get the URL was
+    // `notifymatrix setup` in a terminal -- on the one screen built so that
+    // nobody has to open one. An operator who had just created a hook in the
+    // interface was told to paste a URL the interface would not show them.
+    if (d.hooks && d.hooks.length) {
+      body.appendChild(hooksCard(d.hooks, d.authenticated));
+    }
+
     (d.steps || []).forEach(function (s, i) {
       var card = el("div", "card");
       var head = el("div", "row");
@@ -1021,6 +1030,63 @@ function refreshSetup() {
       body.appendChild(card);
     });
   });
+}
+
+// hooksCard renders what an Alarm Manager rule needs: the URL, the header, and
+// whether anything has ever actually arrived through it.
+//
+// BOTH the URL and the header are credentials -- the token is in the path and
+// the bearer is in the header -- which is why the server only sends them to a
+// signed-in caller, and why they are rendered as selectable text rather than
+// as a link. A hook URL in browser history, in a referer, or in a chat window
+// where somebody pasted "the link" is a way to raise false alarms on this
+// installation.
+function hooksCard(hooks, authed) {
+  var card = el("div", "card");
+  card.appendChild(el("strong", "", "Inbound webhooks"));
+  card.appendChild(el("div", "muted small",
+    "Paste each URL and header into the matching UniFi Alarm Manager rule. " +
+    "No API can create those rules, so this is the only way the alarms they " +
+    "carry reach this product at all."));
+
+  hooks.forEach(function (h) {
+    var box = el("div", "card");
+    var head = el("div", "row");
+    head.appendChild(el("strong", "", h.name));
+    if (h.product) head.appendChild(badge(h.product, ""));
+    // Evidence beats configuration: a rule that looks perfect at the UniFi end
+    // and has never fired is the failure this panel exists to make visible.
+    if (h.count > 0) {
+      head.appendChild(badge(h.count + " received", "ok"));
+    } else {
+      head.appendChild(badge("nothing received yet", "warn"));
+    }
+    if (h.rejected > 0) head.appendChild(badge(h.rejected + " rejected", "crit"));
+    box.appendChild(head);
+
+    if (!authed) {
+      box.appendChild(el("div", "muted small",
+        "Sign in to see this hook's URL and header."));
+      card.appendChild(box);
+      return;
+    }
+
+    box.appendChild(el("div", "label", "URL"));
+    box.appendChild(el("pre", "cred", h.url || "(not available)"));
+    if (h.header_name) {
+      box.appendChild(el("div", "label", "Header"));
+      box.appendChild(el("pre", "cred", h.header_name + ": " + h.header_value));
+    }
+    box.appendChild(el("div", "note",
+      "Both are passwords. The header is not optional -- a URL travels through " +
+      "the console backup, browser history and every proxy log on the path, " +
+      "and a header does not."));
+    if (h.last_reject) {
+      box.appendChild(el("div", "msg err", "Last refusal: " + h.last_reject));
+    }
+    card.appendChild(box);
+  });
+  return card;
 }
 
 function statusClass(status) {
@@ -1546,12 +1612,12 @@ function firstOf(obj, key) {
 var HOOK_PRODUCTS = ["network", "protect", "access"];
 var HOOK_SEVERITIES = ["", "critical", "high", "medium", "low", "info"];
 
-function renderHooks(body, draft, conditions) {
+function renderHooks(body, draft, conditions, creds) {
   var hooks = draft.hooks || (draft.hooks = []);
   var card = el("div", "card");
   card.appendChild(el("div", "muted small",
     "One endpoint per Alarm Manager rule. Add it here, then paste its URL and " +
-    "header into the rule -- both are on the Setup tab."));
+    "header into the rule -- both are shown on the hook's own card below."));
 
   var panel = el("div");
   card.appendChild(panel);
@@ -1565,7 +1631,7 @@ function renderHooks(body, draft, conditions) {
         "here or not at all."));
     }
     hooks.forEach(function (h, idx) {
-      panel.appendChild(hookCard(h, idx, hooks, conditions, draw));
+      panel.appendChild(hookCard(h, idx, hooks, conditions, draw, creds || {}));
     });
     var bar = el("div", "formbar");
     var add = el("button", "act primary", "Add a hook");
@@ -1580,7 +1646,7 @@ function renderHooks(body, draft, conditions) {
   body.appendChild(card);
 }
 
-function hookCard(h, idx, hooks, conditions, redraw) {
+function hookCard(h, idx, hooks, conditions, redraw, creds) {
   var c = el("div", "card");
 
   var f = el("div", "fields");
@@ -1596,8 +1662,8 @@ function hookCard(h, idx, hooks, conditions, redraw) {
     f.appendChild(el("div", "note",
       "Renaming this hook issues new credentials and its current URL stops " +
       "working. The Alarm Manager rule would keep posting to the old one and " +
-      "those alarms would stop arriving, silently. Re-paste both from the " +
-      "Setup tab afterwards."));
+      "those alarms would stop arriving, silently. Re-paste the new URL and " +
+      "header from this card afterwards."));
   }
   f.appendChild(labelled("UniFi application", pick(h, "product", HOOK_PRODUCTS, null)));
   f.appendChild(labelled("What an arrival here means", pick(h, "condition", conditions, null)));
@@ -1612,7 +1678,42 @@ function hookCard(h, idx, hooks, conditions, redraw) {
 
   if (!ready) {
     c.appendChild(el("div", "note",
-      "Its URL and header are created when you save, and appear on the Setup tab."));
+      "Its URL and header are created when you save, and appear here afterwards."));
+  } else {
+    // Shown HERE, on the card for the hook it belongs to. It used to say
+    // "appear on the Setup tab", and the Setup tab did not render them either:
+    // the interface promised a credential in one place, pointed at another,
+    // and showed it in neither. The only way to get the URL was a terminal.
+    var cr = creds[(h.name || "").trim()];
+    if (cr && cr.url) {
+      c.appendChild(el("div", "label", "URL for the Alarm Manager rule"));
+      c.appendChild(el("pre", "cred", cr.url));
+      if (cr.header_name) {
+        c.appendChild(el("div", "label", "Header the rule must send"));
+        c.appendChild(el("pre", "cred", cr.header_name + ": " + cr.header_value));
+      }
+      // Evidence, not configuration. A rule that looks right at the UniFi end
+      // and has never fired is the failure this is here to make visible.
+      if (cr.count > 0) {
+        c.appendChild(el("div", "note",
+          cr.count + " alarm(s) have arrived through this hook."));
+      } else {
+        c.appendChild(el("div", "note",
+          "Nothing has arrived through this hook yet. Until something does, " +
+          "the rule at the UniFi end is unproven -- it can look perfectly " +
+          "correct there and deliver nothing."));
+      }
+      if (cr.rejected > 0) {
+        c.appendChild(el("div", "delivery-error",
+          cr.rejected + " request(s) were refused" +
+          (cr.last_reject ? ": " + cr.last_reject : "") +
+          ". That is usually the header being absent or wrong."));
+      }
+    } else {
+      c.appendChild(el("div", "note",
+        "Its URL and header exist. Save and restart the service if they are " +
+        "not shown here yet -- hooks are built when the daemon starts."));
+    }
   }
 
   // Regenerating is destructive in a way that is easy not to see coming: the
@@ -1631,7 +1732,7 @@ function hookCard(h, idx, hooks, conditions, redraw) {
       "This breaks the Alarm Manager rule pointing at the old URL. The console " +
       "will keep posting and this end will keep refusing, which looks like " +
       "nothing happening rather than like an error. Re-paste the new URL and " +
-      "header from the Setup tab afterwards."));
+      "header from this card afterwards."));
   }
 
   var bar = el("div", "formbar");
@@ -1718,14 +1819,26 @@ var webhookNotice = null;
 
 function refreshWebhooks() {
   var body = byId("webhooks-body");
-  api("GET", "api/settings").then(function (res) {
+  // The settings API deliberately never returns a hook's token -- it returns
+  // token_set, like every other credential -- so the URL an Alarm Manager rule
+  // needs is not in it. The checklist is the one endpoint that renders those,
+  // and only to a signed-in caller. Fetching both here means the URL is on the
+  // screen where the hook was CREATED, rather than on another tab the operator
+  // has to be told about.
+  Promise.all([api("GET", "api/settings"), api("GET", "/api/checklist")])
+    .then(function (both) {
+    var res = both[0], list = both[1];
     if (res.status === 401) { renderSignIn(body); return; }
     if (!res.ok) {
       clear(body);
       body.appendChild(el("div", "card err", res.data.error || "could not load webhooks"));
       return;
     }
-    renderWebhooksTab(body, res.data);
+    var creds = {};
+    if (list && list.ok && list.data && list.data.hooks) {
+      list.data.hooks.forEach(function (h) { creds[h.name] = h; });
+    }
+    renderWebhooksTab(body, res.data, creds);
     if (webhookNotice) {
       var n = el("div", webhookNotice.cls, webhookNotice.text);
       body.appendChild(n);
@@ -1734,7 +1847,7 @@ function refreshWebhooks() {
   });
 }
 
-function renderWebhooksTab(body, s) {
+function renderWebhooksTab(body, s, creds) {
   clear(body);
   var draft = JSON.parse(JSON.stringify(s));
 
@@ -1744,7 +1857,7 @@ function renderWebhooksTab(body, s) {
     "alarms are not readable by any API. They exist ONLY as Alarm Manager " +
     "rules that push to a URL, and no API can create those rules -- so these " +
     "endpoints are the only way those alarms reach this product at all."));
-  renderHooks(body, draft, s.hook_conditions || []);
+  renderHooks(body, draft, s.hook_conditions || [], creds || {});
 
   body.appendChild(el("h3", null, "Outgoing — we push to you"));
   body.appendChild(el("div", "note",

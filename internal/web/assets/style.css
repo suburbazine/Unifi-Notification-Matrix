@@ -121,6 +121,15 @@ textarea{min-height:7rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,
 .checkrow label{margin:0;white-space:nowrap}
 .checkrow input[type=checkbox]{margin:0}
 .note{font-size:12px;color:var(--muted);margin-top:4px}
+/* A credential meant to be selected and pasted, not read.
+   Wrapped rather than scrolled: a hook URL that runs off the edge of the box
+   gets half-copied, and half a token fails in a way that looks like the rule
+   is wrong at the UniFi end. */
+.cred{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:12px;background:var(--bg);border:1px solid var(--line);
+  border-radius:4px;padding:8px;margin:4px 0 8px;
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-all;
+  user-select:all}
 .formbar{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
 .signin{max-width:24rem}
 .msg{font-size:13px;margin-top:8px}
