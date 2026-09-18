@@ -2,6 +2,7 @@ package link
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ const PathPrefix = "/link/"
 
 // Routes served. Anything else under the prefix does not exist.
 const (
+	RoutePair      = "/link/pair"
 	RouteEvents    = "/link/v1/events"
 	RouteHeartbeat = "/link/v1/heartbeat"
 	RoutePing      = "/link/v1/ping"
@@ -25,6 +27,11 @@ const (
 // MaxEventBytes caps an event body. Generous for a typed envelope and far
 // short of anything that could exhaust memory on the operator's machine.
 const MaxEventBytes = 16 << 10
+
+// MaxPairBytes caps a pairing request. Smaller than an event: it carries a
+// code, a proof and a manifest, and a manifest big enough to need more than
+// this is one no operator was going to read anyway.
+const MaxPairBytes = 4 << 10
 
 // DefaultSeenFor is how long an accepted event id suppresses a retry of
 // itself. The peer's worst case in flight is seconds; an hour is free and
@@ -52,6 +59,15 @@ type Deps struct {
 
 	// Claim returns the capability claim for a peer, or nil if it holds none.
 	Claim func(slug string) *Claim
+
+	// Pairer offers and completes pairings. Nil means this build cannot pair,
+	// and /link/pair is then a 404 like anything else that does not exist.
+	Pairer *Pairer
+
+	// OnPaired persists a newly paired peer and its key. An error here fails
+	// the pairing: a peer that stored a credential this product did not would
+	// authenticate against nothing for ever after.
+	OnPaired func(ctx context.Context, p Peer, key []byte) error
 
 	// Forget releases an idempotency record for an event that was accepted
 	// and then failed to become an incident. Without it, a retry of an event
@@ -133,6 +149,14 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case RouteEvents, RouteHeartbeat, RoutePing:
+	case RoutePair:
+		// PAIRING IS NOT HMAC-AUTHENTICATED, because there is no key yet --
+		// that is what it exists to establish. It authenticates on the code
+		// proof instead, which binds this product's certificate fingerprint,
+		// and it is bounded, single-use and short-lived to make up for being
+		// the one route a stranger can reach.
+		rc.pair(w, r, now, deny)
+		return
 	default:
 		deny("", "no such route")
 		return
@@ -292,4 +316,57 @@ func (rc *Receiver) forget(ctx context.Context, linkID, eventID string) {
 		return
 	}
 	_ = rc.deps.Forget(ctx, linkID, eventID)
+}
+
+// pair completes a pairing exchange.
+//
+// Answers a bare 404 on every failure like every other route, for the same
+// reason: a caller that can tell "no pairing in progress" from "wrong code"
+// learns when an operator is standing at the screen. The operator's receipt
+// carries the real reason, and the fingerprint mismatch in particular needs to
+// reach them -- it means something is terminating TLS in between, which is a
+// completely different problem from a mistyped code.
+func (rc *Receiver) pair(w http.ResponseWriter, r *http.Request, now time.Time, deny func(string, string)) {
+	if rc.deps.Pairer == nil {
+		deny("", "this build cannot pair")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxPairBytes+1))
+	if err != nil || len(body) > MaxPairBytes {
+		deny("", "pairing body unreadable or over the limit")
+		return
+	}
+
+	var req PairRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		deny("", "malformed pairing request")
+		return
+	}
+
+	res, peer, err := rc.deps.Pairer.Complete(req)
+	if err != nil {
+		deny("", "pairing: "+err.Error())
+		return
+	}
+
+	if rc.deps.OnPaired != nil {
+		key, err := base64.StdEncoding.DecodeString(res.Key)
+		if err != nil {
+			deny("", "pairing: encoding the key: "+err.Error())
+			return
+		}
+		if err := rc.deps.OnPaired(r.Context(), peer, key); err != nil {
+			// The peer must NOT be told it paired. A peer holding a credential
+			// this product failed to store would authenticate against nothing
+			// for ever, and the operator would see a peer that pairs and never
+			// arrives.
+			deny("", "pairing: storing the peer: "+err.Error())
+			return
+		}
+	}
+
+	rc.record(Receipt{At: now, LinkID: res.LinkID, Route: r.URL.Path, Accepted: true})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(res)
 }
