@@ -340,6 +340,10 @@ On Windows the `.exe` is Authenticode-signed and timestamped
 from source and compare hashes yourself — are in
 [docs/RELEASING.md](docs/RELEASING.md).
 
+What changed in each release is in [CHANGELOG.md](CHANGELOG.md), and on the
+release page itself. Every release has an entry: the build refuses a tag
+without one.
+
 > Do not drop `--certificate-identity-regexp`. Without an identity constraint
 > cosign verifies a signature from *anyone*, which proves nothing about who
 > built your binary.

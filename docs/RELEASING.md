@@ -343,6 +343,19 @@ setting.
 
 ## 3. Cutting a release
 
+**Write the changelog entry first.** `CHANGELOG.md` needs a `## [1.2.3] — date`
+section before the tag exists, and the workflow refuses to build a tag without
+one:
+
+```bash
+$EDITOR CHANGELOG.md          # add the section, and the compare link at the foot
+scripts/changelog-section.sh v1.2.3   # what the release page will say
+git commit -am "Changelog for v1.2.3"
+git push
+```
+
+Then tag:
+
 ```bash
 git tag -a v1.2.3 -m "v1.2.3"
 git push origin v1.2.3
@@ -350,14 +363,30 @@ git push origin v1.2.3
 
 The workflow then:
 
-1. **verify** — `go vet` and `go test -count=2` on Linux *and* Windows. The
+1. **changelog** — extracts this version's section, and **fails if there is
+   not one**. It runs first, before anything is built, so a forgotten entry
+   costs a commit rather than a second trip through the signing approval and
+   a dead tag. The section becomes the top of the release notes.
+2. **verify** — `go vet` and `go test -count=2` on Linux *and* Windows. The
    secret store is a different implementation per OS, so both must run.
-2. **build** — `linux/amd64`, `linux/arm64`, `windows/amd64`, reproducibly.
-3. **sign-windows** — **pauses for your approval** (see below), then
+3. **build** — `linux/amd64`, `linux/arm64`, `windows/amd64`, reproducibly.
+4. **sign-windows** — **pauses for your approval** (see below), then
    Authenticode via Azure, then asserts the signature is `Valid` *and*
    timestamped before continuing.
-4. **release** — checksums, SLSA provenance, keyless cosign bundles, optional
+5. **release** — checksums, SLSA provenance, keyless cosign bundles, optional
    GPG, and a **draft** release.
+
+### Why the changelog is a gate rather than a habit
+
+Until 0.1.8 the release notes carried the verification instructions and nothing
+else, so the page told somebody how to check a binary was authentic without
+telling them what was in it. `generate_release_notes` does not fix that: commit
+subjects are written for this repository, not for somebody arriving at a
+download page, and half of them are about tests.
+
+An entry that is optional is an entry that gets skipped on exactly the release
+that most needed one — the rushed fix at the end of a long day. So it is
+checked by a job, and the job runs before the certificate is involved.
 
 The release is a draft on purpose: look at it before it is public.
 

@@ -36,6 +36,30 @@ jobs:
           go-version-file: .go-version
           cache: true
 
+      # The changelog extractor is a RELEASE GATE, so it must not be the thing
+      # that breaks at release time. Exercised here against whatever the newest
+      # section happens to be, on both platforms, because release.yml runs it
+      # on Linux and a maintainer runs it by hand on Windows.
+      #
+      # The negative half is the load-bearing one: an extractor that returns
+      # something for a version the file does not contain cannot gate anything,
+      # and that is the way this check would fail silently.
+      - name: the changelog extractor still works
+        shell: bash
+        run: |
+          newest=$(awk '/^## / { s=$0; sub(/^## /,"",s); sub(/^\[/,"",s); sub(/\].*$/,"",s); sub(/[[:space:]].*$/,"",s); print s; exit }' CHANGELOG.md)
+          if [ -z "$newest" ]; then
+            echo "CHANGELOG.md has no version heading at all" >&2
+            exit 1
+          fi
+          echo "newest section: $newest"
+          scripts/changelog-section.sh "$newest" > /dev/null
+          if scripts/changelog-section.sh 99.99.99 > /dev/null 2>&1; then
+            echo "the extractor returned a section for a version that is not in" >&2
+            echo "the file, so it cannot gate a release that forgot one" >&2
+            exit 1
+          fi
+
       - name: gofmt
         shell: bash
         run: |

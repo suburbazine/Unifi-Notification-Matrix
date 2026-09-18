@@ -16,6 +16,39 @@ env:
   CGO_ENABLED: 0
 
 jobs:
+  # THE CHANGELOG IS A RELEASE GATE, and it runs before anything is built.
+  #
+  # A release whose notes say only how to VERIFY the binary tells a downloader
+  # nothing about what they are installing, which is the state every release
+  # here was in until 0.1.8. Generated notes do not fix it: commit subjects are
+  # written for the repository, not for somebody arriving at a download page.
+  #
+  # Failing here rather than at publish time is the point. The alternative is
+  # discovering the omission after a human has already approved the signing
+  # certificate, at which point the cheap fix -- add a section, retag -- costs
+  # a second approval and leaves a dead tag behind.
+  changelog:
+    name: changelog
+    runs-on: ubuntu-latest
+    outputs:
+      section: ${{ steps.extract.outputs.section }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: extract this version's section
+        id: extract
+        env:
+          REF: ${{ inputs.tag || github.ref_name }}
+        run: |
+          section=$(scripts/changelog-section.sh "$REF")
+          echo "$section"
+          {
+            echo "section<<CHANGELOG_EOF"
+            echo "$section"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
   # Gate the release on the same checks CI runs. A signed broken binary is
   # worse than an unsigned one, because the signature is what persuades
   # somebody to run it.
@@ -39,7 +72,7 @@ jobs:
 
   build:
     name: build ${{ matrix.goos }}/${{ matrix.goarch }}
-    needs: verify
+    needs: [changelog, verify]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -209,7 +242,7 @@ jobs:
 
   release:
     name: sign, attest and publish
-    needs: [build, sign-windows]
+    needs: [changelog, build, sign-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release
@@ -328,6 +361,10 @@ jobs:
             dist/notifymatrix-*
             dist/SHA256SUMS*
           body: |
+            ## What changed
+
+            ${{ needs.changelog.outputs.section }}
+
             ## Verifying this release
 
             Every binary is signed. Verification instructions, including how to
