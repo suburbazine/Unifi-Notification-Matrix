@@ -53,8 +53,8 @@ jobs:
             exit 1
           fi
           echo "newest section: $newest"
-          scripts/changelog-section.sh "$newest" > /dev/null
-          if scripts/changelog-section.sh 99.99.99 > /dev/null 2>&1; then
+          bash scripts/changelog-section.sh "$newest" > /dev/null
+          if bash scripts/changelog-section.sh 99.99.99 > /dev/null 2>&1; then
             echo "the extractor returned a section for a version that is not in" >&2
             echo "the file, so it cannot gate a release that forgot one" >&2
             exit 1

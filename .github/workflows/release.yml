@@ -41,7 +41,7 @@ jobs:
         env:
           REF: ${{ inputs.tag || github.ref_name }}
         run: |
-          section=$(scripts/changelog-section.sh "$REF")
+          section=$(bash scripts/changelog-section.sh "$REF")
           echo "$section"
           {
             echo "section<<CHANGELOG_EOF"
