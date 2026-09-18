@@ -13,17 +13,28 @@ view against the release before them.
 
 ## [Unreleased]
 
-Entries land here as work merges, and the heading is renamed to the version on
-the day it ships — writing a release's section from scratch at tag time is how
-0.1.8 nearly went out with none.
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.1.10] — 2026-09-18
+
+**No functional change. There is no reason to upgrade to this from 0.1.9.**
+The binary behaves identically; what changed is a rule written down and a test
+that enforces it. Recorded as a release so the tag and the source agree, not
+because anything on your machine needs replacing.
 
 ### Changed
 
-- Backup file naming is now one rule rather than two habits, written down in
-  docs/DESIGN-RULES.md §4 and enforced by a test. A copy the product will
-  clean up ends `.previous`; a copy the operator owns is qualified by what it
-  restores into and ends `.bak`. No files were renamed — both existing names
-  already followed the rule, which had simply never been stated.
+- Backup file naming is now one rule rather than two undocumented habits,
+  stated in docs/DESIGN-RULES.md §4 and enforced by a test that walks the
+  source tree. A copy the product will clean up ends `.previous`; a copy the
+  operator owns is qualified by what it restores into and ends `.bak` — so
+  `notifymatrix.exe.previous` is deleted at the next successful start, while
+  `incidents.db.v1.bak` survives until you delete it.
+
+  No files were renamed and no paths changed. Both existing names already
+  followed the rule; what was missing was the rule.
 
 ## [0.1.9] — 2026-09-18
 
@@ -228,7 +239,8 @@ demo mode, and the signed reproducible release pipeline.
 They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
-[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.6...v0.1.7
