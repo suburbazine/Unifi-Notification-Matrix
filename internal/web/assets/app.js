@@ -1095,6 +1095,7 @@ var SETTINGS_SECTIONS = [
   { key: "consoles",   title: "Consoles",    icon: "camera" },
   { key: "channels",   title: "Channels",    icon: "bell" },
   { key: "webhooks",   title: "Webhooks",    icon: "link" },
+  { key: "link",       title: "Peer link",   icon: "plug" },
   { key: "escalation", title: "Escalation",  icon: "activity" },
   { key: "rules",      title: "Rules",       icon: "list" },
   { key: "quiet",      title: "Quiet hours", icon: "clock" },
@@ -1115,9 +1116,13 @@ function refreshSettings() {
   // Manager rule needs is not in it. The checklist is the one endpoint that
   // renders those, and only to a signed-in caller. Both are fetched so the
   // URL is on the screen where the hook is CREATED.
-  Promise.all([api("GET", "api/settings"), api("GET", "/api/checklist")])
+  // /api/link comes along for the ride rather than on its own poll: the
+  // pairing section is part of this page, and a second request that can fail
+  // separately would give it a second loading state to be in.
+  Promise.all([api("GET", "api/settings"), api("GET", "/api/checklist"),
+    api("GET", "/api/link")])
     .then(function (both) {
-    var res = both[0], list = both[1];
+    var res = both[0], list = both[1], lk = both[2];
     if (res.status === 401) {
       setLede("settings", "gear", "Change what it does.", "");
       settingsCtx = null;
@@ -1129,7 +1134,7 @@ function refreshSettings() {
       body.appendChild(errorState(res.data.error || "could not load settings", refreshSettings));
       return;
     }
-    renderSettings(body, res.data, hookCredsFrom(list));
+    renderSettings(body, res.data, hookCredsFrom(list), (lk.ok && lk.data) || {});
   });
 }
 
@@ -1154,12 +1159,12 @@ function refreshWebhooks() {
   });
 }
 
-function renderSettings(body, s, creds) {
+function renderSettings(body, s, creds, linkState) {
   clear(body);
   // A working copy: the inputs edit this, and this is what gets posted back
   // -- one section at a time.
   var draft = JSON.parse(JSON.stringify(s));
-  var ctx = { draft: draft, saved: s, creds: creds || {}, sections: {} };
+  var ctx = { draft: draft, saved: s, creds: creds || {}, link: linkState || {}, sections: {} };
   ctx.redraw = function (key) {
     var sc = ctx.sections[key];
     if (!sc) return;
@@ -1375,6 +1380,7 @@ var SECTION_RENDERERS = {
     renderRules(body, ctx.draft, s.conditions || [], s.entities || []);
   },
   quiet: renderQuietSection,
+  link: renderLinkSection,
   web: renderWebSection,
   password: renderPasswordSection
 };
@@ -1719,6 +1725,262 @@ function renderPasswordSection(body, ctx) {
   var pbar = el("div", "formbar"); pbar.appendChild(pbtn);
   pwc.appendChild(pbar); pwc.appendChild(pmsg);
   body.appendChild(pwc);
+}
+
+// ---- peer link ----
+
+// linkCountdown is the ticker under a live pairing code. Module level and
+// cleared before every redraw, because the section redraws on its own after
+// each action and two tickers on one code count down at twice the rate.
+var linkCountdown = null;
+function stopLinkCountdown() {
+  if (linkCountdown) { clearInterval(linkCountdown); linkCountdown = null; }
+}
+
+// refreshLink refetches pairing state and redraws only that section, so
+// offering a code does not throw away whatever else is typed on the page.
+function refreshLink() {
+  if (!settingsCtx) { refreshSettings(); return; }
+  api("GET", "/api/link").then(function (res) {
+    if (!settingsCtx) return;
+    settingsCtx.link = (res.ok && res.data) || {};
+    settingsCtx.redraw("link");
+  });
+}
+
+// renderLinkSection is the pairing click-path.
+//
+// It exists because the routes did not add up to a thing an operator could
+// do: a code could be generated with a signed-in POST and there was no button
+// anywhere, so the first pair of this product with another needed a terminal
+// and a hand-written request. A connector nobody can start is a connector
+// nobody has.
+function renderLinkSection(body, ctx) {
+  stopLinkCountdown();
+  var st = ctx.link || {};
+
+  // No listener is not a failure, and saying so in the language of failure
+  // would send somebody looking for a broken thing. There is simply nowhere
+  // for a peer to pair TO until an address is set.
+  if (!st.available) {
+    body.appendChild(callout(
+      "No peer link listener is running, so there is nowhere for another " +
+      "product to pair. Set a link address in Web below and restart, then " +
+      "come back here.", "info", "Nothing is listening"));
+    body.appendChild(el("div", "note",
+      "A peer link lets another Xtremission product -- Sentry, for door " +
+      "events -- raise incidents here instead of running its own alerting. " +
+      "It is optional and nothing depends on it."));
+    return;
+  }
+
+  // What the peer needs, and the fingerprint in full: it is the value the
+  // peer PINS, and a truncated one is something somebody pastes and then
+  // wonders about.
+  var where = el("div", "card");
+  where.appendChild(el("div", "card-title", "What the peer needs"));
+  where.appendChild(el("div", "label", "Address"));
+  where.appendChild(credRow(st.address || "", true));
+  where.appendChild(el("div", "label", "Certificate fingerprint (SHA-256)"));
+  where.appendChild(credRow(st.fingerprint || "", true));
+  where.appendChild(el("div", "note",
+    "The peer pins this fingerprint, and proves at pairing that it saw this " +
+    "exact certificate. That is what stops anything terminating TLS in " +
+    "between from pairing in your place, so hand it over the way you would a " +
+    "password -- and if the peer reports a different one, stop."));
+  body.appendChild(where);
+
+  body.appendChild(pairingCard(st));
+
+  // Who is paired, and -- the part that is otherwise invisible -- whether
+  // each one is actually serving what it claimed.
+  var peers = st.peers || [];
+  var pc = el("div", "card");
+  pc.appendChild(el("div", "card-title", "Paired products"));
+  if (!peers.length) {
+    pc.appendChild(el("div", "muted", "Nothing is paired."));
+  } else {
+    peers.forEach(function (p) { pc.appendChild(peerCard(p)); });
+  }
+  body.appendChild(pc);
+
+  body.appendChild(receiptsCard(st.receipts || []));
+}
+
+// pairingCard offers a code, or shows the one on offer with its clock.
+function pairingCard(st) {
+  var card = el("div", "card");
+  card.appendChild(el("div", "card-title", "Pair a product"));
+  var msg = el("div", "msg");
+  var bar = el("div", "formbar");
+
+  if (st.code) {
+    card.appendChild(el("div", "label", "Pairing code"));
+    card.appendChild(credRow(st.code, true));
+
+    var left = el("div", "note");
+    var secs = st.expires_seconds || 0;
+    // Counted down to the second rather than through age(), which rounds to
+    // the minute: the operator is typing this into another machine against a
+    // ten-minute clock, and "1m" covering anything from 61 to 119 seconds is
+    // the difference between finishing and starting again.
+    var mmss = function (n) {
+      var m = Math.floor(n / 60), sec = n % 60;
+      return m + ":" + (sec < 10 ? "0" : "") + sec;
+    };
+    var tick = function () {
+      left.textContent = secs > 0
+        ? "Expires in " + mmss(secs) + ". One use only."
+        : "Expired. Offer another.";
+      if (secs <= 0) { stopLinkCountdown(); refreshLink(); return; }
+      secs--;
+    };
+    tick();
+    stopLinkCountdown();
+    linkCountdown = setInterval(tick, 1000);
+    card.appendChild(left);
+
+    var cancel = el("button", "act danger", "Cancel this code");
+    cancel.type = "button";
+    cancel.addEventListener("click", function () {
+      cancel.disabled = true;
+      api("DELETE", "/api/link/code").then(function (res) {
+        cancel.disabled = false;
+        if (!res.ok) {
+          msg.className = "msg err";
+          msg.textContent = (res.data && res.data.error) || "that was refused";
+          return;
+        }
+        refreshLink();
+      });
+    });
+    bar.appendChild(cancel);
+  } else {
+    var offer = el("button", "act primary", "Offer a pairing code");
+    offer.type = "button";
+    offer.addEventListener("click", function () {
+      offer.disabled = true;
+      msg.className = "msg"; msg.textContent = "";
+      api("POST", "/api/link/code", {}).then(function (res) {
+        offer.disabled = false;
+        if (!res.ok) {
+          msg.className = "msg err";
+          msg.textContent = (res.data && res.data.error) || "that was refused";
+          return;
+        }
+        refreshLink();
+      });
+    });
+    bar.appendChild(offer);
+  }
+
+  card.appendChild(bar);
+  card.appendChild(msg);
+  // Said plainly, because every one of these is a way the pairing is not what
+  // the operator thinks it is.
+  card.appendChild(el("div", "note",
+    "Type the code into the other product along with the address and " +
+    "fingerprint above. It lasts ten minutes, works once, and is voided " +
+    "after five wrong answers. Pairing hands that product a credential that " +
+    "can raise alarms here and take over a capability, so give it out the " +
+    "way you would a password and cancel it if you change your mind."));
+  return card;
+}
+
+// peerCard is one paired product, and whether it is really serving.
+function peerCard(p) {
+  var card = el("div", "card");
+  var head = el("div", "row");
+  head.appendChild(el("span", "title", p.product));
+  if (p.capability) {
+    // Holding is NOT liveness, and this is the only place that difference is
+    // visible. A peer can be alive, heartbeating and unable to see a single
+    // door, and in that state every other indicator on this interface reads
+    // healthy -- which is exactly the state where nobody is watching.
+    head.appendChild(badge(p.holding
+      ? "serving " + p.capability
+      : "not serving " + p.capability, p.holding ? "ok" : "warn"));
+  }
+  card.appendChild(head);
+  if (p.capability && !p.holding) {
+    card.appendChild(el("div", "note", p.why
+      ? "Why: " + p.why + ". Until it serves again, this product's own " +
+        "sources are raising " + p.capability + " events as usual."
+      : "It has not taken the capability over yet, so this product's own " +
+        "sources are still raising " + p.capability + " events."));
+  }
+  var meta = el("div", "muted small",
+    p.link_id + " · " + p.conditions +
+    (p.conditions === 1 ? " condition" : " conditions"));
+  card.appendChild(meta);
+
+  var rm = el("button", "act danger", "Forget this product");
+  rm.type = "button";
+  var rmsg = el("div", "msg");
+  rm.addEventListener("click", function () {
+    if (!window.confirm(
+      "Forget \"" + p.product + "\"?\n\n" +
+      "Its credential is deleted here, so everything it sends from then on " +
+      "is refused and it cannot pair again without a new code. Any capability " +
+      "it was serving comes straight back to this product's own sources.")) {
+      return;
+    }
+    rm.disabled = true;
+    api("DELETE", "/api/link/peers/" + encodeURIComponent(p.product)).then(function (res) {
+      rm.disabled = false;
+      if (!res.ok) {
+        rmsg.className = "msg err";
+        rmsg.textContent = (res.data && res.data.error) || "that was refused";
+        return;
+      }
+      refreshLink();
+      refreshStatus();
+    });
+  });
+  var rbar = el("div", "formbar"); rbar.appendChild(rm);
+  card.appendChild(rbar);
+  card.appendChild(rmsg);
+  return card;
+}
+
+// receiptsCard is the reason a refusal is readable at all.
+//
+// The link port answers EVERY failure with a bare 404 and an empty body --
+// unknown link id, wrong signature, stale clock, replayed nonce, mismatched
+// fingerprint, absent route, all identical -- because an endpoint that tells
+// them apart tells an attacker which half to keep working on. That is right
+// on the wire and useless to the operator, who is then debugging a number.
+// This is the other side of the trade: the real reason, on a page that
+// already needs a password.
+function receiptsCard(rs) {
+  var card = el("div", "card");
+  card.appendChild(el("div", "card-title", "What peers have done here"));
+  if (!rs.length) {
+    card.appendChild(el("div", "muted",
+      "Nothing has reached the link listener yet. A peer that appears to be " +
+      "trying and is not here is not reaching this machine at all -- look at " +
+      "the address, the port and anything between."));
+    return card;
+  }
+  var t = table(["When", "Result", "Route", "Why"]);
+  t.className = "audit";
+  rs.forEach(function (r) {
+    var row = t.tBodies[0].insertRow();
+    if (!r.accepted) row.className = "is-err";
+    row.insertCell().textContent = stamp(r.at);
+    var rc = row.insertCell();
+    rc.appendChild(badge(r.accepted ? (r.duplicate ? "duplicate" : "accepted") : "refused",
+      r.accepted ? (r.duplicate ? "" : "ok") : "err"));
+    row.insertCell().textContent = r.route || "";
+    var why = row.insertCell();
+    why.appendChild(el("div", r.accepted ? "" : "audit-error",
+      r.reason || (r.accepted ? (r.link_id || "") : "")));
+    if (!r.accepted && r.link_id) why.appendChild(el("div", "muted small", r.link_id));
+  });
+  var sx = el("div", "scroll-x");
+  sx.appendChild(t);
+  card.appendChild(sx);
+  return card;
 }
 
 // ---- the rail ----
@@ -2657,6 +2919,10 @@ function landingTab() {
 }
 
 function selectTab(name, section) {
+  // The pairing code's clock belongs to a section that is about to be
+  // hidden. Left running it would keep ticking, expire, and refetch pairing
+  // state for a page nobody is looking at.
+  if (name !== "settings") stopLinkCountdown();
   state.tab = name;
   state.section = section || "";
   var want = name + (state.section ? "/" + state.section : "");

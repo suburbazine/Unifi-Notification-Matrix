@@ -29,6 +29,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -679,7 +680,15 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	// Held so the interface can offer a pairing code. Nil until the listener
 	// starts, which is also the honest answer: with no listener there is
 	// nowhere for a peer to pair TO.
-	var linkPairer *link.Pairer
+	//
+	// ATOMIC because the interface begins serving BEFORE this is set. The web
+	// listener comes up early on purpose -- an operator whose link listener
+	// fails to bind needs the page that can fix it -- so the pairing handlers
+	// can read this while the start-up path is still writing it. A plain
+	// pointer here is a data race with a very small window and a very bad
+	// failure, and the race detector would only find it under a request
+	// arriving in exactly that instant.
+	var linkPairer atomic.Pointer[link.Pairer]
 
 	supervisor, err := ingest.New(sources, ingest.Deps{
 		Handle: func(ctx context.Context, ev event.Event) error {
@@ -879,17 +888,46 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 					cfgMu.RLock()
 					defer cfgMu.RUnlock()
 					return current
-				}, linkPairer, time.Now())
+				}, linkPairer.Load(), time.Now())
 			},
 			LinkOfferCode: func() (string, time.Duration, error) {
-				if linkPairer == nil {
+				p := linkPairer.Load()
+				if p == nil {
 					return "", 0, errors.New("no peer link listener is running")
 				}
-				code, err := linkPairer.Offer()
+				code, err := p.Offer()
 				if err != nil {
 					return "", 0, err
 				}
 				return link.FormatCode(code), link.CodeTTL, nil
+			},
+			LinkCancelCode: func() {
+				if p := linkPairer.Load(); p != nil {
+					p.Cancel()
+				}
+			},
+			LinkUnpair: func(slug string) (bool, error) {
+				cfgMu.RLock()
+				next, capability, found := forgetPeer(current, slug)
+				cfgMu.RUnlock()
+				if !found {
+					return false, nil
+				}
+				if err := config.Save(dataDir, next); err != nil {
+					return false, err
+				}
+				cfgMu.Lock()
+				current = next
+				cfgMu.Unlock()
+
+				// The claim goes with the credential, and it goes NOW rather
+				// than at the next restart. Leaving it would keep this
+				// product's own source suppressed on behalf of a peer that has
+				// just been revoked -- so revoking would stop the peer's
+				// events and stop ours, and the doors would be watched by
+				// nobody while the page said a peer was holding them.
+				links.release(capability)
+				return true, nil
 			},
 			TestChannel: func(ctx context.Context, name string) (string, error) {
 				summary, err := delivery.Test(ctx, name)
@@ -1203,7 +1241,8 @@ process elevates. This will do it for you, prompting if it has to:
 				return err
 			}
 
-			linkPairer = link.NewPairer(fingerprint)
+			pairer := link.NewPairer(fingerprint)
+			linkPairer.Store(pairer)
 			linkRC := link.NewReceiver(linkDeps{
 				cfg: func() *config.Config { cfgMu.RLock(); defer cfgMu.RUnlock(); return current },
 				saveCfg: func(c *config.Config) error {
@@ -1223,7 +1262,7 @@ process elevates. This will do it for you, prompting if it has to:
 					return err
 				},
 				auditLog:  auditLog,
-				pairer:    linkPairer,
+				pairer:    pairer,
 				silentFor: peerSilentAfter,
 			}.build())
 

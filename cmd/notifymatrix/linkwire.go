@@ -41,6 +41,11 @@ const peerSilentAfter = 16 * time.Minute
 // here: an endpoint reachable from outside must not be able to grow memory.
 const maxReceipts = 200
 
+// shownReceipts is how many reach the interface. Enough to cover a pairing
+// attempt and the run of refusals that follow a misconfiguration, short enough
+// that the page stays a page.
+const shownReceipts = 25
+
 func newLinkState(peers []link.Peer) *linkState {
 	s := &linkState{claims: map[string]*link.Claim{}}
 	for _, p := range peers {
@@ -239,6 +244,13 @@ func (d linkDeps) storePeer(p link.Peer, key []byte) error {
 	if err := d.saveCfg(&next); err != nil {
 		return err
 	}
+
+	// The claim map was built from the config AT START, so a peer that pairs
+	// while this process is running has no claim to hold and its takeover
+	// would silently never happen -- alive, heartbeating, and not actually
+	// serving the capability it just claimed.
+	d.state.adopt(p.Manifest.Capability)
+
 	_ = d.auditLog.Append(context.Background(), audit.Entry{
 		Kind: audit.KindService, Actor: "link", Summary: "paired a peer",
 		Fields: map[string]string{
@@ -282,5 +294,68 @@ func (s *linkState) view(cfg func() *config.Config, p *link.Pairer, now time.Tim
 		}
 		out.Peers = append(out.Peers, v)
 	}
+
+	// Newest first, and bounded again here rather than trusted: the operator
+	// wants the refusal that just happened, not the first of two hundred.
+	rs := s.Receipts()
+	out.Receipts = []web.LinkReceiptView{}
+	for i := len(rs) - 1; i >= 0 && len(out.Receipts) < shownReceipts; i-- {
+		out.Receipts = append(out.Receipts, web.LinkReceiptView{
+			At: rs[i].At, LinkID: rs[i].LinkID, Route: rs[i].Route,
+			Accepted: rs[i].Accepted, Duplicate: rs[i].Duplicate,
+			Reason: rs[i].Reason,
+		})
+	}
 	return out
+}
+
+// release drops a capability's claim.
+//
+// Called when a peer is forgotten. Without it a peer that has just been
+// unpaired keeps its capability HELD until the next restart, and this
+// product's own source stays suppressed on behalf of something that can no
+// longer reach it -- the exact state the claim exists to prevent, arriving
+// through the door marked "revoke".
+func (s *linkState) release(capability string) {
+	if capability == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.claims, capability)
+}
+
+// adopt starts tracking a capability claimed by a peer that paired while this
+// process was running.
+//
+// newLinkState builds the map from the config as it was AT START, so without
+// this a freshly paired peer's claim would be nil until a restart: it could
+// send events and heartbeat, and the capability it claimed would never be
+// held. The peer would look entirely healthy and the takeover would silently
+// not happen.
+func (s *linkState) adopt(capability string) {
+	if capability == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.claims[capability] == nil {
+		s.claims[capability] = link.NewClaim(capability, 0)
+	}
+}
+
+// forgetPeer removes a peer from a configuration, returning the new
+// configuration and the capability that peer was claiming.
+func forgetPeer(cur *config.Config, slug string) (next *config.Config, capability string, found bool) {
+	n := *cur
+	n.Links = nil
+	for _, l := range cur.Links {
+		if strings.EqualFold(l.Slug, slug) {
+			capability = l.Capability
+			found = true
+			continue
+		}
+		n.Links = append(n.Links, l)
+	}
+	return &n, capability, found
 }

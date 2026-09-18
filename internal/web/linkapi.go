@@ -35,6 +35,28 @@ type LinkPairing struct {
 
 	// Peers is what is paired now.
 	Peers []LinkPeerView `json:"peers"`
+
+	// Receipts is what peers have actually done here, most recent first,
+	// INCLUDING every refusal and why.
+	//
+	// The link port answers every failure with a bare 404 -- unknown link id,
+	// bad signature, stale clock, replayed nonce, fingerprint mismatch, all
+	// identical -- because an endpoint that distinguishes them tells an
+	// attacker which half to keep working on. That is right on the wire and
+	// useless to an operator, who is then debugging a number. This is the
+	// other side of that trade: the real reason, on a page that already needs
+	// a password.
+	Receipts []LinkReceiptView `json:"receipts"`
+}
+
+// LinkReceiptView is one thing a peer did, as an operator needs to read it.
+type LinkReceiptView struct {
+	At        time.Time `json:"at"`
+	LinkID    string    `json:"link_id,omitempty"`
+	Route     string    `json:"route"`
+	Accepted  bool      `json:"accepted"`
+	Duplicate bool      `json:"duplicate,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
 }
 
 // LinkPeerView is one paired peer, as an operator needs to see it.
