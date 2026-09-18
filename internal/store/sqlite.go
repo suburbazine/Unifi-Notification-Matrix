@@ -82,6 +82,11 @@ type SQLite struct {
 	db   *sql.DB
 	path string
 
+	// snapshotPath and snapshotErr record what happened to the pre-upgrade
+	// copy taken by the last migration. See MigrationSnapshot.
+	snapshotPath string
+	snapshotErr  error
+
 	// writeMu serialises writers in Go rather than letting them collide in
 	// SQLite and unwind through the busy handler. SQLite allows exactly one
 	// writer regardless; taking the turn here means an event storm -- fifty
@@ -139,11 +144,17 @@ func Open(path string) (*SQLite, error) {
 	// Safe to retry: applyMigration re-reads user_version inside its own
 	// transaction, so a migration that another process committed in the
 	// meantime is a no-op rather than a duplicate CREATE TABLE.
-	if err := retryBusy(ctx, func() error { return migrate(ctx, db) }); err != nil {
+	var snapshot string
+	var snapshotErr error
+	if err := retryBusy(ctx, func() error {
+		var mErr error
+		snapshot, snapshotErr, mErr = migrate(ctx, db, path)
+		return mErr
+	}); err != nil {
 		db.Close()
 		return nil, err
 	}
-	return &SQLite{db: db, path: path}, nil
+	return &SQLite{db: db, path: path, snapshotPath: snapshot, snapshotErr: snapshotErr}, nil
 }
 
 // retryBusy runs fn, retrying while SQLite says the database is busy, until

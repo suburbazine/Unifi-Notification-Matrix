@@ -487,6 +487,23 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	}
 	defer db.Close()
 
+	// SAID AT THE MOMENT IT HAPPENS, because the operator will want it at a
+	// moment when this product may not be running. An upgrade that changes the
+	// schema cannot be undone -- the older build refuses a database newer than
+	// itself, on purpose -- so the copy taken on the way through is the only
+	// route back, and a path nobody was told about is not a route.
+	if snap, snapErr := db.MigrationSnapshot(); snapErr != nil {
+		fmt.Fprintln(os.Stderr, "WARNING: the database schema was upgraded and the "+
+			"snapshot taken first could not be written:", snapErr)
+		fmt.Fprintln(os.Stderr, "         The upgrade succeeded and this version is "+
+			"running normally. What you do not have is a way back to the previous "+
+			"version, which cannot open this database.")
+	} else if snap != "" {
+		fmt.Println("database schema upgraded; the version before it was saved to", snap)
+		fmt.Println("keep that file until you are satisfied with this version: the one " +
+			"before it cannot open the upgraded database")
+	}
+
 	upd := newUpdater(version)
 	// The binary a previous update replaced, cleaned up here rather than at
 	// the end of that update: at the end of an update the old file is still

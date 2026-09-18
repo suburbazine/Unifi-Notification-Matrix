@@ -17,6 +17,23 @@ Entries land here as work merges, and the heading is renamed to the version on
 the day it ships. Writing a release's section from scratch at tag time is how
 0.1.8 nearly went out with none.
 
+### Added
+
+- **A schema upgrade now takes a snapshot of the database first.** Upgrading is
+  a one-way door — an older build refuses a database newer than itself, on
+  purpose, because a downgrade that "mostly works" misreads live alarms — and
+  until now the only way back was a backup nobody had been told to take. The
+  copy is written beside the database as `incidents.db.v<schema>.bak`, named
+  for the schema it restores into, and the version that took it is printed at
+  startup.
+
+  Taken by the migration rather than by the updater, so it covers every route
+  in: the in-app updater, a replaced binary, a package manager, or somebody
+  running the new version by hand. A fresh install and an ordinary restart take
+  no copy. If the snapshot cannot be written the upgrade still proceeds and
+  says so loudly, because a missing backup costs a way back while refusing to
+  start costs the site its monitoring.
+
 ### Fixed
 
 - **The page header was not sticking.** `height:100%` on `body` made it exactly

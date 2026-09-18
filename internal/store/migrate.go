@@ -123,10 +123,14 @@ func latestVersion() int {
 // it is transactional, it costs no schema, and it is visible to an operator
 // running `sqlite3 incidents.db 'pragma user_version'` without knowing
 // anything about our table layout.
-func migrate(ctx context.Context, db *sql.DB) error {
+// migrate brings the schema up to date, and reports where it put the snapshot
+// it takes first. snapshotErr is returned separately from the migration's own
+// error because a snapshot that could not be written must NOT stop the daemon:
+// see MigrationSnapshot.
+func migrate(ctx context.Context, db *sql.DB, path string) (snapshot string, snapshotErr error, err error) {
 	var current int
 	if err := db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&current); err != nil {
-		return fmt.Errorf("store: read schema version: %w", err)
+		return "", nil, fmt.Errorf("store: read schema version: %w", err)
 	}
 
 	// Refuse a database written by a newer build rather than operating on it.
@@ -134,20 +138,31 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	// misread, and the rows in question are live alarms. Failing to start is
 	// loud; corrupting incident state is not.
 	if latest := latestVersion(); current > latest {
-		return fmt.Errorf(
+		return "", nil, fmt.Errorf(
 			"store: database schema is version %d but this build understands at most %d; "+
 				"it was written by a newer version of notifymatrix", current, latest)
 	}
+
+	// Nothing to do, so nothing to snapshot. The common case by far: this runs
+	// on every start, and almost every start is not an upgrade.
+	if current >= latestVersion() {
+		return "", nil, nil
+	}
+
+	// BEFORE the first migration, because after it the old schema is gone.
+	// A failure here is carried out rather than returned as the function's
+	// error: the upgrade still proceeds, and the operator is told.
+	snapshot, snapshotErr = snapshotBeforeMigrating(ctx, db, path, current)
 
 	for _, m := range migrations {
 		if m.version <= current {
 			continue
 		}
 		if err := applyMigration(ctx, db, m); err != nil {
-			return err
+			return snapshot, snapshotErr, err
 		}
 	}
-	return nil
+	return snapshot, snapshotErr, nil
 }
 
 // applyMigration runs one migration and its version bump in a single
