@@ -13,10 +13,18 @@ var now = time.Date(2026, 9, 18, 2, 42, 19, 0, time.UTC)
 func sentry() Peer {
 	return Peer{
 		Slug: "sentry",
-		Conditions: map[string]bool{
-			"sentry-credential-sweep": true,
-			"sentry-access-denied":    true,
-			"sentry-door-enforced":    true,
+		Manifest: Manifest{
+			Capability: "access",
+			Conditions: []ConditionSpec{
+				{Name: "sentry-credential-sweep", Meaning: "One identity refused at several doors.",
+					Severity: incident.SeverityCritical, Momentary: true},
+				{Name: "sentry-access-denied", Meaning: "A credential was refused during a watch.",
+					Severity: incident.SeverityHigh, Momentary: true},
+				{Name: "sentry-door-enforced", Meaning: "A door was found unlocked and locked again.",
+					Severity: incident.SeverityHigh, Momentary: true},
+				{Name: "sentry-blocked-locally", Meaning: "The machine is refusing outbound connections.",
+					Severity: incident.SeverityCritical, DemotesClaim: true},
+			},
 		},
 	}
 }
@@ -165,7 +173,7 @@ func TestAnEnvelopeFromAnotherProductIsRefused(t *testing.T) {
 	}
 
 	// ...and the same envelope against a doormatrix peer keys under its slug.
-	dm := Peer{Slug: "doormatrix", Conditions: sentry().Conditions}
+	dm := Peer{Slug: "doormatrix", Manifest: sentry().Manifest}
 	if err := e.Validate(dm); err != nil {
 		t.Fatalf("a doormatrix envelope was refused by a doormatrix peer: %v", err)
 	}

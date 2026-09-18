@@ -90,26 +90,6 @@ type Envelope struct {
 	Context map[string]any `json:"context,omitempty"`
 }
 
-// Peer is what the operator approved at pairing.
-type Peer struct {
-	// Slug names the product and becomes the event's source, so it is also the
-	// first segment of every dedup key this peer produces. Never hardcoded:
-	// this channel is meant to carry more than one product.
-	Slug string
-
-	// Conditions is the manifest the operator approved. A condition outside it
-	// is refused rather than bucketed, because a silent catch-all recreates the
-	// open vocabulary that a closed one exists to prevent -- and hides the
-	// peer's mapping bugs while it does so.
-	Conditions map[string]bool
-
-	// MaxSeverity optionally caps what this peer may claim. Empty means
-	// uncapped, which is the default: the cascade is the point. It exists
-	// because critical never gives up and quiet hours never apply to it, and
-	// that is a lot of power to hand across a network boundary.
-	MaxSeverity incident.Severity
-}
-
 var (
 	ErrVersion     = errors.New("link: unsupported envelope version")
 	ErrState       = errors.New("link: state must be raised or cleared")
@@ -153,7 +133,10 @@ func (e Envelope) Validate(p Peer) error {
 	default:
 		return fmt.Errorf("%w: %q", ErrState, e.State)
 	}
-	if !p.Conditions[e.Condition] {
+	// A condition outside the approved manifest is refused rather than
+	// bucketed: a silent catch-all recreates the open vocabulary a closed one
+	// exists to prevent, and hides the peer's mapping bugs while it does so.
+	if !p.Allows(e.Condition) {
 		return fmt.Errorf("%w: %q", ErrCondition, e.Condition)
 	}
 	sev := incident.Severity(e.Severity)
