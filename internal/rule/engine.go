@@ -61,6 +61,11 @@ type Engine struct {
 
 	// onDecision records what the engine concluded. Set via WithAuditHook.
 	onDecision func(Result, event.Event)
+
+	// loc is the site's zone, for rule windows. The daemon commonly runs on a
+	// server whose clock is UTC while the site it watches is not, so a window
+	// evaluated in the host's zone is active at the wrong hours.
+	loc *time.Location
 }
 
 // Option configures an Engine.
@@ -97,11 +102,21 @@ func New(store incident.Store, rules Set, opts ...Option) (*Engine, error) {
 	if err := rules.Validate(); err != nil {
 		return nil, fmt.Errorf("rule: %w", err)
 	}
-	e := &Engine{store: store, rules: rules, now: time.Now, newID: randomID}
+	e := &Engine{store: store, rules: rules, now: time.Now, newID: randomID, loc: time.Local}
 	for _, o := range opts {
 		o(e)
 	}
 	return e, nil
+}
+
+// WithLocation sets the zone that rule windows are evaluated in. Production
+// passes the site's configured zone; the default is the host's own clock.
+func WithLocation(loc *time.Location) Option {
+	return func(e *Engine) {
+		if loc != nil {
+			e.loc = loc
+		}
+	}
 }
 
 // SetRules replaces the rule set, for a config reload.
@@ -140,7 +155,7 @@ func (e *Engine) Handle(ctx context.Context, ev event.Event) (Result, error) {
 }
 
 func (e *Engine) handle(ctx context.Context, ev event.Event) (Result, error) {
-	d := e.ruleSet().Decide(ev)
+	d := e.ruleSet().DecideIn(ev, e.loc)
 	if d.Ignore {
 		return Result{Outcome: OutcomeIgnored, Decision: d}, nil
 	}

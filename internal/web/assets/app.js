@@ -3401,6 +3401,27 @@ function ruleCard(r, idx, rules, advanced, redraw, vocab, seen) {
   }
   c.appendChild(act);
 
+  // A window or a severity shift can be set in the configuration file and has
+  // no control here yet. Saying so matters: the editor round-trips both
+  // untouched, so without this line the rule would look simpler than it is --
+  // and picking "Treat it as" on a rule that shifts severity produces a
+  // refusal naming a shift the operator cannot see anywhere on the page.
+  if (r.window || r.elevate) {
+    var extra = [];
+    if (r.window) {
+      extra.push("active " + (r.window.start || "?") + "-" + (r.window.end || "?") +
+        " in the site's time zone; outside those hours this rule does nothing");
+    }
+    if (r.elevate) {
+      extra.push(r.elevate > 0
+        ? "raises severity by " + r.elevate + " tier" + (r.elevate === 1 ? "" : "s")
+        : "lowers severity by " + (-r.elevate) + " tier" + (r.elevate === -1 ? "" : "s"));
+    }
+    c.appendChild(el("div", "note",
+      "Set in the configuration file: " + extra.join("; ") +
+      ". Edit it there; this page leaves it alone."));
+  }
+
   if (r.ignore) {
     // The validator refuses a blanket ignore, and finding that out at save
     // time -- after filling the form in -- is worse than being told here.

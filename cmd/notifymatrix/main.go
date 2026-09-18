@@ -567,6 +567,8 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	}
 
 	engine, err := rule.New(db, cfg.Rules,
+		// Rule windows are clock times at the SITE, not on this machine.
+		rule.WithLocation(cfg.QuietHours.SiteLocation()),
 		rule.WithAuditHook(func(res rule.Result, ev event.Event) {
 			kind := map[rule.Outcome]audit.Kind{
 				rule.OutcomeOpened:   audit.KindIncidentOpened,

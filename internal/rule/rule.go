@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
@@ -39,6 +40,24 @@ type Rule struct {
 	// doorbell ring is noise in a warehouse and worth knowing about in a
 	// private house, and neither the source nor this product can decide that.
 	Severity incident.Severity `json:"severity,omitempty"`
+
+	// Elevate shifts the severity by whole tiers, clamped at the ends.
+	//
+	// A SHIFT rather than an absolute severity, because the useful statement
+	// is "out of hours everything matters one notch more" -- which as an
+	// absolute would need one rule per condition, each restating a severity
+	// somebody has to keep in step with the source. Negative values demote.
+	//
+	// Not a multiplier: severity here is five named tiers, not a number, and
+	// 1.5x of medium has no meaning.
+	Elevate int `json:"elevate,omitempty"`
+
+	// Window limits the rule to a daily span of clock time in the site's zone.
+	//
+	// It gates the WHOLE rule, not just the severity: outside it the rule does
+	// not apply at all. So it works for an ignore as readily as an elevation
+	// -- "ignore motion during opening hours" is one rule.
+	Window *Window `json:"window,omitempty"`
 
 	// Ignore drops matching events entirely.
 	Ignore bool `json:"ignore,omitempty"`
@@ -81,6 +100,27 @@ func (r Rule) Validate() error {
 	if r.Ignore && r.Severity != "" {
 		return fmt.Errorf("rule %q both ignores events and sets a severity; "+
 			"only one of those can be true", r.Name)
+	}
+	if r.Ignore && r.Elevate != 0 {
+		return fmt.Errorf("rule %q both ignores events and shifts their "+
+			"severity; only one of those can be true", r.Name)
+	}
+	// Setting an absolute severity AND shifting it is two answers to one
+	// question, and which wins would depend on field order in this function.
+	if r.Severity != "" && r.Elevate != 0 {
+		return fmt.Errorf("rule %q sets severity %q and also shifts it by %d; "+
+			"use one or the other", r.Name, r.Severity, r.Elevate)
+	}
+	// Four tiers is the whole ladder, so anything beyond it is a typo rather
+	// than an intention -- and a silent clamp would hide it.
+	if r.Elevate < -4 || r.Elevate > 4 {
+		return fmt.Errorf("rule %q shifts severity by %d; the ladder is five "+
+			"tiers, so the useful range is -4 to 4", r.Name, r.Elevate)
+	}
+	if r.Window != nil {
+		if err := r.Window.Validate(); err != nil {
+			return fmt.Errorf("rule %q: %w", r.Name, err)
+		}
 	}
 	return nil
 }
@@ -176,8 +216,23 @@ func (s Set) Validate() error {
 	return errors.Join(errs...)
 }
 
-// Decide applies the set to an event.
-func (s Set) Decide(e event.Event) Decision {
+// Decide applies the set to an event in the host's own time zone.
+//
+// Callers that know the site's zone should use DecideIn: the daemon commonly
+// runs on a server whose clock is UTC while the site it watches is not, and a
+// window evaluated in the wrong zone is active at the wrong hours.
+func (s Set) Decide(e event.Event) Decision { return s.DecideIn(e, time.Local) }
+
+// DecideIn applies the set to an event, evaluating any rule windows in loc.
+func (s Set) DecideIn(e event.Event, loc *time.Location) Decision {
+	if loc == nil {
+		loc = time.Local
+	}
+	at := e.At
+	if at.IsZero() {
+		at = e.ReceivedAt
+	}
+	at = at.In(loc)
 	d := Decision{Severity: e.Severity}
 	if !d.Severity.Valid() {
 		// A source that proposed nothing usable gets a floor rather than a
@@ -190,6 +245,12 @@ func (s Set) Decide(e event.Event) Decision {
 		if !r.Matches(e) {
 			continue
 		}
+		if r.Window != nil && !r.Window.Contains(at) {
+			// Outside its hours the rule does not apply at all, and does not
+			// appear in MatchedBy either: the audit record answers "why did
+			// this alert happen", and a rule that did nothing is not an answer.
+			continue
+		}
 		d.MatchedBy = append(d.MatchedBy, r.Name)
 		if r.Ignore {
 			d.Ignore = true
@@ -198,6 +259,37 @@ func (s Set) Decide(e event.Event) Decision {
 		if r.Severity != "" {
 			d.Severity = r.Severity
 		}
+		if r.Elevate != 0 {
+			d.Severity = shiftSeverity(d.Severity, r.Elevate)
+		}
 	}
 	return d
+}
+
+// severityLadder is the order tiers shift along, quietest first.
+var severityLadder = []incident.Severity{
+	incident.SeverityInfo, incident.SeverityLow, incident.SeverityMedium,
+	incident.SeverityHigh, incident.SeverityCritical,
+}
+
+// shiftSeverity moves a severity by whole tiers, clamped at both ends.
+func shiftSeverity(sev incident.Severity, by int) incident.Severity {
+	at := -1
+	for i, s := range severityLadder {
+		if s == sev {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return sev
+	}
+	next := at + by
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(severityLadder) {
+		next = len(severityLadder) - 1
+	}
+	return severityLadder[next]
 }
