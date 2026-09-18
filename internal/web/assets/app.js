@@ -1966,6 +1966,8 @@ var LINK_CAUSES = {
   "no-peer-for-link": "It authenticated against a credential with no product behind it. That should not be possible; tell somebody.",
   "malformed-envelope": "It authenticated and then sent something that is not an event.",
   "invalid-envelope": "It sent a condition or severity outside the manifest you approved. It is claiming something it did not declare.",
+  "envelope-version": "It speaks a different version of the link protocol. Nothing is wrong with your setup; one of the two products needs upgrading.",
+  "over-the-rate-limit": "It sent far more in a minute than any working peer does. Nothing is lost — it will retry — but something on that end is looping, or somebody has a credential they should not.",
   "store-failed": "This machine could not record the event id. The peer will retry.",
   "ingest-failed": "This machine could not take the event. It was refused so the peer retries rather than assuming it landed.",
   "pairing-unavailable": "Pairing is not possible on this build.",

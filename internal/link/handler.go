@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -123,7 +124,8 @@ type Receipt struct {
 
 // Receiver serves the link routes.
 type Receiver struct {
-	deps Deps
+	deps    Deps
+	limiter *limiter
 }
 
 // NewReceiver builds the handler.
@@ -137,7 +139,7 @@ func NewReceiver(d Deps) *Receiver {
 	if d.Verifier == nil {
 		d.Verifier = NewVerifier()
 	}
-	return &Receiver{deps: d}
+	return &Receiver{deps: d, limiter: newLimiter()}
 }
 
 // reply is the bounded response a peer parses.
@@ -233,6 +235,14 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// AFTER authentication, never before: see limiter. A limit keyed on the
+	// header would let anybody who can reach the port exhaust a real peer's
+	// allowance and silence the doors from outside.
+	if !rc.limiter.allow(cred.LinkID, now, PerPeerRate, RateWindow) {
+		deny(cred.LinkID, CauseRateLimited, ErrRateLimited.Error())
+		return
+	}
+
 	peer, ok := rc.peer(cred.LinkID)
 	if !ok {
 		// Authenticated against a credential with no peer behind it. Should be
@@ -264,7 +274,14 @@ func (rc *Receiver) events(w http.ResponseWriter, r *http.Request, cred Credenti
 		return
 	}
 	if err := env.Validate(peer); err != nil {
-		deny(cred.LinkID, CauseInvalidEnvelope, err.Error())
+		// A version mismatch is somebody's upgrade; everything else here is a
+		// peer claiming something it did not declare. Labelled apart because
+		// the operator does a different thing about each.
+		cause := CauseInvalidEnvelope
+		if errors.Is(err, ErrVersion) {
+			cause = CauseEnvelopeVersion
+		}
+		deny(cred.LinkID, cause, err.Error())
 		return
 	}
 

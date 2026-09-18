@@ -36,12 +36,24 @@ const (
 	CauseReplay         Cause = "replayed-nonce"
 	CauseNonceFull      Cause = "nonce-table-full"
 	CauseNoPeer         Cause = "no-peer-for-link"
+	CauseRateLimited    Cause = "over-the-rate-limit"
 
 	// The request authenticated and its contents did not hold up.
 	CauseMalformedEnvelope Cause = "malformed-envelope"
 	CauseInvalidEnvelope   Cause = "invalid-envelope"
-	CauseStore             Cause = "store-failed"
-	CauseIngest            Cause = "ingest-failed"
+
+	// CauseEnvelopeVersion is split out from CauseInvalidEnvelope because the
+	// two need opposite responses. An invalid envelope is a peer claiming
+	// something it did not declare, which is the operator's business. A
+	// version mismatch is two builds that do not speak the same protocol,
+	// which is somebody's upgrade. Merged, the wall of refusals says "your
+	// peer is misbehaving" about a peer that is merely older.
+	//
+	// Split after the first live pairing, where every event was refused for
+	// this and the label said only "invalid-envelope".
+	CauseEnvelopeVersion Cause = "envelope-version"
+	CauseStore           Cause = "store-failed"
+	CauseIngest          Cause = "ingest-failed"
 
 	// Pairing, which is the one route a stranger can reach.
 	CausePairUnavailable Cause = "pairing-unavailable"
@@ -141,7 +153,9 @@ func AllCauses() []Cause {
 		CauseMethod, CauseNoRoute, CauseBodyUnreadable, CauseBodyTooLarge,
 		CauseUnsigned, CauseMalformedAuth, CauseUnknownLink, CauseBadSignature,
 		CauseClockSkew, CauseReplay, CauseNonceFull, CauseNoPeer,
-		CauseMalformedEnvelope, CauseInvalidEnvelope, CauseStore, CauseIngest,
+		CauseRateLimited,
+		CauseMalformedEnvelope, CauseInvalidEnvelope, CauseEnvelopeVersion,
+		CauseStore, CauseIngest,
 		CausePairUnavailable, CausePairBody, CausePairNoneOffered,
 		CausePairExpired, CausePairUsed, CausePairVoided, CausePairBadProof,
 		CausePairFingerprint, CausePairManifest, CausePairStore,

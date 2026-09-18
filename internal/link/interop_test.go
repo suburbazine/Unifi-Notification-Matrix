@@ -4,8 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // THE CROSS-IMPLEMENTATION VECTOR.
@@ -116,5 +118,108 @@ func TestOurConstructionAgreesWithConsoleCastAndOurTagDoesNot(t *testing.T) {
 	if got := Sign(key, canonical(canonicalTag)); got == wantCast {
 		t.Errorf("a Console Cast signature verifies under the Link tag %q: "+
 			"the two channels are not separated", canonicalTag)
+	}
+}
+
+// THE VECTORS ABOVE PROVE NOTHING ABOUT THE PAYLOAD, and that gap cost the
+// first live pairing every single event.
+//
+// A signature is computed over the body's BYTES. The body is opaque to it, so
+// a vector can agree perfectly while the two ends disagree about what the
+// bytes mean. Sentry's vector body says "v":1; this product's envelope field
+// is "link_version". Both implementations reproduced each other's signature,
+// both were told interop was proved, and the first real event was refused for
+// a field neither vector had ever looked at.
+//
+// Pinned as a DIFFERENCE, which is the only shape of test that keeps working:
+// one asserting the right thing stays right is satisfied by an implementation
+// that cannot tell the two apart.
+func TestASignatureVectorSaysNothingAboutTheEnvelopeSchema(t *testing.T) {
+	// The exact body from Sentry's vector, which we sign identically.
+	const vectorBody = `{"v":1,"event_id":"11111111-2222-3333-4444-555555555555",` +
+		`"dedup_key":"sentry/d540df0c/sentry-credential-sweep","state":"raised",` +
+		`"condition":"sentry-credential-sweep","severity":"critical",` +
+		`"title":"Credential sweep: test","detail":"test vector"}`
+
+	var env Envelope
+	if err := json.Unmarshal([]byte(vectorBody), &env); err != nil {
+		t.Fatalf("the vector body is not even JSON: %v", err)
+	}
+	if env.LinkVersion == Version {
+		t.Fatal("the vector body now carries link_version, so this test no longer " +
+			"demonstrates the gap it was written for -- check whether the schema " +
+			"vector below has replaced it")
+	}
+	if err := env.Validate(sentry()); err == nil {
+		t.Error("a body we sign byte-for-byte identically also validates as an " +
+			"envelope; if that is genuinely true now, this test should be deleted " +
+			"rather than left asserting a gap that has closed")
+	}
+}
+
+// THE SCHEMA VECTOR. What the signature vectors could not say.
+//
+// Every field name here is the wire name a peer must send, checked against the
+// validator rather than against a note. A rename that a peer was not told
+// about fails here, which is where the first live pairing should have failed
+// rather than at somebody's daemon.
+func TestACompleteEnvelopeValidatesUnderTheWireFieldNames(t *testing.T) {
+	const body = `{
+		"link_version": 1,
+		"product": "sentry",
+		"product_version": "0.1.9",
+		"site_id": "default",
+		"event_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"sent_at": "2026-09-18T06:45:00Z",
+		"occurred_at": "2026-09-18T06:44:58Z",
+		"state": "raised",
+		"condition": "sentry-credential-sweep",
+		"severity": "critical",
+		"title": "Credential sweep",
+		"detail": "sixteen denials by one identity in a minute",
+		"entity": {"kind": "identity", "id": "test-actor-1", "name": "T"},
+		"actor": {"kind": "identity", "id": "test-actor-1", "name": "T"},
+		"dedup_key": "sentry/test-actor-1/sentry-credential-sweep",
+		"context": {"denials": 16}
+	}`
+
+	var env Envelope
+	if err := json.Unmarshal([]byte(body), &env); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Validate(sentry()); err != nil {
+		t.Fatalf("an envelope written with the documented wire names was refused: %v", err)
+	}
+
+	// The three that were actually absent in the first live attempt, each
+	// checked alone so a peer fixing one is not told about the next only after
+	// another round trip.
+	for _, missing := range []struct {
+		name string
+		drop func(*Envelope)
+	}{
+		{"link_version", func(e *Envelope) { e.LinkVersion = 0 }},
+		{"product", func(e *Envelope) { e.Product = "" }},
+		{"site_id", func(e *Envelope) { e.SiteID = "" }},
+		{"event_id", func(e *Envelope) { e.EventID = "" }},
+		{"title", func(e *Envelope) { e.Title = "" }},
+		{"entity.id", func(e *Envelope) { e.Entity.ID = "" }},
+		{"sent_at", func(e *Envelope) { e.SentAt = time.Time{} }},
+	} {
+		t.Run("without "+missing.name, func(t *testing.T) {
+			var e Envelope
+			if err := json.Unmarshal([]byte(body), &e); err != nil {
+				t.Fatal(err)
+			}
+			missing.drop(&e)
+			if err := e.Validate(sentry()); err == nil {
+				t.Errorf("an envelope with no %s was accepted", missing.name)
+			}
+		})
+	}
+
+	// And the tripwire holds: the key in the body is the one we compute.
+	if got := env.dedupKeyFor(sentry()); got != env.DedupKey {
+		t.Errorf("computed dedup key %q, envelope says %q", got, env.DedupKey)
 	}
 }
