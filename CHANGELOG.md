@@ -13,9 +13,14 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+**The next release is 0.2.0**, decided by the operator on 2026-09-18 rather
+than derived from what happens to land here. The 0.1 line has run from the
+first working product to a paired first-party integration; the next one starts
+a new minor line regardless of whether its contents look like a patch.
+
+Entries land here as work merges, and the heading is renamed to the version on
+the day it ships — writing a release's section from scratch at tag time is how
+0.1.8 nearly went out with none.
 
 ## [0.1.10] — 2026-09-18
 

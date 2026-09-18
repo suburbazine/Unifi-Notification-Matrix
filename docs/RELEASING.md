@@ -343,6 +343,11 @@ setting.
 
 ## 3. Cutting a release
 
+**Check what the next version number is** before anything else. `CHANGELOG.md`'s
+`## [Unreleased]` section says so when it has been decided in advance, which is
+the only place that decision survives between sessions. Do not infer it from
+the size of the diff.
+
 **Write the changelog entry as the work merges**, under `## [Unreleased]`, not
 on the day you tag. Writing a whole section from memory at tag time is how
 0.1.8 nearly shipped without one.
