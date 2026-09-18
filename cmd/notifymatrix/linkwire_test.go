@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
@@ -132,5 +136,104 @@ func TestReceiptsAreBoundedAndNewestFirstInTheView(t *testing.T) {
 	if v.Receipts[0].Reason != "the latest" {
 		t.Errorf("the view leads with %q, not the most recent refusal; an "+
 			"operator wants the one that just happened", v.Receipts[0].Reason)
+	}
+}
+
+// capturingLog records what was audited.
+type capturingLog struct{ entries []audit.Entry }
+
+func (c *capturingLog) Append(_ context.Context, e audit.Entry) error {
+	c.entries = append(c.entries, e)
+	return nil
+}
+func (c *capturingLog) Recent(context.Context, int) ([]audit.Entry, error) { return nil, nil }
+func (c *capturingLog) Close() error                                       { return nil }
+
+// A PAIRING CAN REVOKE ONE, AND IT MUST NOT DO IT QUIETLY.
+//
+// The slug is the PRODUCT, not the installation, and pairing carries no site
+// identifier -- so a second install of the same product is indistinguishable
+// here from the first one rotating its key. Both replace the entry and the
+// earlier credential stops working immediately.
+//
+// Correct for a rotation. A trap for anybody with two sites: the action reads
+// as "add a product" and is sometimes "replace a working one", and the site
+// that goes quiet is not the one the operator was looking at. It cannot be
+// told apart without a field this exchange does not carry, so the whole
+// defence is that it is reported.
+func TestRePairingSaysWhichCredentialItRevoked(t *testing.T) {
+	cur := peerCfg()
+	log := &capturingLog{}
+	var saved *config.Config
+
+	d := linkDeps{
+		cfg:      func() *config.Config { return cur },
+		saveCfg:  func(c *config.Config) error { saved = c; cur = c; return nil },
+		state:    newLinkState(nil),
+		auditLog: log,
+	}
+
+	// The same product pairing again, with a new credential.
+	err := d.storePeer(link.Peer{
+		Slug: "sentry", LinkID: "lnk_new",
+		Manifest: link.Manifest{Capability: "access"},
+	}, []byte("a new key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if saved == nil {
+		t.Fatal("nothing was saved")
+	}
+	var sentries int
+	for _, l := range saved.Links {
+		if l.Slug == "sentry" {
+			sentries++
+			if l.LinkID != "lnk_new" {
+				t.Errorf("the entry still carries %q, not the new credential", l.LinkID)
+			}
+		}
+	}
+	if sentries != 1 {
+		t.Errorf("%d sentry entries after re-pairing, want 1", sentries)
+	}
+
+	var found *audit.Entry
+	for i := range log.entries {
+		if log.entries[i].Fields["revoked_link_id"] != "" {
+			found = &log.entries[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("re-pairing revoked a working credential and the audit log does " +
+			"not say so; the other installation goes quiet with nothing anywhere " +
+			"explaining why")
+	}
+	if got := found.Fields["revoked_link_id"]; got != "lnk_sentry" {
+		t.Errorf("revoked_link_id = %q, want the credential that stopped working", got)
+	}
+	if !strings.Contains(found.Summary, "revok") {
+		t.Errorf("the summary %q does not mention the revocation, so a reader "+
+			"scanning summaries sees an ordinary pairing", found.Summary)
+	}
+}
+
+// A FIRST pairing revokes nothing and must not claim to.
+func TestAFirstPairingReportsNoRevocation(t *testing.T) {
+	cur := &config.Config{}
+	log := &capturingLog{}
+	d := linkDeps{
+		cfg:      func() *config.Config { return cur },
+		saveCfg:  func(c *config.Config) error { cur = c; return nil },
+		state:    newLinkState(nil),
+		auditLog: log,
+	}
+	if err := d.storePeer(link.Peer{Slug: "sentry", LinkID: "lnk_first"}, []byte("k")); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range log.entries {
+		if e.Fields["revoked_link_id"] != "" || strings.Contains(e.Summary, "revok") {
+			t.Errorf("a first pairing reported a revocation: %+v", e)
+		}
 	}
 }

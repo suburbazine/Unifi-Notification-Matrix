@@ -248,19 +248,30 @@ func (d linkDeps) storePeer(p link.Peer, key []byte) error {
 	// manifest, and deliberately keeps nothing of the old key: rotation here
 	// is re-pairing, so a stale credential left behind would be a second way in
 	// that nobody remembers granting.
-	replaced := false
+	//
+	// WHICH MEANS A PAIRING CAN REVOKE ONE, and that has to be said out loud.
+	// The slug is the PRODUCT, not the installation, and pairing carries no
+	// site identifier -- so a second install of the same product is
+	// indistinguishable here from the first one rotating its key. Both land on
+	// this branch, and the earlier credential stops working immediately.
+	//
+	// Right for a rotation, a trap for anybody with two sites: the action reads
+	// as "add a product" and is sometimes "replace a working one". It cannot be
+	// told apart without a field this exchange does not carry, so what is left
+	// is to never let it happen quietly.
+	replaced := ""
 	for i, existing := range next.Links {
 		if strings.EqualFold(existing.Slug, p.Slug) {
 			// The operator's overrides survive: they are decisions about
 			// conditions, not about the credential.
 			entry.Overrides = existing.Overrides
 			entry.MaxSeverity = existing.MaxSeverity
+			replaced = existing.LinkID
 			next.Links[i] = entry
-			replaced = true
 			break
 		}
 	}
-	if !replaced {
+	if replaced == "" {
 		next.Links = append(next.Links, entry)
 	}
 
@@ -274,16 +285,30 @@ func (d linkDeps) storePeer(p link.Peer, key []byte) error {
 	// serving the capability it just claimed.
 	d.state.adopt(p.Manifest.Capability)
 
+	summary := "paired a peer"
+	fields := map[string]string{
+		"product": p.Slug, "link_id": p.LinkID,
+		"capability": p.Manifest.Capability,
+		"conditions": fmt.Sprint(len(conds)),
+	}
+	if replaced != "" {
+		// Recorded as a REVOCATION as well as a pairing, because that is the
+		// half nobody asked for and the half that breaks something.
+		summary = "paired a peer, revoking its previous credential"
+		fields["revoked_link_id"] = replaced
+	}
 	_ = d.auditLog.Append(context.Background(), audit.Entry{
-		Kind: audit.KindService, Actor: "link", Summary: "paired a peer",
-		Fields: map[string]string{
-			"product": p.Slug, "link_id": p.LinkID,
-			"capability": p.Manifest.Capability,
-			"conditions": fmt.Sprint(len(conds)),
-		},
+		Kind: audit.KindService, Actor: "link", Summary: summary, Fields: fields,
 	})
+
 	fmt.Fprintf(os.Stderr, "link: paired %s (%s), claiming %q\n",
 		p.Slug, p.LinkID, p.Manifest.Capability)
+	if replaced != "" {
+		fmt.Fprintf(os.Stderr, "link: this REPLACED an earlier pairing of %s (%s), "+
+			"which can no longer send. If that was a different installation of %s "+
+			"rather than the same one re-pairing, it has just been cut off\n",
+			p.Slug, replaced, p.Slug)
+	}
 	return nil
 }
 
