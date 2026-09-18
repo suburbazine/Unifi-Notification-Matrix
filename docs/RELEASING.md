@@ -343,16 +343,21 @@ setting.
 
 ## 3. Cutting a release
 
-**Write the changelog entry first.** `CHANGELOG.md` needs a `## [1.2.3] — date`
-section before the tag exists, and the workflow refuses to build a tag without
-one:
+**Write the changelog entry as the work merges**, under `## [Unreleased]`, not
+on the day you tag. Writing a whole section from memory at tag time is how
+0.1.8 nearly shipped without one.
+
+At release, rename that heading to the version and add its compare link:
 
 ```bash
-$EDITOR CHANGELOG.md          # add the section, and the compare link at the foot
+$EDITOR CHANGELOG.md          # [Unreleased] -> [1.2.3] - <date>, add the link
 scripts/changelog-section.sh v1.2.3   # what the release page will say
 git commit -am "Changelog for v1.2.3"
 git push
 ```
+
+`CHANGELOG.md` must have a `## [1.2.3] — date` section before the tag exists.
+The workflow refuses to build a tag without one.
 
 Then tag:
 

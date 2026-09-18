@@ -11,6 +11,26 @@ downloader nothing about what they are installing.
 Format: newest first. Dates are the release date. Versions link to the compare
 view against the release before them.
 
+## [Unreleased]
+
+Entries land here as work merges, and the heading is renamed to the version on
+the day it ships. Writing a release's section from scratch at tag time is how
+0.1.8 nearly went out with none.
+
+### Fixed
+
+- **The page header was not sticking.** `height:100%` on `body` made it exactly
+  one viewport tall, and a sticky child is confined to its containing block, so
+  the header stuck for one screenful and then scrolled away like anything else.
+  Height moves to the `html` element and `body` takes `min-height`.
+- **The Settings section rail marked the wrong section.** It measured from the
+  header's bottom edge, which had gone thousands of pixels above the viewport,
+  so the rail pointed at a section the reader had passed several screens ago.
+  The reference line is now clamped inside the viewport whether or not sticky
+  is working, and over the last screenful it comes down to meet the final
+  sections — which a fixed line could never reach, leaving Password
+  unreachable at every width measured.
+
 ## [0.1.8] — 2026-09-18
 
 ### Fixed
@@ -181,6 +201,7 @@ demo mode, and the signed reproducible release pipeline.
 They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
+[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.8...HEAD
 [0.1.8]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.5...v0.1.6
