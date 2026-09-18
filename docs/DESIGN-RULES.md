@@ -124,6 +124,38 @@ enforced by a test that walks every non-test file in the package and fails the
 build if the call appears. Adding one back breaks the build rather than a
 customer's hardware.
 
+### Naming a copy taken before one
+
+Two kinds exist, they are not interchangeable, and the suffix says which:
+
+| | Suffix | Who deletes it | How many |
+|---|---|---|---|
+| The product will clean it up | `.previous` | the product, at the next successful start | one, overwritten |
+| The operator owns it | `.<what-it-restores-into>.bak` | only the operator | one per thing it restores into |
+
+`notifymatrix.exe.previous` is the first. It exists between an update and the
+next start, `Rollback` is the only thing that reads it, and `CleanBackups`
+removes it once the new binary has proved it runs. A name qualified by version
+would imply a permanence it does not have.
+
+`incidents.db.v1.bak` is the second. It survives until somebody decides they
+are happy, because the thing it protects against — an upgrade that cannot be
+undone — is not disproved by one successful start. It is qualified by the
+SCHEMA it restores into rather than by a date or a product version, because
+that is the question its reader actually has: *which builds can open this?* A
+date cannot answer that, and a product version answers it only for somebody
+holding a table of which release used which schema.
+
+The qualifier is what makes more than one of them safe to keep. An upgrade
+that crosses two schema versions leaves two files, and neither overwrites the
+other; a single slot would destroy the older copy, which is the one somebody
+rolling further back actually needs.
+
+**Do not add a third shape.** If a new copy is product-managed it is
+`.previous`; if an operator owns it, qualify it and end it `.bak`. A directory
+of backups named three ways is a directory nobody can reason about at the
+moment they most need to.
+
 ---
 
 ## 5. Notification channels

@@ -13,9 +13,17 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+Entries land here as work merges, and the heading is renamed to the version on
+the day it ships — writing a release's section from scratch at tag time is how
+0.1.8 nearly went out with none.
+
+### Changed
+
+- Backup file naming is now one rule rather than two habits, written down in
+  docs/DESIGN-RULES.md §4 and enforced by a test. A copy the product will
+  clean up ends `.previous`; a copy the operator owns is qualified by what it
+  restores into and ends `.bak`. No files were renamed — both existing names
+  already followed the rule, which had simply never been stated.
 
 ## [0.1.9] — 2026-09-18
 
