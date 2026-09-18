@@ -764,12 +764,15 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 				cfgMu.RLock()
 				c := current
 				cfgMu.RUnlock()
-				h := web.Health{}
+				// StartedAt was never set, so uptime_seconds was permanently
+				// 0 and the computation in the web layer was dead code.
+				h := web.Health{StartedAt: started}
 				for _, st := range delivery.Stats() {
 					h.Channels = append(h.Channels, web.ChannelHealth{
 						Name: st.Channel, Enabled: true, Depth: st.Depth,
 						Pending: st.Pending, Dropped: st.Dropped,
 						InFlight: st.InFlight,
+						LastSent: st.LastSent, LastError: st.LastError,
 						// A channel being held back after repeated failures is
 						// not being attempted, and must not read as healthy.
 						ConsecutiveFails: st.ConsecutiveFails,

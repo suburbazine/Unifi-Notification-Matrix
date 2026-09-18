@@ -72,6 +72,15 @@ type Queue struct {
 	dropped  int
 	inflight bool
 
+	// lastSent and lastErr are what the health view reports.
+	//
+	// Both fields existed on the health struct and neither was ever populated,
+	// so a channel that had just delivered read as "last delivery: never" next
+	// to a green tick. On the one surface an operator uses to answer "is this
+	// working?", that is worse than showing nothing.
+	lastSent time.Time
+	lastErr  string
+
 	// consecutiveFails and notBefore are the failure backoff.
 	//
 	// Without one, a channel that is failing is retried at whatever cadence
@@ -302,6 +311,11 @@ type Stats struct {
 	// is fine, and this product's whole argument is against states like that.
 	ConsecutiveFails int
 	BackingOffUntil  time.Time
+
+	// LastSent is the time of the last SUCCESSFUL delivery, zero if none.
+	// LastError is why the last attempt failed, cleared by a success.
+	LastSent  time.Time
+	LastError string
 }
 
 // recordOutcome advances or clears the failure backoff.
@@ -315,8 +329,18 @@ func (q *Queue) recordOutcome(err error, now time.Time) {
 		q.consecutiveFails = 0
 		q.notBefore = time.Time{}
 		q.lastBackoff = 0
+		q.lastErr = ""
+		// A ZERO TIME MEANS "NOT A DELIVERY". The Test button clears the
+		// backoff through this same path, and a test is not a delivery: this
+		// product's standing rule is that nothing may claim a delivery that
+		// did not happen, and "last sent" on the health view is exactly such a
+		// claim.
+		if !now.IsZero() {
+			q.lastSent = now
+		}
 		return
 	}
+	q.lastErr = err.Error()
 	q.consecutiveFails++
 	q.lastBackoff = backoffFor(q.consecutiveFails)
 	if q.lastBackoff > 0 {
@@ -338,6 +362,8 @@ func (q *Queue) Stats() Stats {
 
 		ConsecutiveFails: q.consecutiveFails,
 		BackingOffUntil:  q.notBefore,
+		LastSent:         q.lastSent,
+		LastError:        q.lastErr,
 	}
 }
 
