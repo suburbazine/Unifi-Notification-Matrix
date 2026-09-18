@@ -263,3 +263,40 @@ func TestSentrysCorrectedEnvelopeValidates(t *testing.T) {
 		t.Errorf("computed %q, the peer sent %q", got, e.DedupKey)
 	}
 }
+
+// WHY AN EMPTY entity.id IS REFUSED RATHER THAN REPAIRED.
+//
+// incident.Key turns an empty part into "unknown", which is a value that looks
+// like data. Every site-scoped condition of one kind from one peer would
+// therefore share a single dedup key and merge into ONE incident, for ever,
+// with nothing anywhere reading wrong -- the repair produces a working system
+// that is quietly incorrect, and it is invisible precisely because it worked.
+//
+// Pinned as the difference between what the key WOULD be and what validation
+// does about it, because the refusal alone reads like a missing-field check
+// and is really a collision guard.
+func TestAnEmptyEntityIsRefusedBecauseItWouldCollide(t *testing.T) {
+	p := sentry()
+	blank := Envelope{Entity: Party{ID: ""}, Condition: "sentry-link-test"}
+	other := Envelope{Entity: Party{ID: ""}, Condition: "sentry-link-test"}
+
+	// Two DIFFERENT site-scoped events land on the same key once the empty id
+	// is repaired into "unknown".
+	if blank.dedupKeyFor(p) != other.dedupKeyFor(p) {
+		t.Fatal("two empty entities no longer collide, so this test is checking nothing")
+	}
+	if !strings.Contains(blank.dedupKeyFor(p), "unknown") {
+		t.Fatalf("key = %q, expected the repaired \"unknown\" part", blank.dedupKeyFor(p))
+	}
+
+	// Which is why the envelope never gets that far.
+	full := Envelope{
+		LinkVersion: Version, Product: "sentry", SiteID: "s", EventID: "e",
+		SentAt: time.Now(), State: StateRaised, Condition: "sentry-link-test",
+		Severity: "info", Title: "t", Entity: Party{ID: ""},
+	}
+	if err := full.Validate(p); err == nil {
+		t.Error("an envelope with an empty entity.id was accepted; every " +
+			"site-scoped event of this condition would merge into one incident")
+	}
+}
