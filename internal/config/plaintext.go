@@ -9,7 +9,11 @@ import (
 )
 
 // secretFields are the config keys whose values are credentials.
-var secretFields = []string{"api_key", "token", "password"}
+// link_tls_key and link_key are here because the regex below is how a
+// credential left in plain text is FOUND. A new secret field that is not
+// listed is one this product will never notice sitting readable on disk --
+// which is the same silence it exists to break.
+var secretFields = []string{"api_key", "token", "password", "link_tls_key", "link_key"}
 
 // knownPrefixes are the markers a protected value carries.
 var knownPrefixes = []string{

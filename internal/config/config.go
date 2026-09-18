@@ -18,6 +18,7 @@ import (
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel/webhook"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/rule"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 )
@@ -41,6 +42,10 @@ type Config struct {
 	// UI -- no API creates them -- so this product cannot provision its own
 	// push path and a person has to make the rule by hand. See internal/inbound.
 	Hooks []Hook `json:"hooks,omitempty"`
+
+	// Links are paired first-party peers (Xtremission Link). Empty is the
+	// ordinary case: nothing is paired and the listener does not exist.
+	Links []Link `json:"links,omitempty"`
 
 	Channels Channels `json:"channels,omitempty"`
 
@@ -366,6 +371,74 @@ type Web struct {
 	// notification opens nothing on the phone holding it. Validation says so
 	// rather than letting it be discovered during an alarm.
 	AckBaseURL string `json:"ack_base_url,omitempty"`
+
+	// LinkListen is a THIRD listener, carrying the peer link and nothing else.
+	//
+	// Same reasoning as AckListen and the same shape: a port forward cannot
+	// scope by path, so a peer that has to reach this product across a network
+	// gets a port on which /link/ is the only thing that exists. Empty means
+	// this build does not pair at all and the routes do not exist.
+	//
+	// "auto" picks a random high port once and writes it back, so a firewall
+	// rule and a peer's stored address stay valid.
+	LinkListen string `json:"link_listen,omitempty"`
+
+	// LinkTLSCert and LinkTLSKey are the certificate this product presents on
+	// that listener, minted on first use and then kept.
+	//
+	// KEPT, not re-minted: the peer pins this exact certificate at pairing, so
+	// a new one every start would mean a peer that never connects twice. The
+	// certificate is public and stored as-is; the key goes through the secret
+	// provider chain like every other key here.
+	LinkTLSCert string        `json:"link_tls_cert,omitempty"`
+	LinkTLSKey  secret.Secret `json:"link_tls_key,omitempty"`
+}
+
+// Link is one paired first-party peer.
+type Link struct {
+	// Slug is the product. It becomes the event source and therefore the first
+	// segment of every dedup key this peer produces, so it outlives the
+	// credential and is never rewritten by a re-pair.
+	Slug string `json:"slug"`
+
+	// LinkID and Key are the credential, minted at pairing. Rotating them is
+	// re-pairing: an in-band rekey would need a two-key grace state for a key
+	// that never leaves these two machines.
+	LinkID string        `json:"link_id"`
+	Key    secret.Secret `json:"link_key,omitempty"`
+
+	// Capability is what this peer claims to serve, named after the source it
+	// displaces. At most one peer may hold one.
+	Capability string `json:"capability,omitempty"`
+
+	// Conditions is the manifest the operator approved, and Overrides are the
+	// decisions they made about it. Overrides are stored SEPARATELY so they
+	// survive an amendment: a peer re-proposing momentary in its next release
+	// must not silently undo an operator who decided otherwise.
+	Conditions []LinkCondition         `json:"conditions,omitempty"`
+	Overrides  map[string]LinkOverride `json:"overrides,omitempty"`
+
+	// MaxSeverity optionally caps what this peer may claim. Empty is uncapped.
+	MaxSeverity incident.Severity `json:"max_severity,omitempty"`
+}
+
+// LinkCondition is one entry of a peer's approved manifest.
+type LinkCondition struct {
+	Name     string            `json:"name"`
+	Meaning  string            `json:"meaning"`
+	Severity incident.Severity `json:"severity"`
+
+	// Momentary is the peer's PROPOSAL; an override in the parent Link wins.
+	Momentary bool `json:"momentary,omitempty"`
+
+	// DemotesClaim marks a condition meaning "alive, but cannot serve what I
+	// claimed" -- so raising it hands the capability back to our own source.
+	DemotesClaim bool `json:"demotes_claim,omitempty"`
+}
+
+// LinkOverride is the operator's decision about one condition.
+type LinkOverride struct {
+	Momentary *bool `json:"momentary,omitempty"`
 }
 
 // SecretsMeta records how this file's secrets were protected.

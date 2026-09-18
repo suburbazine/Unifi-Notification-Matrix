@@ -82,6 +82,13 @@ type Deps struct {
 	// SetPasswordHash persists a new hash.
 	SetPasswordHash func(string) error
 
+	// LinkState reports peer pairing for the interface, and LinkOfferCode
+	// generates a pairing code. Both nil in a build with no link listener,
+	// where the honest answer is that there is nowhere for a peer to pair
+	// rather than that pairing failed.
+	LinkState     func() LinkPairing
+	LinkOfferCode func() (code string, expires time.Duration, err error)
+
 	// TestChannel sends one channel's proof-of-configuration message and
 	// reports what happened. Optional: a build that does not supply it simply
 	// has no test button.
@@ -325,6 +332,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/incidents/{id}/ack", s.requireAuth(http.HandlerFunc(s.handleAck)))
 	mux.Handle("POST /api/incidents/{id}/close", s.requireAuth(http.HandlerFunc(s.handleClose)))
 	mux.Handle("POST /api/service", s.requireAuth(http.HandlerFunc(s.handleServiceAction)))
+	// Pairing a peer hands it the ability to raise alarms here and to take
+	// over a capability, so both routes are behind a session like every other
+	// change.
+	mux.Handle("GET /api/link", s.requireAuth(http.HandlerFunc(s.handleLinkState)))
+	mux.Handle("POST /api/link/code", s.requireAuth(http.HandlerFunc(s.handleLinkPairCode)))
 	mux.Handle("GET /api/update", s.requireAuth(http.HandlerFunc(s.handleUpdateState)))
 	mux.Handle("POST /api/update/check", s.requireAuth(http.HandlerFunc(s.handleUpdateCheck)))
 	mux.Handle("POST /api/update/apply", s.requireAuth(http.HandlerFunc(s.handleUpdateApply)))

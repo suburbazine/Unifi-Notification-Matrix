@@ -74,6 +74,7 @@ func (c Config) Warnings() []string {
 	w = append(w, c.voiceOnNoLadderWarning()...)
 	w = append(w, c.siteZoneWarning()...)
 	w = append(w, c.exposureWarnings()...)
+	w = append(w, c.linkWarnings()...)
 	return w
 }
 
@@ -172,6 +173,7 @@ func (c Config) Validate() error {
 	p = append(p, c.validateHooks()...)
 	p = append(p, c.validateChannels()...)
 	p = append(p, c.validateWeb()...)
+	p = append(p, c.validateLinks()...)
 
 	if err := c.QuietHours.Validate(); err != nil {
 		p = append(p, err.Error())

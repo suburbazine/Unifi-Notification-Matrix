@@ -41,6 +41,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/inbound"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ingest"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/link"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/rule"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/service"
@@ -671,8 +672,27 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 		},
 	})
 
+	// Peer state. Empty and inert unless something is paired.
+	linkPeers, _ := config.BuildLinks(cfg)
+	links := newLinkState(linkPeers)
+
+	// Held so the interface can offer a pairing code. Nil until the listener
+	// starts, which is also the honest answer: with no listener there is
+	// nowhere for a peer to pair TO.
+	var linkPairer *link.Pairer
+
 	supervisor, err := ingest.New(sources, ingest.Deps{
 		Handle: func(ctx context.Context, ev event.Event) error {
+			// A PAIRED PEER THAT IS ACTUALLY SERVING THE CAPABILITY takes over
+			// raising for it, so one real-world event does not become two
+			// incidents. Suppression is here rather than at the source on
+			// purpose: the source keeps polling, so the console-contact
+			// deadman keeps working and the rules editor keeps learning
+			// entities, and this reverses the instant the peer stops being
+			// able to serve.
+			if links.suppressedByPeer(ev, time.Now(), peerSilentAfter) {
+				return nil
+			}
 			_, err := engine.Handle(ctx, ev)
 			return err
 		},
@@ -853,6 +873,23 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 				// makes it obsolete, so the two cannot drift apart.
 				_ = config.RemoveSetupToken(dataDir)
 				return nil
+			},
+			LinkState: func() web.LinkPairing {
+				return links.view(func() *config.Config {
+					cfgMu.RLock()
+					defer cfgMu.RUnlock()
+					return current
+				}, linkPairer, time.Now())
+			},
+			LinkOfferCode: func() (string, time.Duration, error) {
+				if linkPairer == nil {
+					return "", 0, errors.New("no peer link listener is running")
+				}
+				code, err := linkPairer.Offer()
+				if err != nil {
+					return "", 0, err
+				}
+				return link.FormatCode(code), link.CodeTTL, nil
 			},
 			TestChannel: func(ctx context.Context, name string) (string, error) {
 				summary, err := delivery.Test(ctx, name)
@@ -1118,6 +1155,87 @@ process elevates. This will do it for you, prompting if it has to:
 				_ = ackSrv.Shutdown(shutdown)
 			}()
 			fmt.Printf("acknowledgements only on http://%s/ack/  (this is the port to forward)\n", resolved)
+		}
+
+		// THE PEER LINK, on a listener of its own for the same reason the
+		// acknowledgement routes have one: a port forward cannot scope by
+		// path, so a peer reaching this across a network gets a port where
+		// /link/ is the only thing that exists.
+		if want := strings.TrimSpace(cfg.Web.LinkListen); want != "" {
+			resolved, linkLn, err := config.ResolveAckListen(want)
+			if err != nil {
+				return fmt.Errorf("cannot listen on %s for the peer link (free the "+
+					"port, or set web.link_listen to \"auto\" to choose another): %w", want, err)
+			}
+			if resolved != want {
+				// Pinned once and kept: a port that moved every start would
+				// break the firewall rule and every peer's stored address.
+				cfgMu.Lock()
+				next := *current
+				next.Web.LinkListen = resolved
+				cfgMu.Unlock()
+				if err := config.Save(dataDir, &next); err != nil {
+					_ = linkLn.Close()
+					return fmt.Errorf("chose port %s for the peer link but could not "+
+						"write it to the configuration: %w", resolved, err)
+				}
+				cfgMu.Lock()
+				current = &next
+				cfgMu.Unlock()
+				cfg = current
+			}
+
+			certPEM, keyPEM, err := linkCertificate(cfg, func(c *config.Config) error {
+				return config.Save(dataDir, c)
+			})
+			if err != nil {
+				_ = linkLn.Close()
+				return err
+			}
+			tlsCfg, err := link.TLSConfig(certPEM, keyPEM)
+			if err != nil {
+				_ = linkLn.Close()
+				return err
+			}
+			fingerprint, err := link.Fingerprint(certPEM)
+			if err != nil {
+				_ = linkLn.Close()
+				return err
+			}
+
+			linkPairer = link.NewPairer(fingerprint)
+			linkRC := link.NewReceiver(linkDeps{
+				cfg: func() *config.Config { cfgMu.RLock(); defer cfgMu.RUnlock(); return current },
+				saveCfg: func(c *config.Config) error {
+					if err := config.Save(dataDir, c); err != nil {
+						return err
+					}
+					cfgMu.Lock()
+					current = c
+					cfgMu.Unlock()
+					return nil
+				},
+				state:    links,
+				db:       db,
+				delivery: delivery,
+				handle: func(ctx context.Context, ev event.Event) error {
+					_, err := engine.Handle(ctx, ev)
+					return err
+				},
+				auditLog:  auditLog,
+				pairer:    linkPairer,
+				silentFor: peerSilentAfter,
+			}.build())
+
+			linkCtx, stopLink := context.WithCancel(ctx)
+			defer stopLink()
+			go func() {
+				if err := link.Serve(linkCtx, linkLn, linkRC, tlsCfg); err != nil {
+					fmt.Fprintf(os.Stderr, "the peer link listener stopped: %v\n", err)
+				}
+			}()
+			fmt.Printf("peer link on https://%s/link/  (certificate %s...)\n",
+				resolved, fingerprint[:16])
 		}
 
 		fmt.Printf("interface on http://%s/  (acknowledgements at /ack/)\n", cfg.Web.Listen)
