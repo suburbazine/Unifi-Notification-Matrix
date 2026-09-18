@@ -24,6 +24,19 @@ const (
 	RoutePing      = "/link/v1/ping"
 )
 
+// knownRoute reports whether a path is one this receiver serves at all.
+//
+// RouteHello is in here even though it is the only GET: "exists but not with
+// that verb" and "does not exist" are different facts, and the receipt is the
+// one place that difference is allowed to survive.
+func knownRoute(path string) bool {
+	switch path {
+	case RoutePair, RouteEvents, RouteHeartbeat, RoutePing, RouteHello:
+		return true
+	}
+	return false
+}
+
 // MaxEventBytes caps an event body. Generous for a typed envelope and far
 // short of anything that could exhaust memory on the operator's machine.
 const MaxEventBytes = 16 << 10
@@ -64,6 +77,11 @@ type Deps struct {
 	// and /link/pair is then a 404 like anything else that does not exist.
 	Pairer *Pairer
 
+	// Version is what /link/hello reports, so a peer can refuse a protocol it
+	// does not speak. Empty is fine; it is reported as empty rather than
+	// guessed at.
+	Version string
+
 	// OnPaired persists a newly paired peer and its key. An error here fails
 	// the pairing: a peer that stored a credential this product did not would
 	// authenticate against nothing for ever after.
@@ -95,7 +113,12 @@ type Receipt struct {
 	Route     string
 	Accepted  bool
 	Duplicate bool
-	Reason    string
+
+	// Cause is why, as a countable label; Reason is why, as a sentence with
+	// the specifics in it. Both, because a wall of refusals needs to be
+	// counted by kind AND read one at a time.
+	Cause  Cause
+	Reason string
 }
 
 // Receiver serves the link routes.
@@ -138,17 +161,40 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// on, and one that says "unauthorised" confirms something is listening
 	// here at all. The reason goes to the receipt, where a signed-in operator
 	// can read it, and never onto the wire.
-	deny := func(linkID, reason string) {
-		rc.record(Receipt{At: now, LinkID: linkID, Route: r.URL.Path, Reason: reason})
+	deny := func(linkID string, cause Cause, reason string) {
+		rc.record(Receipt{At: now, LinkID: linkID, Route: r.URL.Path,
+			Cause: cause, Reason: reason})
 		http.NotFound(w, r)
 	}
 
+	// THE ROUTE IS CHECKED BEFORE THE METHOD, which changes nothing on the
+	// wire -- both answer the same bare 404 -- and everything in the receipt.
+	// The other way round, a GET for a path that does not exist was recorded
+	// as "method GET", so an operator reading a scanner's sweep was told the
+	// verb was wrong about a route that was never there.
+	if !knownRoute(r.URL.Path) {
+		deny("", CauseNoRoute, "no such route")
+		return
+	}
+
+	// GET is allowed for exactly one route, and only for as long as the
+	// operator has a pairing window open.
+	if r.Method == http.MethodGet && r.URL.Path == RouteHello {
+		rc.hello(w, r, now, deny)
+		return
+	}
 	if r.Method != http.MethodPost {
-		deny("", "method "+r.Method)
+		deny("", CauseMethod, "method "+r.Method)
 		return
 	}
 	switch r.URL.Path {
 	case RouteEvents, RouteHeartbeat, RoutePing:
+	case RouteHello:
+		// Reached only by a POST: the GET above has already handled it. The
+		// route exists, so saying "no such route" here would be the same
+		// inaccuracy the ordering above was changed to fix.
+		deny("", CauseMethod, "identify is a GET")
+		return
 	case RoutePair:
 		// PAIRING IS NOT HMAC-AUTHENTICATED, because there is no key yet --
 		// that is what it exists to establish. It authenticates on the code
@@ -158,21 +204,22 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rc.pair(w, r, now, deny)
 		return
 	default:
-		deny("", "no such route")
+		deny("", CauseNoRoute, "no such route")
 		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, MaxEventBytes+1))
 	if err != nil {
-		deny("", "unreadable body")
+		deny("", CauseBodyUnreadable, "unreadable body")
 		return
 	}
 	if len(body) > MaxEventBytes {
-		deny(r.Header.Get(HeaderLinkID), "body over the limit")
+		deny(r.Header.Get(HeaderLinkID), CauseBodyTooLarge, "body over the limit")
 		return
 	}
 
-	cred, err := rc.deps.Verifier.Verify(rc.credentials(), Request{
+	creds := rc.credentials()
+	cred, err := rc.deps.Verifier.Verify(creds, Request{
 		Method: r.Method, Path: r.URL.Path,
 		LinkID:        r.Header.Get(HeaderLinkID),
 		Timestamp:     r.Header.Get(HeaderTimestamp),
@@ -181,7 +228,8 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Body:          body,
 	})
 	if err != nil {
-		deny(r.Header.Get(HeaderLinkID), err.Error())
+		given := r.Header.Get(HeaderLinkID)
+		deny(given, verifyCause(creds, given, err), err.Error())
 		return
 	}
 
@@ -189,7 +237,7 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		// Authenticated against a credential with no peer behind it. Should be
 		// impossible; treated as a failure rather than assumed away.
-		deny(cred.LinkID, "no peer for this link")
+		deny(cred.LinkID, CauseNoPeer, "no peer for this link")
 		return
 	}
 
@@ -208,15 +256,15 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (rc *Receiver) events(w http.ResponseWriter, r *http.Request, cred Credential,
-	peer Peer, body []byte, now time.Time, deny func(string, string)) {
+	peer Peer, body []byte, now time.Time, deny func(string, Cause, string)) {
 
 	var env Envelope
 	if err := json.Unmarshal(body, &env); err != nil {
-		deny(cred.LinkID, "malformed envelope")
+		deny(cred.LinkID, CauseMalformedEnvelope, "malformed envelope")
 		return
 	}
 	if err := env.Validate(peer); err != nil {
-		deny(cred.LinkID, err.Error())
+		deny(cred.LinkID, CauseInvalidEnvelope, err.Error())
 		return
 	}
 
@@ -228,7 +276,7 @@ func (rc *Receiver) events(w http.ResponseWriter, r *http.Request, cred Credenti
 	if rc.deps.Seen != nil {
 		seen, err := rc.deps.Seen(r.Context(), cred.LinkID, env.EventID, now, rc.deps.SeenFor)
 		if err != nil {
-			deny(cred.LinkID, "recording the event id: "+err.Error())
+			deny(cred.LinkID, CauseStore, "recording the event id: "+err.Error())
 			return
 		}
 		if seen {
@@ -256,7 +304,7 @@ func (rc *Receiver) events(w http.ResponseWriter, r *http.Request, cred Credenti
 			// released so the retry is not answered as a duplicate of an
 			// event that never became an incident.
 			rc.forget(r.Context(), cred.LinkID, env.EventID)
-			deny(cred.LinkID, "ingest: "+err.Error())
+			deny(cred.LinkID, CauseIngest, "ingest: "+err.Error())
 			return
 		}
 	}
@@ -326,33 +374,34 @@ func (rc *Receiver) forget(ctx context.Context, linkID, eventID string) {
 // carries the real reason, and the fingerprint mismatch in particular needs to
 // reach them -- it means something is terminating TLS in between, which is a
 // completely different problem from a mistyped code.
-func (rc *Receiver) pair(w http.ResponseWriter, r *http.Request, now time.Time, deny func(string, string)) {
+func (rc *Receiver) pair(w http.ResponseWriter, r *http.Request, now time.Time,
+	deny func(string, Cause, string)) {
 	if rc.deps.Pairer == nil {
-		deny("", "this build cannot pair")
+		deny("", CausePairUnavailable, "this build cannot pair")
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, MaxPairBytes+1))
 	if err != nil || len(body) > MaxPairBytes {
-		deny("", "pairing body unreadable or over the limit")
+		deny("", CausePairBody, "pairing body unreadable or over the limit")
 		return
 	}
 
 	var req PairRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		deny("", "malformed pairing request")
+		deny("", CausePairBody, "malformed pairing request")
 		return
 	}
 
 	res, peer, err := rc.deps.Pairer.Complete(req)
 	if err != nil {
-		deny("", "pairing: "+err.Error())
+		deny("", pairCause(err), "pairing: "+err.Error())
 		return
 	}
 
 	if rc.deps.OnPaired != nil {
 		key, err := base64.StdEncoding.DecodeString(res.Key)
 		if err != nil {
-			deny("", "pairing: encoding the key: "+err.Error())
+			deny("", CausePairStore, "pairing: encoding the key: "+err.Error())
 			return
 		}
 		if err := rc.deps.OnPaired(r.Context(), peer, key); err != nil {
@@ -360,7 +409,7 @@ func (rc *Receiver) pair(w http.ResponseWriter, r *http.Request, now time.Time, 
 			// this product failed to store would authenticate against nothing
 			// for ever, and the operator would see a peer that pairs and never
 			// arrives.
-			deny("", "pairing: storing the peer: "+err.Error())
+			deny("", CausePairStore, "pairing: storing the peer: "+err.Error())
 			return
 		}
 	}

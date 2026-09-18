@@ -1943,6 +1943,44 @@ function peerCard(p) {
   return card;
 }
 
+// LINK_CAUSES turns a refusal's label into what to do about it.
+//
+// The label is what the server counts by; this is what the operator reads.
+// "unknown-link-id" is precise and tells somebody standing at the screen
+// nothing, and the difference between a peer whose credential we do not have
+// and a peer that disagrees with us about the key is two entirely different
+// afternoons -- which is exactly why the two are distinguished here and
+// deliberately NOT distinguished on the wire.
+var LINK_CAUSES = {
+  "method-not-allowed": "Something used the wrong HTTP method. Every route here but the identify probe takes a signed POST.",
+  "no-such-route": "Something asked for a path that does not exist here. Most often a scanner; occasionally a peer built against a different version.",
+  "body-unreadable": "The request body could not be read. Usually a connection that died mid-send.",
+  "body-over-limit": "The body was larger than an event is allowed to be. Nothing here sends anything that size.",
+  "unsigned": "It sent no signature at all. That is usually something other than a peer knocking on the port.",
+  "malformed-auth": "Its authentication headers were missing or unreadable.",
+  "unknown-link-id": "It used a credential this installation has no record of. Either it was paired somewhere else, or you have forgotten it here and it has not been told.",
+  "bad-signature": "Its credential is one we know and the signature did not match it. The two ends disagree about the key, so pair again rather than hunting for a typo.",
+  "clock-skew": "Its clock is too far from this machine's. Fix the time on one of them; signed requests expire on purpose.",
+  "replayed-nonce": "It reused a request identifier. Ordinarily a retry gone wrong, and the refusal is what stops it counting twice.",
+  "nonce-table-full": "It sent far more than expected in five minutes. Nothing is lost, but something on that end is looping.",
+  "no-peer-for-link": "It authenticated against a credential with no product behind it. That should not be possible; tell somebody.",
+  "malformed-envelope": "It authenticated and then sent something that is not an event.",
+  "invalid-envelope": "It sent a condition or severity outside the manifest you approved. It is claiming something it did not declare.",
+  "store-failed": "This machine could not record the event id. The peer will retry.",
+  "ingest-failed": "This machine could not take the event. It was refused so the peer retries rather than assuming it landed.",
+  "pairing-unavailable": "Pairing is not possible on this build.",
+  "pairing-body": "Its pairing request was unreadable or too large.",
+  "pairing-none-offered": "It tried to pair with no code on offer. Press Offer a pairing code first.",
+  "pairing-code-expired": "The code had run out. Offer another.",
+  "pairing-code-used": "The code had already been used. They are single-use; offer another.",
+  "pairing-code-voided": "The code was voided after five wrong answers. Offer another -- and if the product at the other end believes it is typing the right one, look at the two below this.",
+  "pairing-bad-proof": "It did not prove it knew the code. A mistyped code, or the wrong product.",
+  "pairing-fingerprint-mismatch": "IT SAW A DIFFERENT CERTIFICATE. Something is terminating TLS between you and it. This is not a typo and it is not a configuration mistake; stop and find out what is in the middle.",
+  "pairing-manifest": "It did not declare what it would send, so there is nothing to approve.",
+  "pairing-store-failed": "The pairing worked and this machine could not save it, so the peer was told it failed. Nothing was granted.",
+  "identify-window-closed": "Something asked what this port is while no pairing code was on offer. It was told nothing. If that was your other product looking for this one, offer a code and let it look again."
+};
+
 // receiptsCard is the reason a refusal is readable at all.
 //
 // The link port answers EVERY failure with a bare 404 and an empty body --
@@ -1973,8 +2011,15 @@ function receiptsCard(rs) {
       r.accepted ? (r.duplicate ? "" : "ok") : "err"));
     row.insertCell().textContent = r.route || "";
     var why = row.insertCell();
-    why.appendChild(el("div", r.accepted ? "" : "audit-error",
-      r.reason || (r.accepted ? (r.link_id || "") : "")));
+    // The plain-English answer first, because that is what somebody standing
+    // at this screen came for; the server's own sentence under it, because it
+    // carries the specifics -- how far off the clock was, what the envelope
+    // got wrong -- that no fixed translation can.
+    var said = LINK_CAUSES[r.cause];
+    if (said) why.appendChild(el("div", r.accepted ? "" : "audit-error", said));
+    if (r.reason && r.reason !== said) {
+      why.appendChild(el("div", said ? "muted small" : (r.accepted ? "" : "audit-error"), r.reason));
+    }
     if (!r.accepted && r.link_id) why.appendChild(el("div", "muted small", r.link_id));
   });
   var sx = el("div", "scroll-x");

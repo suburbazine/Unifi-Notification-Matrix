@@ -56,7 +56,13 @@ type LinkReceiptView struct {
 	Route     string    `json:"route"`
 	Accepted  bool      `json:"accepted"`
 	Duplicate bool      `json:"duplicate,omitempty"`
-	Reason    string    `json:"reason,omitempty"`
+
+	// Cause is the countable label and Reason the sentence with the specifics
+	// in it. Both are sent: the label is what lets the page say "four of these
+	// are the same problem" instead of showing four sentences that happen to
+	// be identical.
+	Cause  string `json:"cause,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // LinkPeerView is one paired peer, as an operator needs to see it.

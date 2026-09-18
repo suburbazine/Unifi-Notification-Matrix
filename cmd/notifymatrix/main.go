@@ -1263,6 +1263,7 @@ process elevates. This will do it for you, prompting if it has to:
 				},
 				auditLog:  auditLog,
 				pairer:    pairer,
+				version:   version,
 				silentFor: peerSilentAfter,
 			}.build())
 

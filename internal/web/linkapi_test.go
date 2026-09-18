@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/link"
 )
 
 // EVERY LINK ROUTE IS A CREDENTIAL OPERATION.
@@ -149,6 +151,7 @@ func TestWithNoListenerTheRoutesSayThereIsNowhereToPair(t *testing.T) {
 // The link port answers every failure with a bare 404 on purpose, so these are
 // the ONLY place a refusal has a reason -- a field served and not rendered
 // would leave an operator debugging a number.
+//
 // The search is SCOPED to the pairing section of app.js rather than run over
 // the whole file. Checked, and it matters: "available", "address", "why",
 // "route", "reason", "accepted", "product", "conditions" and "holding" all
@@ -178,7 +181,7 @@ func TestTheInterfaceRendersEveryLinkFieldTheServerSends(t *testing.T) {
 		// LinkPeerView -- "holding" and "why" are the alive-but-blind surface
 		"product", "link_id", "capability", "conditions", "holding", "why",
 		// LinkReceiptView
-		"accepted", "duplicate", "reason", "route",
+		"accepted", "duplicate", "cause", "reason", "route",
 	}
 	for _, f := range fields {
 		if !bytes.Contains(js, []byte(f)) {
@@ -193,6 +196,30 @@ func TestTheInterfaceRendersEveryLinkFieldTheServerSends(t *testing.T) {
 		if !bytes.Contains(js, []byte(route)) {
 			t.Errorf("app.js never calls %s, so pairing is still something that "+
 				"needs a terminal", route)
+		}
+	}
+}
+
+// EVERY CAUSE HAS WORDS.
+//
+// The label is what the server counts by; the page has to turn it into what to
+// do about it. A cause with no translation renders as its own slug --
+// "pairing-fingerprint-mismatch" instead of "something is terminating TLS
+// between you and it, stop and find out what" -- which is the label doing the
+// job the sentence exists for, on the one screen where somebody is already
+// stuck.
+func TestEveryRefusalCauseHasSomethingAnOperatorCanRead(t *testing.T) {
+	js, err := os.ReadFile(filepath.Join("assets", "app.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(js, []byte("LINK_CAUSES")) {
+		t.Fatal("app.js has no LINK_CAUSES table, so this test is checking nothing")
+	}
+	for _, c := range link.AllCauses() {
+		if !bytes.Contains(js, []byte(`"`+string(c)+`":`)) {
+			t.Errorf("refusals can be labelled %q and LINK_CAUSES has no entry for "+
+				"it, so an operator is shown the slug", c)
 		}
 	}
 }

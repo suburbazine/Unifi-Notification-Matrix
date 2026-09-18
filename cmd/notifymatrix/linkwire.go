@@ -151,6 +151,7 @@ type linkDeps struct {
 	handle    func(context.Context, event.Event) error
 	auditLog  audit.Log
 	pairer    *link.Pairer
+	version   string
 	silentFor time.Duration
 }
 
@@ -183,8 +184,9 @@ func (d linkDeps) build() link.Deps {
 			}
 			return out
 		},
-		Claim:  func(slug string) *link.Claim { return d.state.claimFor(peers(), slug) },
-		Pairer: d.pairer,
+		Claim:   func(slug string) *link.Claim { return d.state.claimFor(peers(), slug) },
+		Pairer:  d.pairer,
+		Version: d.version,
 		OnPaired: func(_ context.Context, p link.Peer, key []byte) error {
 			return d.storePeer(p, key)
 		},
@@ -303,7 +305,7 @@ func (s *linkState) view(cfg func() *config.Config, p *link.Pairer, now time.Tim
 		out.Receipts = append(out.Receipts, web.LinkReceiptView{
 			At: rs[i].At, LinkID: rs[i].LinkID, Route: rs[i].Route,
 			Accepted: rs[i].Accepted, Duplicate: rs[i].Duplicate,
-			Reason: rs[i].Reason,
+			Cause: string(rs[i].Cause), Reason: rs[i].Reason,
 		})
 	}
 	return out
