@@ -888,7 +888,7 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 					cfgMu.RLock()
 					defer cfgMu.RUnlock()
 					return current
-				}, linkPairer.Load(), time.Now())
+				}, linkPairer.Load(), time.Now(), started)
 			},
 			LinkOfferCode: func() (string, time.Duration, error) {
 				p := linkPairer.Load()

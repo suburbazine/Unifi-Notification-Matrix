@@ -47,6 +47,17 @@ type LinkPairing struct {
 	// other side of that trade: the real reason, on a page that already needs
 	// a password.
 	Receipts []LinkReceiptView `json:"receipts"`
+
+	// SinceSeconds is how long this service has been collecting receipts:
+	// the receipts are IN MEMORY and start empty at every restart.
+	//
+	// It exists because the empty state was giving confidently wrong advice.
+	// "Nothing has reached the link listener yet -- a peer that appears to be
+	// trying and is not here is not reaching this machine at all" is true
+	// after a fresh install and a lie two minutes after a restart, and it
+	// sends the operator to check firewalls and ports when nothing is wrong.
+	// Found by rendering the page against a daemon that had just restarted.
+	SinceSeconds int `json:"since_seconds"`
 }
 
 // LinkReceiptView is one thing a peer did, as an operator needs to read it.

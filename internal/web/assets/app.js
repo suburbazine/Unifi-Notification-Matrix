@@ -1804,7 +1804,7 @@ function renderLinkSection(body, ctx) {
   }
   body.appendChild(pc);
 
-  body.appendChild(receiptsCard(st.receipts || []));
+  body.appendChild(receiptsCard(st.receipts || [], st.since_seconds || 0));
 }
 
 // pairingCard offers a code, or shows the one on offer with its clock.
@@ -1992,16 +1992,32 @@ var LINK_CAUSES = {
 // on the wire and useless to the operator, who is then debugging a number.
 // This is the other side of the trade: the real reason, on a page that
 // already needs a password.
-function receiptsCard(rs) {
+function receiptsCard(rs, sinceSeconds) {
   var card = el("div", "card");
   card.appendChild(el("div", "card-title", "What peers have done here"));
+
+  // THESE ARE IN MEMORY AND START EMPTY AT EVERY RESTART, and the empty state
+  // has to say so. It used to read "nothing has reached the link listener yet
+  // -- a peer that appears to be trying and is not here is not reaching this
+  // machine at all", which is true of a fresh install and a lie two minutes
+  // after a restart. Confidently wrong advice is worse than none: it sends
+  // somebody to check firewalls and ports while nothing is wrong.
+  var window_ = sinceSeconds
+    ? "in the " + age(sinceSeconds) + " since this service started"
+    : "since this service started";
   if (!rs.length) {
     card.appendChild(el("div", "muted",
-      "Nothing has reached the link listener yet. A peer that appears to be " +
-      "trying and is not here is not reaching this machine at all -- look at " +
-      "the address, the port and anything between."));
+      "Nothing has reached the link listener " + window_ + ". If a peer has " +
+      "been trying for longer than that, restart it or wait for its next " +
+      "heartbeat before concluding it cannot reach this machine."));
+    card.appendChild(el("div", "note",
+      "This list is kept in memory, so a restart empties it. It is not the " +
+      "audit log, which survives."));
     return card;
   }
+  card.appendChild(el("div", "note", "The last " + rs.length +
+    (rs.length === 1 ? " request" : " requests") + " " + window_ +
+    ". Kept in memory, so a restart empties this."));
   var t = table(["When", "Result", "Route", "Why"]);
   t.className = "audit";
   rs.forEach(function (r) {

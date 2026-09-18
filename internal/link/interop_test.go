@@ -223,3 +223,43 @@ func TestACompleteEnvelopeValidatesUnderTheWireFieldNames(t *testing.T) {
 		t.Errorf("computed dedup key %q, envelope says %q", got, env.DedupKey)
 	}
 }
+
+// SENTRY'S CORRECTED ENVELOPE, exactly as it sent it.
+//
+// The first one it sent was refused three times in a row for three different
+// missing fields, which is what a validator returning the first failure does
+// to somebody fixing them one at a time. This is the shape that passed, pinned
+// so a change to validation that would refuse it fails here rather than in the
+// other product's logs.
+func TestSentrysCorrectedEnvelopeValidates(t *testing.T) {
+	const body = `{"link_version":1,"product":"sentry","product_version":"1.5.0",
+ "site_id":"site-live-verify-01",
+ "event_id":"51244833-e0c9-4093-b156-9023ee699b8f",
+ "dedup_key":"sentry/test-actor-1/sentry-credential-sweep",
+ "sent_at":"2026-09-18T06:46:40+00:00","occurred_at":"2026-09-18T06:46:40+00:00",
+ "state":"raised","condition":"sentry-credential-sweep","severity":"critical",
+ "title":"Live envelope verification","detail":"post-fix",
+ "entity":{"kind":"identity","id":"test-actor-1","name":"Test Actor"},
+ "actor":{"kind":"identity","id":"test-actor-1","name":"Test Actor"},
+ "context":{}}`
+
+	var e Envelope
+	if err := json.Unmarshal([]byte(body), &e); err != nil {
+		t.Fatal(err)
+	}
+	p := sentry()
+	if err := e.Validate(p); err != nil {
+		t.Fatalf("the peer's corrected envelope was refused: %v", err)
+	}
+
+	// An empty context object is accepted and renders nothing -- one of the two
+	// questions the peer asked, answered by the code rather than by opinion.
+	if got := e.Event(p, time.Now()).Detail; got != "post-fix" {
+		t.Errorf("detail = %q; an empty context should add nothing", got)
+	}
+
+	// The tripwire agrees, which is the whole reason it is sent.
+	if got := e.dedupKeyFor(p); got != e.DedupKey {
+		t.Errorf("computed %q, the peer sent %q", got, e.DedupKey)
+	}
+}

@@ -194,13 +194,30 @@ func (e Envelope) Event(p Peer, receivedAt time.Time) event.Event {
 	}
 }
 
-// detailWithContext renders the peer's context into the body.
+// detailWithContext renders the peer's actor and context into the body.
 //
 // Deterministically ordered, because an incident body that reorders itself
 // between two deliveries of the same event reads as two different events.
+//
+// THE ACTOR WAS BEING DROPPED. It was in the envelope, documented, validated
+// past, and read by nothing: a peer computed it, sent it, and it vanished.
+// Found when a peer asked whether its actor's kind was checked and the honest
+// answer turned out to be that the whole field was not.
+//
+// It belongs in the body rather than anywhere structured, and it is often the
+// most useful line in the alert: on a door denial the entity is the DOOR and
+// the actor is the person, so without it the alert says a door refused
+// somebody and does not say who.
 func (e Envelope) detailWithContext() string {
+	who := e.actorLine()
 	if len(e.Context) == 0 {
-		return e.Detail
+		if who == "" {
+			return e.Detail
+		}
+		if e.Detail == "" {
+			return who
+		}
+		return e.Detail + "\n" + who
 	}
 	keys := make([]string, 0, len(e.Context))
 	for k := range e.Context {
@@ -210,6 +227,12 @@ func (e Envelope) detailWithContext() string {
 
 	var b strings.Builder
 	b.WriteString(e.Detail)
+	if who != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(who)
+	}
 	for _, k := range keys {
 		if b.Len() > 0 {
 			b.WriteString("\n")
@@ -217,6 +240,40 @@ func (e Envelope) detailWithContext() string {
 		fmt.Fprintf(&b, "%s: %v", k, e.Context[k])
 	}
 	return b.String()
+}
+
+// actorLine names who the peer says did this, empty when it says nobody.
+//
+// Left out entirely when the actor is the same party as the entity, which is
+// how a peer scopes a cascade to an identity: repeating "Identity: T" under an
+// incident already titled after T is noise, and noise in an alert body is what
+// stops people reading alert bodies.
+func (e Envelope) actorLine() string {
+	if e.Actor == nil {
+		return ""
+	}
+	id := strings.TrimSpace(e.Actor.ID)
+	name := strings.TrimSpace(e.Actor.Name)
+	if id == "" && name == "" {
+		return ""
+	}
+	if id != "" && strings.EqualFold(id, strings.TrimSpace(e.Entity.ID)) {
+		return ""
+	}
+
+	kind := strings.TrimSpace(e.Actor.Kind)
+	if kind == "" {
+		kind = "actor"
+	}
+	label := strings.ToUpper(kind[:1]) + kind[1:]
+	switch {
+	case name != "" && id != "" && !strings.EqualFold(name, id):
+		return fmt.Sprintf("%s: %s (%s)", label, name, id)
+	case name != "":
+		return label + ": " + name
+	default:
+		return label + ": " + id
+	}
 }
 
 func firstNonEmpty(vs ...string) string {

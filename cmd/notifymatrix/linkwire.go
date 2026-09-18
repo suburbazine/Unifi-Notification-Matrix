@@ -293,7 +293,8 @@ func (d linkDeps) storePeer(p link.Peer, key []byte) error {
 // right now", which is otherwise invisible: a peer can be alive, heartbeating
 // and unable to see a single door, and in that state every other indicator on
 // the page reads healthy.
-func (s *linkState) view(cfg func() *config.Config, p *link.Pairer, now time.Time) web.LinkPairing {
+func (s *linkState) view(cfg func() *config.Config, p *link.Pairer, now time.Time,
+	startedAt time.Time) web.LinkPairing {
 	c := cfg()
 	out := web.LinkPairing{
 		Available: p != nil,
@@ -326,6 +327,9 @@ func (s *linkState) view(cfg func() *config.Config, p *link.Pairer, now time.Tim
 
 	// Newest first, and bounded again here rather than trusted: the operator
 	// wants the refusal that just happened, not the first of two hundred.
+	if !startedAt.IsZero() && now.After(startedAt) {
+		out.SinceSeconds = int(now.Sub(startedAt) / time.Second)
+	}
 	rs := s.Receipts()
 	out.Receipts = []web.LinkReceiptView{}
 	for i := len(rs) - 1; i >= 0 && len(out.Receipts) < shownReceipts; i-- {

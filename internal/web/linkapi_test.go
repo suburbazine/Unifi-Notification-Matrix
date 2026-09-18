@@ -181,7 +181,7 @@ func TestTheInterfaceRendersEveryLinkFieldTheServerSends(t *testing.T) {
 		// LinkPeerView -- "holding" and "why" are the alive-but-blind surface
 		"product", "link_id", "capability", "conditions", "holding", "why",
 		// LinkReceiptView
-		"accepted", "duplicate", "cause", "reason", "route",
+		"accepted", "duplicate", "cause", "reason", "route", "since_seconds",
 	}
 	for _, f := range fields {
 		if !bytes.Contains(js, []byte(f)) {

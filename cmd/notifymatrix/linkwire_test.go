@@ -115,9 +115,19 @@ func TestReceiptsAreBoundedAndNewestFirstInTheView(t *testing.T) {
 
 	last := link.Receipt{At: time.Now(), Route: "/link/pair", Reason: "the latest"}
 	s.record(last)
-	v := s.view(func() *config.Config { return &config.Config{} }, nil, time.Now())
+	now := time.Now()
+	v := s.view(func() *config.Config { return &config.Config{} }, nil, now,
+		now.Add(-90*time.Second))
 	if len(v.Receipts) != shownReceipts {
 		t.Errorf("the view shows %d receipts, want %d", len(v.Receipts), shownReceipts)
+	}
+	// The window the receipts cover is reported, because they are in memory
+	// and an empty list two minutes after a restart means something quite
+	// different from an empty list on a week-old install.
+	if v.SinceSeconds < 89 || v.SinceSeconds > 91 {
+		t.Errorf("since_seconds = %d, want about 90; without it the empty state "+
+			"tells an operator a peer cannot reach this machine when the truth "+
+			"is that this service restarted a moment ago", v.SinceSeconds)
 	}
 	if v.Receipts[0].Reason != "the latest" {
 		t.Errorf("the view leads with %q, not the most recent refusal; an "+
