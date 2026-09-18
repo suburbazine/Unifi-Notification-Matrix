@@ -111,6 +111,21 @@ func Key(source, entity, condition string) string {
 	return fmt.Sprintf("%s/%s/%s", clean(source), clean(entity), clean(condition))
 }
 
+// Condition is the condition this incident is about, read back out of the
+// dedup key.
+//
+// Safe by construction rather than by parsing luck: Key cleans each of its
+// three parts and replaces any "/" inside them, so a key is always exactly
+// three slash-separated segments. Pinned by a round-trip test, because the day
+// that stops being true this returns something plausible and wrong.
+func (i *Incident) Condition() string {
+	parts := strings.Split(i.DedupKey, "/")
+	if len(parts) != 3 {
+		return ""
+	}
+	return parts[2]
+}
+
 // State computes the lifecycle position from the timestamps.
 //
 // This is a function rather than a field on purpose. The product's central

@@ -91,15 +91,24 @@ has to use the same string, or it becomes two incidents that both nag.
 	for _, c := range Catalogue() {
 		if c.Group != lastGroup {
 			b.WriteString("\n## " + c.Group + "\n\n")
-			b.WriteString("| Condition | Means | Comes from |\n")
-			b.WriteString("|---|---|---|\n")
+			b.WriteString("| Condition | Means | Comes from | Always told |\n")
+			b.WriteString("|---|---|---|---|\n")
 			lastGroup = c.Group
 		}
 		from := "inbound webhook only"
 		if len(c.Sources) > 0 {
 			from = "`" + strings.Join(c.Sources, "`, `") + "`"
 		}
-		b.WriteString("| `" + c.Name + "` | " + c.Meaning + " | " + from + " |\n")
+		// "Always told" is the momentary/state split: a momentary condition is
+		// delivered at least once even if it cleared before the first rung was
+		// due, because the event IS the alarm. A blank means the opposite and
+		// deliberately so -- a camera that dropped off and came back inside
+		// one tick is noise, and suppressing it is correct.
+		told := ""
+		if IsMomentary(c.Name) {
+			told = "yes"
+		}
+		b.WriteString("| `" + c.Name + "` | " + c.Meaning + " | " + from + " | " + told + " |\n")
 	}
 
 	b.WriteString(`

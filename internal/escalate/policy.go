@@ -167,6 +167,37 @@ func (p Policy) highestRungDue(openedAt, now time.Time) int {
 
 // channelsUpTo collects the channels of every stage through st, in ladder
 // order and without repeating one that appears on more than one rung.
+// OwedFinalDelivery reports the single delivery owed to an incident that
+// cleared before it was ever delivered.
+//
+// NextDue refuses any resolved incident, which is right for a condition that
+// describes an ongoing state: a camera that dropped off and came back inside
+// one tick is noise. It is wrong for a condition where the EVENT is the alarm
+// -- a door was forced, and that it is shut again does not make it not news.
+// Those cleared before their first rung told nobody at all, while the incident
+// sat closed on the board looking handled.
+//
+// Deliberately stage 0 and once. Once delivered, FirstAlertAt is set, this
+// returns false for ever after, and NextDue still refuses the resolved
+// incident -- so it cannot become a nag. The caller decides WHICH conditions
+// are owed this; the policy only knows what a first rung costs.
+func (p Policy) OwedFinalDelivery(inc *incident.Incident) (stage int, channels []string, ok bool) {
+	switch {
+	case inc == nil, len(p.Stages) == 0:
+		return 0, nil, false
+	case inc.Terminal(), inc.Acknowledged():
+		// Nothing owed: either it is over, or a human already responded.
+		return 0, nil, false
+	case !inc.Resolved():
+		// Still open, so the ordinary ladder applies and NextDue has it.
+		return 0, nil, false
+	case inc.FirstAlertAt != nil:
+		// Already told somebody once. That was the whole debt.
+		return 0, nil, false
+	}
+	return 0, p.channelsUpTo(0), true
+}
+
 func (p Policy) channelsUpTo(st int) []string {
 	seen := map[string]bool{}
 	var out []string

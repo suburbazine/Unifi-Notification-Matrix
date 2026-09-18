@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 )
 
@@ -48,6 +49,11 @@ type Scheduler struct {
 	interval time.Duration
 	onError  func(error)
 	quiet    QuietHours
+
+	// momentary decides which conditions are owed a delivery even after they
+	// have cleared. Injected so a test can describe a vocabulary rather than
+	// depend on the real catalogue.
+	momentary func(condition string) bool
 
 	mu    sync.Mutex
 	stats Stats
@@ -127,6 +133,9 @@ func NewScheduler(store incident.Store, policies map[incident.Severity]Policy, d
 		deliver:  deliver,
 		now:      time.Now,
 		interval: DefaultTickInterval,
+		// Wired by default rather than left nil: a fix that silently does
+		// nothing unless somebody remembers to switch it on is not a fix.
+		momentary: event.IsMomentary,
 	}
 	for _, o := range opts {
 		o(s)
@@ -255,7 +264,18 @@ func (s *Scheduler) process(ctx context.Context, inc *incident.Incident, now tim
 
 	due, stage, channels := pol.DueNow(inc, now)
 	if !due {
-		return nil
+		// The one exception: a MOMENTARY condition that cleared before its
+		// first rung was ever delivered is still owed one delivery. Without
+		// this, a door forced open that shut again inside a tick told nobody,
+		// and the incident sat closed on the board looking handled.
+		if s.momentary == nil || !s.momentary(inc.Condition()) {
+			return nil
+		}
+		var owed bool
+		stage, channels, owed = pol.OwedFinalDelivery(inc)
+		if !owed {
+			return nil
+		}
 	}
 
 	// Quiet hours: hold, do not drop.
@@ -385,6 +405,13 @@ func (s *Scheduler) commit(ctx context.Context, id string, mutate func(*incident
 // alarm.
 func WithQuietHours(q QuietHours) Option {
 	return func(s *Scheduler) { s.quiet = q }
+}
+
+// WithMomentary replaces the condition classifier that decides which cleared
+// incidents are still owed a delivery. Tests use it to describe a vocabulary;
+// production uses the catalogue.
+func WithMomentary(f func(condition string) bool) Option {
+	return func(s *Scheduler) { s.momentary = f }
 }
 
 // Stats returns a snapshot of the counters.

@@ -188,3 +188,28 @@ func TestKeyHandlesEmptyParts(t *testing.T) {
 		t.Fatalf("distinct conditions collided: %q", a)
 	}
 }
+
+// Condition() reads the condition back out of the dedup key, which is only
+// safe because Key cleans each part and replaces any "/" inside it. This pins
+// that: the day it stops holding, Condition returns something plausible and
+// wrong, and the momentary/state decision silently stops applying.
+func TestConditionRoundTripsThroughTheDedupKey(t *testing.T) {
+	for _, tc := range []struct{ source, entity, condition string }{
+		{"access", "door-1", "door-forced-open"},
+		{"protect", "Front Door/Camera", "motion"}, // a "/" inside a part
+		{"network", "", "offline"},                 // an empty part becomes "unknown"
+		{"internal", "notifymatrix", "unclean-shutdown"},
+	} {
+		key := Key(tc.source, tc.entity, tc.condition)
+		inc := &Incident{DedupKey: key}
+		if got := inc.Condition(); got != tc.condition {
+			t.Errorf("Key(%q,%q,%q) = %q; Condition() = %q, want %q",
+				tc.source, tc.entity, tc.condition, key, got, tc.condition)
+		}
+	}
+	// A key that is not three segments has no condition to report, and must
+	// say so rather than guess.
+	if got := (&Incident{DedupKey: "nonsense"}).Condition(); got != "" {
+		t.Errorf("Condition() on a malformed key = %q, want empty", got)
+	}
+}

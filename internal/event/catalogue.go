@@ -195,6 +195,57 @@ var catalogue = []ConditionDoc{
 		[]string{SurfaceInternal}},
 }
 
+// momentary classifies a condition by whether its clear is expected almost
+// immediately, and whether the event is still worth telling somebody about
+// once it has cleared.
+//
+// THE BUG THIS EXISTS FOR: an incident that resolves before the scheduler's
+// next tick was never delivered to anybody. NextDue refuses any resolved
+// incident, the tick is 5s, and every default policy's first rung fires at
+// offset 0 -- so a raise and a clear inside one tick told nobody, while the
+// incident sat closed on the board looking handled.
+//
+// It is a property of the CONDITION, not of the sender or the severity:
+//
+//   - MOMENTARY -- the event IS the alarm. A door was forced; that it is shut
+//     again does not make it not news. Deliver at least once even if the
+//     incident has already resolved.
+//   - STATE -- an ongoing condition. A camera that dropped off and came back
+//     inside five seconds is noise, and suppressing it is CORRECT rather than
+//     a missed alarm.
+//
+// The four Protect detection conditions are STATE deliberately and it is not a
+// close call: motion is the noisiest condition on any site and carries an end
+// timestamp that clears it, so for the highest-volume traffic this bug has
+// been acting as de facto noise suppression. Classifying them momentary would
+// flood every install that has cameras.
+//
+// The flag is INERT for any condition that never emits a clear, which is most
+// of this list -- so the blast radius is far smaller than the count suggests.
+var momentary = map[string]bool{
+	// The event is the alarm; a later clear does not retract it.
+	ConditionEntryOpen:       true, // armed hub entry, opened and shut in seconds, is an intrusion signal
+	ConditionSmoke:           true,
+	ConditionCarbonMonoxide:  true,
+	ConditionGlassBreak:      true,
+	ConditionPanic:           true,
+	ConditionWaterLeak:       true,
+	ConditionTamper:          true,
+	ConditionSensorAlarm:     true,
+	ConditionDoorForced:      true,
+	ConditionDoorHeld:        true,
+	ConditionAccessDenied:    true,
+	ConditionAccessCritical:  true,
+	ConditionThreat:          true,
+	ConditionInboundAlarm:    true,
+	ConditionUncleanShutdown: true,
+}
+
+// IsMomentary reports whether a condition must be delivered at least once even
+// if it cleared before the first rung was due. Unknown conditions are STATE:
+// the safe default is the behaviour this product already had.
+func IsMomentary(condition string) bool { return momentary[condition] }
+
 // Catalogue returns every condition a rule can match, with what it means.
 //
 // A copy each time. The caller renders it into JSON for a browser, and a
