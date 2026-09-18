@@ -78,6 +78,11 @@ type Peer struct {
 	// this channel carries more than one product.
 	Slug string `json:"slug"`
 
+	// LinkID is the credential this peer authenticates with. Kept separate
+	// from the slug: the slug is what the product IS and appears in every
+	// dedup key for ever, while the credential is rotated by re-pairing.
+	LinkID string `json:"link_id"`
+
 	Manifest  Manifest            `json:"manifest"`
 	Overrides map[string]Override `json:"overrides,omitempty"`
 

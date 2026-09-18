@@ -82,6 +82,32 @@ var migrations = []migration{
 				WHERE closed_at IS NULL AND (acked_at IS NULL OR resolved_at IS NULL)`,
 		},
 	},
+	{
+		version: 2,
+		stmts: []string{
+			// Idempotency for the peer link.
+			//
+			// A peer retries on a timeout with the SAME event id, so a reply
+			// this product sent but the peer never received must not raise the
+			// alarm twice. In memory would be enough for a retry seconds
+			// later; it is NOT enough across a restart, and a restart during
+			// an alarm is exactly when a peer is retrying -- so this is
+			// durable for the same reason the incidents themselves are.
+			//
+			// Scoped by link: two peers choosing the same id is legitimate,
+			// and one peer must never be able to suppress another's events by
+			// guessing them.
+			`CREATE TABLE link_seen_events (
+				link_id  TEXT NOT NULL,
+				event_id TEXT NOT NULL,
+				seen_at  TEXT NOT NULL,
+				PRIMARY KEY (link_id, event_id)
+			) STRICT`,
+
+			// Pruning scans by age, so it is indexed by age.
+			`CREATE INDEX link_seen_events_seen_at ON link_seen_events (seen_at)`,
+		},
+	},
 }
 
 func latestVersion() int {
