@@ -85,6 +85,31 @@ func (c Config) validateLinks() Problems {
 		}
 		seenID[l.LinkID] = where
 
+		// A LINK KEY IS 32 RAW BYTES, AND THE COMMONEST WAY TO GET THAT WRONG
+		// LEAVES NOTHING TO SEE.
+		//
+		// Pairing mints the key here and hands the peer a base64 rendering of
+		// it; this file stores the bytes. Somebody restoring a configuration
+		// by hand naturally pastes the base64 instead, and then this end signs
+		// with 44 characters of ASCII while the peer signs with the 32 bytes
+		// they decode to. Same secret, two readings, two signatures -- and
+		// because the link port answers every failure with a bare 404, it
+		// presents as a wrong key with nothing to read.
+		//
+		// Not hypothetical: exactly this reading cost the other two Xtremission
+		// products their first live pairing. Caught at startup, where the
+		// length is the whole tell, rather than at the first event.
+		if !l.Key.IsZero() {
+			if n := len(l.Key.Reveal()); n != link.KeyBytes {
+				p = append(p, fmt.Sprintf("%s: the link key is %d bytes long and a "+
+					"link key is %d. If what is stored is the base64 the peer was "+
+					"given, that is the TEXT of the key rather than the key, and "+
+					"signing with it fails in exactly the same way as a wrong key. "+
+					"Pair again rather than transcribing a credential",
+					where, n, link.KeyBytes))
+			}
+		}
+
 		// ONE CLAIMANT PER CAPABILITY. Two peers both claiming to serve the
 		// doors is the duplicate-source problem the claim exists to prevent,
 		// and last-writer-wins would silently demote a working product.

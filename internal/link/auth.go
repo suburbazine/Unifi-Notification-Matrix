@@ -83,9 +83,52 @@ func Canonical(method, path, linkID, ts, nonce string, body []byte) string {
 
 // Sign returns the base64 signature for a canonical string.
 func Sign(key []byte, canonical string) string {
+	return base64.StdEncoding.EncodeToString(signRaw(key, canonical))
+}
+
+// signRaw is the signature before it is written down.
+func signRaw(key []byte, canonical string) []byte {
 	m := hmac.New(sha256.New, key)
 	m.Write([]byte(canonical))
-	return base64.StdEncoding.EncodeToString(m.Sum(nil))
+	return m.Sum(nil)
+}
+
+// decodeDigest reads a base64 digest in ANY of the four spellings: standard or
+// url-safe alphabet, padded or not.
+//
+// Deliberately permissive, and it costs nothing. The encoding of a signature
+// carries no authority -- the bytes underneath are what is compared -- so a
+// peer whose language reaches for urlsafe_b64encode, or whose library strips
+// padding, is making a spelling choice and not an authentication claim.
+//
+// Being strict here is a REAL failure mode and not a hypothetical one: the
+// other end of this protocol lost an evening to exactly this, in mirror image.
+// Their key decoder refused our alphabet, a correct credential was reported as
+// "not valid base64", and the operator was told to paste again what he had
+// already pasted correctly. On this side every refusal answers a bare 404, so
+// the same mistake would present as a wrong key with nothing to read.
+func decodeDigest(s string) ([]byte, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, false
+	}
+	s = strings.NewReplacer("-", "+", "_", "/").Replace(s)
+	s = strings.TrimRight(s, "=")
+	b, err := base64.RawStdEncoding.DecodeString(s)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// sameDigest compares two base64 digests by their bytes, in constant time,
+// without caring which base64 either of them is written in.
+func sameDigest(want []byte, got string) bool {
+	g, ok := decodeDigest(got)
+	if !ok {
+		return false
+	}
+	return subtle.ConstantTimeCompare(want, g) == 1
 }
 
 // Credential is one paired peer's shared secret.
@@ -154,6 +197,14 @@ func (v *Verifier) Verify(creds []Credential, req Request) (Credential, error) {
 		return Credential{}, fmt.Errorf("%w: %s off", ErrSkew, d.Round(time.Second))
 	}
 
+	// Decoded ONCE, before the scan, and compared as bytes rather than as
+	// text: see decodeDigest. A signature that is right and spelled in a
+	// different base64 is still right.
+	given, ok := decodeDigest(sig)
+	if !ok {
+		return Credential{}, fmt.Errorf("%w: signature is not base64", ErrMalformed)
+	}
+
 	// Scanned with no early break, and compared in constant time, so neither
 	// the number of configured links nor which one matched is readable from
 	// how long this took.
@@ -161,8 +212,8 @@ func (v *Verifier) Verify(creds []Credential, req Request) (Credential, error) {
 	var matched int
 	for _, c := range creds {
 		idOK := subtle.ConstantTimeCompare([]byte(c.LinkID), []byte(req.LinkID))
-		want := Sign(c.Key, Canonical(req.Method, req.Path, c.LinkID, req.Timestamp, req.Nonce, req.Body))
-		sigOK := subtle.ConstantTimeCompare([]byte(want), []byte(sig))
+		want := signRaw(c.Key, Canonical(req.Method, req.Path, c.LinkID, req.Timestamp, req.Nonce, req.Body))
+		sigOK := subtle.ConstantTimeCompare(want, given)
 		if idOK&sigOK == 1 {
 			found = c
 			matched++

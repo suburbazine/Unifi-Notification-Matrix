@@ -2,8 +2,17 @@ package web
 
 import (
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 )
+
+// noLinkListener is the one answer every link route gives when this build has
+// no listener: there is nowhere for a peer to pair TO, which is a different
+// thing from pairing having failed.
+const noLinkListener = "this installation has no peer link listener, so there " +
+	"is nowhere for a peer to pair. Set web.link_listen and restart."
 
 // LinkPairing is what the interface shows about pairing a peer.
 type LinkPairing struct {
@@ -62,10 +71,7 @@ func (s *Server) handleLinkState(w http.ResponseWriter, r *http.Request) {
 // alarms here and take over a capability.
 func (s *Server) handleLinkPairCode(w http.ResponseWriter, r *http.Request) {
 	if s.deps.LinkOfferCode == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": "this installation has no peer link listener, so there is " +
-				"nowhere for a peer to pair. Set web.link_listen and restart.",
-		})
+		writeJSON(w, http.StatusNotFound, errorBody(noLinkListener))
 		return
 	}
 	code, expires, err := s.deps.LinkOfferCode()
@@ -77,4 +83,57 @@ func (s *Server) handleLinkPairCode(w http.ResponseWriter, r *http.Request) {
 		"code":            code,
 		"expires_seconds": int(expires / time.Second),
 	})
+}
+
+// handleLinkCancelCode withdraws an offered pairing code.
+//
+// A code is live for its full ten minutes whether or not the operator still
+// wants it to be. Without a way to take one back, "I read it out to the wrong
+// person" or "I pasted it in the wrong window" is ten minutes of a working
+// credential sitting somewhere it should not, and the only remedy is to wait.
+func (s *Server) handleLinkCancelCode(w http.ResponseWriter, r *http.Request) {
+	if s.deps.LinkCancelCode == nil {
+		writeJSON(w, http.StatusNotFound, errorBody(noLinkListener))
+		return
+	}
+	s.deps.LinkCancelCode()
+	s.record(r, audit.Entry{
+		Kind: audit.KindService, Actor: "web",
+		Summary: "withdrew the peer pairing code",
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
+// handleLinkUnpair forgets a paired peer.
+//
+// The other half of pairing, and it is not optional. Pairing from this page
+// grants a credential that can raise alarms here and take a capability away
+// from this product's own sources; a grant that can only be revoked by editing
+// YAML is a grant most operators cannot revoke at all.
+func (s *Server) handleLinkUnpair(w http.ResponseWriter, r *http.Request) {
+	if s.deps.LinkUnpair == nil {
+		writeJSON(w, http.StatusNotFound, errorBody(noLinkListener))
+		return
+	}
+	slug := strings.TrimSpace(r.PathValue("slug"))
+	if slug == "" {
+		writeJSON(w, http.StatusBadRequest, errorBody("which peer?"))
+		return
+	}
+	found, err := s.deps.LinkUnpair(slug)
+	if err != nil {
+		s.fail(w, r, "forgetting a peer link", err)
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound,
+			errorBody("no peer named "+slug+" is paired here"))
+		return
+	}
+	s.record(r, audit.Entry{
+		Kind: audit.KindService, Actor: "web",
+		Summary: "forgot a peer link",
+		Fields:  map[string]string{"product": slug},
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "forgotten"})
 }

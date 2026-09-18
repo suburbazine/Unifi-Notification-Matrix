@@ -89,6 +89,14 @@ type Deps struct {
 	LinkState     func() LinkPairing
 	LinkOfferCode func() (code string, expires time.Duration, err error)
 
+	// LinkCancelCode withdraws an offered code, and LinkUnpair forgets a
+	// paired peer -- reporting whether there was one to forget. Both exist
+	// because pairing is granting a credential from this page, and a grant
+	// that can only be taken back by editing YAML is one most operators
+	// cannot take back.
+	LinkCancelCode func()
+	LinkUnpair     func(slug string) (found bool, err error)
+
 	// TestChannel sends one channel's proof-of-configuration message and
 	// reports what happened. Optional: a build that does not supply it simply
 	// has no test button.
@@ -337,6 +345,8 @@ func (s *Server) Handler() http.Handler {
 	// change.
 	mux.Handle("GET /api/link", s.requireAuth(http.HandlerFunc(s.handleLinkState)))
 	mux.Handle("POST /api/link/code", s.requireAuth(http.HandlerFunc(s.handleLinkPairCode)))
+	mux.Handle("DELETE /api/link/code", s.requireAuth(http.HandlerFunc(s.handleLinkCancelCode)))
+	mux.Handle("DELETE /api/link/peers/{slug}", s.requireAuth(http.HandlerFunc(s.handleLinkUnpair)))
 	mux.Handle("GET /api/update", s.requireAuth(http.HandlerFunc(s.handleUpdateState)))
 	mux.Handle("POST /api/update/check", s.requireAuth(http.HandlerFunc(s.handleUpdateCheck)))
 	mux.Handle("POST /api/update/apply", s.requireAuth(http.HandlerFunc(s.handleUpdateApply)))

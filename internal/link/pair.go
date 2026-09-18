@@ -4,7 +4,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -117,11 +116,16 @@ func FormatCode(code string) string {
 // role distinguishes the two directions so a peer's proof cannot be replayed
 // back at it as the server's.
 func PairProof(code, role, party, fingerprint, nonce string) string {
+	return base64.StdEncoding.EncodeToString(proofBytes(code, role, party, fingerprint, nonce))
+}
+
+// proofBytes is the proof before it is written down.
+func proofBytes(code, role, party, fingerprint, nonce string) []byte {
 	m := hmac.New(sha256.New, []byte(NormaliseCode(code)))
 	m.Write([]byte(strings.Join([]string{
 		pairTag, role, party, NormaliseFingerprint(fingerprint), nonce,
 	}, "\n")))
-	return base64.StdEncoding.EncodeToString(m.Sum(nil))
+	return m.Sum(nil)
 }
 
 // PairRequest is what a peer sends to /link/pair.
@@ -254,8 +258,13 @@ func (p *Pairer) Complete(req PairRequest) (PairResponse, Peer, error) {
 		return PairResponse{}, Peer{}, fmt.Errorf("%w: %v", ErrManifestNeeded, err)
 	}
 
-	want := PairProof(p.code, "client", req.Slug, p.Fingerprint, req.Nonce)
-	if subtle.ConstantTimeCompare([]byte(want), []byte(req.Proof)) != 1 {
+	// Compared by bytes rather than by text, for the reason decodeDigest
+	// gives -- and it matters MORE here than on an ordinary request. A peer
+	// whose base64 alphabet differs from ours would not merely be refused: it
+	// would burn one of five attempts per try and VOID the operator's code on
+	// the fifth, which reads as a mistyped code and is not.
+	want := proofBytes(p.code, "client", req.Slug, p.Fingerprint, req.Nonce)
+	if !sameDigest(want, req.Proof) {
 		p.attempts++
 		if p.attempts >= MaxCodeAttempts {
 			p.voided = true
@@ -289,13 +298,21 @@ func (p *Pairer) Complete(req PairRequest) (PairResponse, Peer, error) {
 	}, peer, nil
 }
 
+// KeyBytes is the length of a link key: 256 bits of randomness, and the
+// number the configuration is checked against.
+//
+// Named rather than written as 32 at the two places that care, because the
+// check in config is only meaningful if it cannot drift from what pairing
+// actually mints.
+const KeyBytes = 32
+
 // newLinkCredential mints a link id and a 256-bit key.
 func newLinkCredential() (string, []byte, error) {
 	idBytes := make([]byte, 8)
 	if _, err := rand.Read(idBytes); err != nil {
 		return "", nil, fmt.Errorf("link: generating a link id: %w", err)
 	}
-	key := make([]byte, 32)
+	key := make([]byte, KeyBytes)
 	if _, err := rand.Read(key); err != nil {
 		return "", nil, fmt.Errorf("link: generating a link key: %w", err)
 	}
