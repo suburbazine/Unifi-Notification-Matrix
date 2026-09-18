@@ -187,6 +187,22 @@ const fileHeader = `# notifymatrix configuration
 # how often an unacknowledged incident is repeated, and through which channels.
 # All three have sensible defaults and can be left out entirely.
 #
+# A rule can also be limited to part of the day, and can shift severity by
+# whole tiers rather than setting it outright -- so "out of hours a denial
+# matters one notch more" is one rule instead of one per condition:
+#
+# rules:
+#   - name: out of hours
+#     conditions: [access-denied, door-forced-open]
+#     elevate: 1                    # -4 to 4; clamped at the ends
+#     window: {start: "21:30", end: "06:00"}
+#
+# The window is clock time at the SITE, using quiet_hours.zone, and may wrap
+# midnight. It gates the WHOLE rule: outside those hours the rule does nothing
+# at all, which is what makes "ignore: true" with a window mean "silence this
+# during opening hours". A rule may set severity OR shift it, not both.
+# Neither field has a control in the interface yet; it leaves both alone.
+#
 # ===========================================================================
 # Everything below this line is written by notifymatrix. Comments you add to
 # it will be lost the next time settings are saved from the interface.
