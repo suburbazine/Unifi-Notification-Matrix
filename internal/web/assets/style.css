@@ -100,8 +100,17 @@
 
 *{box-sizing:border-box}
 html{color-scheme:dark}
-html,body{height:100%}
+/* height on the HTML element, min-height on BODY -- not `height:100%` on both.
+   A sticky child is confined to its containing block, so a body exactly one
+   viewport tall confined header.bar to the first screenful: it stuck for 600px
+   of scrolling and then scrolled away like anything else, which nothing on the
+   page announces and no test can see. The rail's aria-current was the symptom
+   -- watchRail() measures from the header's bottom edge, and that edge had
+   gone thousands of pixels above the viewport. BODY still fills a short page;
+   it is simply no longer forbidden to be taller. */
+html{height:100%}
 body{
+  min-height:100%;
   margin:0;background:var(--bg);color:var(--fg);
   font:var(--fs-base)/var(--lh) var(--font);
   -webkit-text-size-adjust:100%;

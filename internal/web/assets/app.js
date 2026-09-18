@@ -2059,7 +2059,9 @@ function markRail(section) {
 
 // watchRail keeps the rail's current entry on the section in view as the
 // page scrolls. One listener for the page's life; it does nothing unless
-// Settings is showing. The section whose top is nearest the header wins.
+// Settings is showing. The section whose top is nearest the header wins,
+// measured against a line just below the header that comes down to meet the
+// last sections as the page runs out of scroll.
 var railWatched = false;
 function watchRail() {
   if (railWatched || !window.addEventListener) return;
@@ -2068,14 +2070,46 @@ function watchRail() {
   var update = function () {
     pending = false;
     if (state.tab !== "settings" || !settingsCtx) return;
-    var top = 0;
+    // The reference line: just under the header, or just under the top of the
+    // viewport if the header is not there. Clamped at 0 because the bottom
+    // edge is only a sensible line to measure from while the header is
+    // actually stuck; a header that has scrolled away reports a bottom of
+    // -5469, and a reference line that far above the viewport marks whatever
+    // section the reader passed several screens ago. That is a real bug this
+    // page shipped with (a body of `height:100%` confined the header's sticky
+    // box to one screenful), and the clamp is what makes the rail correct
+    // whether or not sticky is working at this width.
     var bar = document.querySelector("header.bar");
-    if (bar && bar.getBoundingClientRect) top = bar.getBoundingClientRect().bottom + 24;
+    var rect = bar && bar.getBoundingClientRect ? bar.getBoundingClientRect() : null;
+    var top = (rect ? Math.max(0, rect.bottom) : 0) + 24;
+    // The last sections on the page can never be brought up to that line:
+    // the document runs out of scroll before their tops get there. On an
+    // 800x600 window Password is the final section and its top stops 254px
+    // down the screen with nothing below it, so the rail said "Web" while
+    // the reader was at the end and could go no further.
+    //
+    // So over the final screenful the line comes down to meet them, reaching
+    // the bottom of the viewport exactly as the scroll runs out. Both the
+    // line and the content are moving the same way, which keeps the rail
+    // going forward and never back, and it gives every trailing section a
+    // turn rather than jumping to the last one -- at 1280x900 two sections
+    // are stranded below the line at the end, not one, and Quiet hours was
+    // skipped entirely by a rule that only rescued the final section.
+    //
+    // Only where there is scroll to run out of. On a Settings page short
+    // enough to fit one screen the line stays where it is and the first
+    // section is still the answer.
+    var doc = document.documentElement;
+    var y = window.pageYOffset !== undefined ? window.pageYOffset : doc.scrollTop;
+    var left = doc.scrollHeight - window.innerHeight - y;
+    var line = top;
+    if (doc.scrollHeight > window.innerHeight) line = Math.max(top, window.innerHeight - left);
+
     var current = null;
     SETTINGS_SECTIONS.forEach(function (sec) {
       var sc = settingsCtx.sections[sec.key];
       if (!sc || !sc.root.getBoundingClientRect) return;
-      if (sc.root.getBoundingClientRect().top <= top) current = sec.key;
+      if (sc.root.getBoundingClientRect().top <= line) current = sec.key;
     });
     markRail(current || SETTINGS_SECTIONS[0].key);
   };
