@@ -1223,6 +1223,11 @@ process elevates. This will do it for you, prompting if it has to:
 				cfg = current
 			}
 
+			// What was actually bound, which is what the page shows and what
+			// the product hello advertises. Recorded before anything can fail
+			// below, so the two can never disagree.
+			links.setAddress(resolved)
+
 			certPEM, keyPEM, err := linkCertificate(cfg, func(c *config.Config) error {
 				return config.Save(dataDir, c)
 			})

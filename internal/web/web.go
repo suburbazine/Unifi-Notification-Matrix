@@ -320,6 +320,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/incidents", s.handleIncidents)
 	mux.HandleFunc("GET /api/checklist", s.handleChecklist)
+	// Unauthenticated on purpose, and it says nothing this listener was not
+	// already saying: GET / serves the product name and version to anybody.
+	// See internal/web/hello.go.
+	mux.HandleFunc("GET /hello", s.handleHello)
 
 	// Authentication itself.
 	mux.HandleFunc("POST /api/session", s.handleSignIn)

@@ -26,6 +26,9 @@ type linkState struct {
 	// every refusal. The wire answer is always a bare 404, so this is the only
 	// place a misconfigured peer is distinguishable from one that never calls.
 	receipts []link.Receipt
+
+	// addr is where the listener actually bound, empty until it has.
+	addr string
 }
 
 // peerSilentAfter is how long a peer may go without contact before this
@@ -78,6 +81,24 @@ func (s *linkState) holds(capability string, now time.Time, silentAfter time.Dur
 		return false, ""
 	}
 	return c.Held(now, silentAfter)
+}
+
+// setAddress records the address the link listener actually bound.
+//
+// The configuration may say "auto", in which case the configured value is not
+// an address at all and the bound one is the only true answer -- for the page,
+// which tells the operator what to hand the peer, and for the product hello,
+// which advertises the port.
+func (s *linkState) setAddress(addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.addr = addr
+}
+
+func (s *linkState) address() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.addr
 }
 
 func (s *linkState) record(r link.Receipt) {
@@ -278,6 +299,12 @@ func (s *linkState) view(cfg func() *config.Config, p *link.Pairer, now time.Tim
 		Available: p != nil,
 		Address:   strings.TrimSpace(c.Web.LinkListen),
 		Peers:     []web.LinkPeerView{},
+	}
+	// What the listener BOUND beats what the file asked for. They differ
+	// whenever the file says "auto", and the operator is being told what to
+	// type into another machine.
+	if a := s.address(); a != "" {
+		out.Address = a
 	}
 	if p != nil {
 		out.Fingerprint = p.Fingerprint

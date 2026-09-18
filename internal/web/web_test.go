@@ -504,6 +504,7 @@ func TestSecretsNeverReachAResponseBody(t *testing.T) {
 		{"GET", "/static/app.js"},
 		{"GET", "/static/style.css"},
 		{"GET", "/api/status"},
+		{"GET", "/hello"},
 		{"GET", "/api/incidents"},
 		{"GET", "/api/settings"},
 		{"GET", "/api/audit"},
