@@ -120,10 +120,9 @@ believed.
 **New here? [docs/SETUP.md](docs/SETUP.md) walks through a first installation
 from nothing.**
 
-Running it on the UniFi gateway itself is possible and is
-[documented](docs/GATEWAY.md), but it is **not the recommended way** — the
-daemon then shares fate with the equipment it is watching, so the one alarm it
-cannot send is the one that matters most.
+It also installs on a UniFi gateway itself, which is
+[documented](docs/GATEWAY.md) and **not recommended** — see the bottom of this
+page for why.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design,
 [docs/SOURCES.md](docs/SOURCES.md) for what each UniFi application actually
@@ -352,6 +351,35 @@ without one.
 > Do not drop `--certificate-identity-regexp`. Without an identity constraint
 > cosign verifies a signature from *anyone*, which proves nothing about who
 > built your binary.
+
+---
+
+## Yes, it runs on the UniFi gateway itself
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/whats-this-button-do-dark.gif">
+    <img alt="A stick figure standing in front of a server rack, contemplating the large red button on it" src="docs/images/whats-this-button-do-light.gif" width="60%">
+  </picture>
+</p>
+
+**Because it could, not because it should.**
+
+Somebody was always going to press the button, so it may as well work
+properly: it detects the platform, refuses to install where it would take
+memory from routing and inspection, and tells you at **every start** exactly
+what you gave up.
+
+What you gave up is the whole point. Hosted on the gateway, this daemon
+**shares fate with the equipment it is watching** — so when that box reboots,
+wedges or loses power, the one alarm that matters most is the one it
+structurally cannot send. Pair a peer at another site, or point an off-site
+heartbeat at it, and the problem goes away.
+
+[docs/GATEWAY.md](docs/GATEWAY.md) is the supported way to do an unrecommended
+thing, which is a different promise from a recommendation and a smaller one.
+It is also honest about what was never tested on real hardware, because there
+is none here to test it on.
 
 ---
 

@@ -17,6 +17,36 @@ Nothing yet. Entries land here as work merges, and the heading is renamed to
 the version on the day it ships — writing a release's section from scratch at
 tag time is how 0.1.8 nearly went out with none.
 
+## [0.3.2] — 2026-09-19
+
+### Fixed
+
+- **Stopping the service no longer claims it is restarting.** The Health tab
+  branched only on *start*, so pressing **Stop the service** produced the
+  restart message — "this page will go quiet for a few seconds while it
+  restarts" — to somebody who had just deliberately stopped their monitoring.
+  It now says what state that leaves behind, that the page itself is about to
+  stop responding because the service serves it, and it says so in warning
+  colours rather than success green. Nothing reloads afterwards, because there
+  is nothing to reload into.
+
+  This product exists to stop a state reading as healthy when it is not, and
+  that was the interface doing it about the one action that leaves nothing
+  watching at all.
+
+### Changed
+
+- **The gateway page and the README now lead with why it exists**, which is
+  *because it could, not because it should* — complete with a stick figure
+  eyeing a large red button. The substance underneath is unchanged and
+  deliberately unfunny: shared fate is still the reason not to do it, the
+  daemon still says so at every start, and `docs/GATEWAY.md` still lists what
+  was never verified on real hardware. It is the supported way to do an
+  unrecommended thing, which is a different promise from a recommendation.
+
+  Shipped in 0.3.1 without any of this, so it arrived reading like a feature
+  rather than a curiosity.
+
 ## [0.3.1] — 2026-09-19
 
 One added deployment target and nothing else. Existing installations are
@@ -541,7 +571,8 @@ demo mode, and the signed reproducible release pipeline.
 They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
-[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.2.0...v0.2.1
