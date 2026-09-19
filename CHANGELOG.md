@@ -13,6 +13,27 @@ view against the release before them.
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.3.3] — 2026-09-19
+
+**If you installed 0.3.1 or 0.3.2 on a UniFi gateway, take this one.** Those
+two shipped an install that crash-loops on first run and puts its state
+somewhere other than where the documentation says. Nothing else is affected:
+Windows and ordinary Linux installs behave exactly as they did.
+
+Existing gateway installs keep their state at `/var/lib/notifymatrix`. To move
+it where 0.3.3 expects, before setting a password:
+
+```bash
+systemctl stop notifymatrix
+mkdir -p /data/notifymatrix && mv /var/lib/notifymatrix/* /data/notifymatrix/
+```
+
+then re-run the install.
+
 ### Fixed
 
 - **The gateway install crash-looped, and the install put everything in the
@@ -596,7 +617,8 @@ demo mode, and the signed reproducible release pipeline.
 They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
-[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.2.1...v0.3.0
