@@ -32,7 +32,13 @@ type systemdManager struct{}
 
 const systemctlTimeout = 30 * time.Second
 
-func systemctl(args ...string) (string, error) {
+// systemctl is a variable so a test can watch what Install actually asks for.
+//
+// The verb matters and nothing else in the suite could see it: a unit brought
+// up with `start` instead of `restart` leaves the OLD binary running with
+// every indicator claiming the upgrade worked, which is exactly the class of
+// silent success this product refuses to ship.
+var systemctl = func(args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), systemctlTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "systemctl", args...)
@@ -139,13 +145,32 @@ func (m systemdManager) Install(o InstallOptions) error {
 	if err := os.WriteFile(UnitPath, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("service: writing %s: %w", UnitPath, err)
 	}
+	return activate()
+}
+
+// activate reloads systemd and brings the unit up ON THE BINARY THAT IS THERE
+// NOW.
+//
+// RESTART, NOT START, and the difference is a silent one.
+//
+// Install is idempotent on Linux by design -- re-running it rewrites the unit,
+// which is how an upgrade is applied. But `systemctl start` on a unit that is
+// already running is a NO-OP, so the documented upgrade path ended with the
+// new binary on disk, the old one still executing, and `notifymatrix version`
+// reporting the new number because it runs the file rather than asking the
+// service. The only way to notice was for someone to compare that against the
+// version the interface reports, which nobody does.
+//
+// `restart` is correct in both states: it starts a stopped unit and reloads a
+// running one onto the current binary.
+func activate() error {
 	if _, err := systemctl("daemon-reload"); err != nil {
 		return err
 	}
 	if _, err := systemctl("enable", Name); err != nil {
 		return err
 	}
-	if _, err := systemctl("start", Name); err != nil {
+	if _, err := systemctl("restart", Name); err != nil {
 		return err
 	}
 	return nil
