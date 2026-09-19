@@ -111,6 +111,24 @@ MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+{{- if .Appliance}}
+
+# AND @chown BACK, because running as root makes SQLite reach for it.
+#
+# SQLite's unix layer checks for euid 0 and chowns the database and its
+# journal so a root-created file inherits the directory's ownership. @chown is
+# inside @privileged, so denying that set kills the process with SIGSYS the
+# moment the store is opened -- the database stays zero bytes with a journal
+# beside it, and systemd restarts it into the same wall for ever.
+# Found on a real gateway, not in review: the ordinary unit runs as an
+# unprivileged user, so SQLite never takes that branch and nothing here was
+# ever exercised until the appliance path made root the default.
+#
+# A later allow line adds back to an earlier deny, so everything else in
+# @privileged -- @setuid, @mount, @module, @raw-io, @reboot, @swap -- stays
+# denied. Verified on the hardware that found the bug.
+SystemCallFilter=@chown
+{{- end}}
 
 [Install]
 WantedBy=multi-user.target

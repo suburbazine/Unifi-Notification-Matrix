@@ -242,3 +242,62 @@ func TestTheCoLocationWarningSaysWhatToDoAboutIt(t *testing.T) {
 		t.Errorf("an unknown model leaves a gap in the sentence: %q", bare)
 	}
 }
+
+// ROOT MAKES SQLITE REACH FOR CHOWN, AND @privileged DENIES IT.
+//
+// SQLite's unix layer checks for euid 0 and chowns the database and its
+// journal so a root-created file inherits the directory's ownership. @chown
+// sits inside @privileged, so the deny line kills the process with SIGSYS the
+// moment the store opens: a zero-byte database, a journal beside it, and
+// systemd restarting into the same wall for ever.
+//
+// Found on a real gateway after 56 restarts, not in review. The ordinary unit
+// runs unprivileged, so SQLite never takes that branch and nothing here was
+// exercised until the appliance made root the default.
+func TestTheApplianceUnitPermitsTheChownRootMakesSQLiteNeed(t *testing.T) {
+	u := directives(applianceUnit(t))
+
+	deny := strings.Index(u, "SystemCallFilter=~@privileged")
+	allow := strings.Index(u, "SystemCallFilter=@chown")
+	if deny < 0 {
+		t.Fatal("the appliance unit no longer denies @privileged at all")
+	}
+	if allow < 0 {
+		t.Fatal("the appliance unit denies @privileged without adding @chown " +
+			"back, so running as root dies with SIGSYS when the store opens")
+	}
+	// Order is the whole mechanism: a later allow adds back to an earlier
+	// deny. Reversed, the deny wins and the daemon dies exactly as before.
+	if allow < deny {
+		t.Error("@chown is re-permitted BEFORE @privileged is denied, so the " +
+			"deny still wins and this fixes nothing")
+	}
+	// Everything else in @privileged stays denied; re-permitting the lot
+	// would be a much larger grant than the bug needs.
+	for _, shouldNotBeAllowed := range []string{
+		"SystemCallFilter=@setuid", "SystemCallFilter=@mount",
+		"SystemCallFilter=@module", "SystemCallFilter=@raw-io",
+	} {
+		if strings.Contains(u, shouldNotBeAllowed) {
+			t.Errorf("%q was re-permitted; only @chown is needed", shouldNotBeAllowed)
+		}
+	}
+}
+
+// And the ordinary unit gains nothing from this. It runs unprivileged, so
+// SQLite never chowns, and widening its filter would be a grant bought with
+// somebody else's bug.
+func TestTheOrdinaryUnitDoesNotGainTheChownGrant(t *testing.T) {
+	u, err := RenderUnit(InstallOptions{
+		ExePath: "/usr/local/bin/notifymatrix",
+		DataDir: "/var/lib/notifymatrix",
+		User:    "notifymatrix",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(directives(u), "SystemCallFilter=@chown") {
+		t.Error("the ordinary unit re-permits @chown, which it does not need: " +
+			"an unprivileged service never makes SQLite take that branch")
+	}
+}

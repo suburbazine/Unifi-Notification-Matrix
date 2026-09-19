@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,7 +24,45 @@ import (
 // otherwise.
 const DefaultUser = "notifymatrix"
 
-func defaultDataDir() string { return "/var/lib/" + Name }
+// defaultDataDir is where state lives when nothing asked for somewhere else.
+//
+// THE GATEWAY ANSWER BELONGS HERE, not in the installer, because main.go
+// resolves this for EVERY subcommand before dispatching. Overriding it inside
+// Install only -- which is what the first version did -- meant Install was
+// always handed a non-empty DataDir and its `if o.DataDir == ""` branch could
+// never fire. The unit rendered the appliance variant pointed at /var/lib,
+// `setup-token` looked there too, and everything agreed on the wrong path so
+// consistently that nothing looked broken.
+//
+// Resolved once. The answer cannot change while the process runs, and this is
+// called from several commands.
+func defaultDataDir() string {
+	dataDirMu.Lock()
+	defer dataDirMu.Unlock()
+	if resolvedDataDir == "" {
+		if OnUniFiOS() {
+			resolvedDataDir = UniFiOSDataDir
+		} else {
+			resolvedDataDir = "/var/lib/" + Name
+		}
+	}
+	return resolvedDataDir
+}
+
+// A mutex and a string rather than a sync.Once, so a test can put it back.
+// `go vet` refuses a copied Once -- correctly -- and a memoised answer no test
+// can reset is a memoised answer no test can check.
+var (
+	dataDirMu       sync.Mutex
+	resolvedDataDir string
+)
+
+// resetDataDirForTest clears the memoised answer. Test-only.
+func resetDataDirForTest() {
+	dataDirMu.Lock()
+	defer dataDirMu.Unlock()
+	resolvedDataDir = ""
+}
 
 // New returns the systemd manager.
 func New() Manager { return systemdManager{} }
@@ -78,11 +117,9 @@ func withLinuxDefaults(o InstallOptions) InstallOptions {
 	o.Appliance = o.Appliance || OnUniFiOS()
 
 	if o.DataDir == "" {
-		if o.Appliance {
-			o.DataDir = UniFiOSDataDir
-		} else {
-			o.DataDir = defaultDataDir()
-		}
+		// defaultDataDir already knows about the gateway; a second answer
+		// here is a second place for the two to disagree.
+		o.DataDir = defaultDataDir()
 	}
 	if o.User == "" {
 		if o.Appliance {

@@ -76,12 +76,11 @@ here — and paste this:
 
 ```bash
 case "$(uname -m)" in aarch64|arm64) A=arm64 ;; x86_64|amd64) A=amd64 ;; *) echo "unsupported: $(uname -m)"; exit 1 ;; esac
-mkdir -p /data/notifymatrix && cd /data/notifymatrix
-wget -qO notifymatrix.new "https://github.com/suburbazine/Unifi-Notification-Matrix/releases/latest/download/notifymatrix-linux-$A"
+cd "$(mktemp -d)"
+wget -qO notifymatrix "https://github.com/suburbazine/Unifi-Notification-Matrix/releases/latest/download/notifymatrix-linux-$A"
 wget -qO SHA256SUMS "https://github.com/suburbazine/Unifi-Notification-Matrix/releases/latest/download/SHA256SUMS"
-grep " notifymatrix-linux-$A$" SHA256SUMS | sed "s|notifymatrix-linux-$A|notifymatrix.new|" | sha256sum -c - || { echo "CHECKSUM FAILED - not installing"; rm -f notifymatrix.new; exit 1; }
-chmod +x notifymatrix.new && mv notifymatrix.new notifymatrix
-./notifymatrix install
+grep " notifymatrix-linux-$A$" SHA256SUMS | sed "s|notifymatrix-linux-$A|notifymatrix|" | sha256sum -c - || { echo "CHECKSUM FAILED - not installing"; rm -f notifymatrix; exit 1; }
+chmod +x notifymatrix && ./notifymatrix install
 ```
 
 If `wget` is missing, `curl -fsSL -o <file> <url>` does the same job and is
@@ -93,11 +92,19 @@ disagree the file is deleted rather than installed. A downloaded binary you
 did not check is a binary somebody else may have chosen for you — and this one
 is about to run as root on the device that routes your network.
 
-**It downloads to `notifymatrix.new` and moves it into place**, which is not
-fussiness. On Linux, opening a currently-executing binary for writing fails
-with `ETXTBSY`, so `wget -O notifymatrix` would fail outright when re-run to
-update. Renaming over it works, because the running process keeps the old
-inode while the directory entry points at the new one.
+**It downloads to a temporary directory on purpose.** `install` copies the
+program to `/usr/local/bin/notifymatrix` and points the service unit at that
+copy, so the download is finished with the moment the install succeeds. An
+earlier version of this page had you download into `/data/notifymatrix` — which
+left a stray binary and a checksum file sitting in what is meant to be the
+state directory, next to the config and the incident store.
+
+So there are two paths that matter and they are not the same one:
+
+| | Where |
+|---|---|
+| The program | `/usr/local/bin/notifymatrix` — put there by `install` |
+| Config, store, audit, keys | `/data/notifymatrix` |
 
 For the stronger check — which proves *which workflow in which repository*
 built the file, rather than only that it matches a checksum published beside
@@ -128,21 +135,14 @@ and restart with `systemctl restart notifymatrix`. Do **not** forward that port
 
 ### Updating
 
-Re-run the same block, then **restart**:
+Re-run the same block. `install` replaces `/usr/local/bin/notifymatrix` and
+restarts the unit onto it; the config, the incident store and the unit itself
+are untouched.
 
-```bash
-systemctl restart notifymatrix
-```
-
-The restart is the part that matters, and it is easy to miss.
-`./notifymatrix install` ends with `systemctl start`, which is a **no-op on a
-unit that is already running** — so an update that stops at `install` leaves
-the new binary on disk and the old one still executing, with every version
-indicator claiming the upgrade worked. Restart, then confirm with
-`./notifymatrix version` and the version shown in the interface agreeing.
-
-The config, the incident store and the unit itself are untouched by any of
-this.
+Confirm it took by checking that `notifymatrix version` and the version shown
+in the interface agree. They come from different places — the first runs the
+file, the second asks the running service — so a disagreement is exactly the
+half-finished upgrade worth catching.
 
 ### Uninstalling
 
@@ -204,6 +204,22 @@ it watches has made the site worse.
 
 ## Consequences worth knowing
 
+**Running as root costs a hole in the syscall filter.** SQLite's unix layer
+checks for euid 0 and chowns the database and its journal so a root-created
+file inherits the directory's ownership. `@chown` lives inside `@privileged`,
+which the hardened unit denies — so on the first run the store opened, the
+process was killed with `SIGSYS`, the database stayed at zero bytes with a
+journal beside it, and systemd restarted it into the same wall fifty-six times
+before anybody looked.
+
+The appliance unit therefore re-permits `@chown`, and only `@chown`:
+`@setuid`, `@mount`, `@module`, `@raw-io`, `@reboot` and `@swap` all stay
+denied. The ordinary unit does not need the grant and does not get it, because
+an unprivileged service never makes SQLite take that branch.
+
+This is the first thing the root decision actually cost, and it is here rather
+than in a commit message because it is the kind of thing that comes back.
+
 **Your secrets get weaker.** The Linux secret chain is systemd-creds → TPM2 →
 key file → plaintext. A gateway has no TPM and the daemon cannot write a
 host-key credential, so you land on the **key file** tier — which is explicitly
@@ -230,13 +246,17 @@ upgrade untouched.
 
 ## What has and has not been verified
 
-Verified: the `linux-arm64` build is a **statically linked** ELF with no glibc
-dependency (so the gateway's glibc version is irrelevant), the unit renders
-correctly for the platform, platform detection requires both signals, and the
-memory fence and headroom floor are consistent with each other.
+Verified in the build: the `linux-arm64` binary is a **statically linked** ELF
+with no glibc dependency, so the gateway's glibc version is irrelevant. The
+unit renders correctly for the platform, detection requires both signals, and
+the memory fence and the headroom floor agree with each other.
 
-Not verified on real hardware: whether every hardening directive in the unit
-(`ProtectSystem=strict`, the syscall filters) behaves on a UniFi OS kernel, and
-whether `/var/lib` would in fact persist — the `/data` pin makes that question
-moot rather than answering it. If you run this on a real gateway and something
-in the unit misbehaves, that is the interesting bug report.
+**Verified on real hardware**, on a UniFi gateway running UniFi OS 6:
+`ProtectSystem=strict`, `ReadWritePaths`, `MemoryHigh`/`MemoryMax` and the
+absence of the `tss` group all behave. The syscall filter did **not** — see the
+`@chown` note above — and that was found by running it, not by reading it. The
+install, the service and the acknowledgement path work with the grant in place.
+
+Still not verified: whether `/var/lib` would persist across a firmware upgrade.
+The `/data` pin sidesteps that question rather than answering it, and it stays
+pinned for exactly that reason.

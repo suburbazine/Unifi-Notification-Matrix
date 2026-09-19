@@ -76,3 +76,68 @@ func TestActivateStopsAtTheFirstFailure(t *testing.T) {
 		}
 	}
 }
+
+// EVERY SUBCOMMAND HAS TO AGREE ABOUT WHERE STATE LIVES.
+//
+// main.go resolves the data directory for ALL commands before dispatching, so
+// the gateway answer has to come from here. The first version overrode it
+// inside Install only -- which meant Install was always handed a non-empty
+// DataDir and its `if o.DataDir == ""` branch could never fire.
+//
+// The result was not a visible failure. The unit rendered the appliance
+// variant pointed at /var/lib, `setup-token` looked there too, and everything
+// agreed on the wrong path so consistently that the install looked fine until
+// somebody went looking for config.yaml where the documentation said it was.
+func TestTheDataDirectoryFollowsThePlatform(t *testing.T) {
+	realTool, realData := hasDeviceInfoTool, hasDataPartition
+	t.Cleanup(func() {
+		hasDeviceInfoTool, hasDataPartition = realTool, realData
+		resetDataDirForTest()
+	})
+
+	for _, c := range []struct {
+		gateway bool
+		want    string
+	}{
+		{true, UniFiOSDataDir},
+		{false, "/var/lib/" + Name},
+	} {
+		hasDeviceInfoTool = func() bool { return c.gateway }
+		hasDataPartition = func() bool { return c.gateway }
+		resetDataDirForTest()
+
+		if got := defaultDataDir(); got != c.want {
+			t.Errorf("gateway=%v: defaultDataDir() = %q, want %q", c.gateway, got, c.want)
+		}
+		// And the installer must reach the same answer rather than its own.
+		o := withLinuxDefaults(InstallOptions{ExePath: "/usr/local/bin/x"})
+		if o.DataDir != c.want {
+			t.Errorf("gateway=%v: the installer chose %q, want %q -- the two "+
+				"disagree, which is the bug this test exists for",
+				c.gateway, o.DataDir, c.want)
+		}
+	}
+}
+
+// Resolved once, because it cannot change while the process runs and several
+// commands ask for it.
+func TestTheDataDirectoryIsResolvedOnce(t *testing.T) {
+	realTool, realData := hasDeviceInfoTool, hasDataPartition
+	t.Cleanup(func() {
+		hasDeviceInfoTool, hasDataPartition = realTool, realData
+		resetDataDirForTest()
+	})
+
+	calls := 0
+	hasDeviceInfoTool = func() bool { calls++; return false }
+	hasDataPartition = func() bool { return false }
+	resetDataDirForTest()
+
+	for i := 0; i < 5; i++ {
+		defaultDataDir()
+	}
+	if calls != 1 {
+		t.Errorf("probed the platform %d times for a question whose answer "+
+			"cannot change", calls)
+	}
+}

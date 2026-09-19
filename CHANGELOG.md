@@ -13,9 +13,34 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Fixed
+
+- **The gateway install crash-looped, and the install put everything in the
+  wrong place.** Both found by running 0.3.1 on a real UniFi gateway; neither
+  was reachable from any test here.
+
+  The unit denies `@privileged`, and **SQLite chowns its database when running
+  as root** so a root-created file inherits the directory's ownership.
+  `@chown` is inside `@privileged`, so seccomp killed the daemon with `SIGSYS`
+  the moment the store opened — a zero-byte database, a journal beside it, and
+  systemd restarting it into the same wall fifty-six times. The appliance unit
+  now re-permits `@chown` and only `@chown`; `@setuid`, `@mount`, `@module`,
+  `@raw-io`, `@reboot` and `@swap` stay denied, and the ordinary unit is
+  unchanged because an unprivileged service never takes that branch.
+
+  Separately, the gateway data directory never applied. `main.go` resolves it
+  for every subcommand before dispatching, so `Install` was always handed a
+  non-empty path and its "use `/data` if nothing was asked for" branch could
+  never fire. Everything agreed on `/var/lib/notifymatrix` so consistently
+  that nothing looked wrong until somebody went looking for `config.yaml`
+  where the documentation said it was. The platform answer now comes from one
+  place every command reads.
+
+- **The gateway install instructions downloaded into the state directory.**
+  `install` copies the program to `/usr/local/bin` and points the unit there,
+  so the download left a stray binary and a checksum file sitting next to the
+  config and the incident store. It downloads to a temporary directory now,
+  and the page says which of the two paths holds what.
 
 ## [0.3.2] — 2026-09-19
 
