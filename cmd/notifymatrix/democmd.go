@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ack"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/demo"
@@ -165,7 +166,18 @@ func demoConfig() *config.Config {
 	}
 	c.Web.Listen = "127.0.0.1:8330"
 	c.Web.AckBaseURL = "https://alerts.example.com"
-	c.Web.AckKey = "demo-not-a-real-ack-key"
+	// A REAL KEY, even here.
+	//
+	// The hook tokens above are fixtures rendered onto a page to show what a
+	// credential looks like; this one SIGNS acknowledgement links. A fixed key
+	// in published source means every ack token a demo installation mints is
+	// forgeable by anybody who has read the repository -- harmless while the
+	// demo stays on loopback, and wrong the first time somebody forwards a
+	// port to show a colleague. Generated rather than written down, because
+	// the cost of doing it properly is two lines.
+	if k, err := ack.NewSecret(); err == nil {
+		c.Web.AckKey = k
+	}
 	c.QuietHours.Enabled = true
 	c.QuietHours.Start, c.QuietHours.End, c.QuietHours.Zone = "23:00", "07:00", "Europe/London"
 	return &c

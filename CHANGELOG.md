@@ -54,6 +54,61 @@ view against the release before them.
   thing about it: one is a bug to report to the peer's author, the other is a
   decision waiting for you.
 
+### Security
+
+Two independent reviews of the whole codebase and of the acknowledgement path.
+Neither found anything critical; both found real things. Nothing below changes
+what any of these ports are willing to SERVE — that half was already settled —
+only what a hostile request COSTS.
+
+- **The acknowledgement listener is bounded.** It is the one port this product
+  tells you to forward, so it will be found by background scanning within days
+  and probed indefinitely afterwards, and it shared a process, a SQLite
+  connection pool and a write lock with the escalation engine. It now caps
+  request headers at 8 KiB (Go's default allows a megabyte, per request), holds
+  at most 256 connections, and refuses past 64 requests in flight rather than
+  queueing them behind the database lock the alarm path needs. The failure this
+  prevents is not a refused acknowledgement — that is cheap — it is an alarm
+  that cannot be delivered because the ack port is busy.
+
+- **A malformed acknowledgement request no longer reaches the database.** A
+  token is always exactly 22 base64url characters, so almost everything that
+  port receives is now refused on shape alone: no allocation, no HMAC, no
+  SQLite read. Previously every three-segment path cost one query, and a
+  megabyte of junk in a path segment was handed to the database as a parameter.
+
+- **Ten acknowledgements a minute per address,** with a burst of twenty. A
+  human opens one link and taps it once; nothing legitimate arrives in a
+  stream. Keyed on the peer address and deliberately **not** on
+  `X-Forwarded-For`, which on an exposed port is written by whoever is calling.
+  If you front this with a reverse proxy, limit there too.
+
+- **"No such incident" and "wrong token" now take the same time.** They always
+  returned the same page and the same status; the miss path skipped the HMAC
+  and answered measurably faster, which is exactly the incident-id enumeration
+  the single error class exists to prevent, arriving through the clock instead
+  of through the body.
+
+- **The peer link port no longer writes to disk when a stranger knocks.** Every
+  refusal — no such route, wrong method, unsigned, bad signature, clock skew,
+  every pairing failure — was appended to `audit.jsonl` with an fsync. That is
+  one synchronous disk flush per packet from anybody who can reach the port,
+  and because the audit file rotates, enough of them would evict the record of
+  who acknowledged what. Refusals that required a credential are still audited;
+  all of them still appear in full, with their reason, on the session-gated
+  receipts page where they were always the most use.
+
+- **`web.ack_base_url` is checked properly.** A base URL carrying a query
+  string, a `#fragment` or a username parses fine, looks reasonable, and
+  silently breaks every acknowledgement link — the token ends up somewhere the
+  route never matches, or somewhere a browser never sends. Refused at
+  validation with an explanation. A hand-written `web.ack_key` shorter than 16
+  bytes is now reported too.
+
+- **The demo installation generates its own acknowledgement key** instead of
+  signing with a fixed one from the source. Harmless while a demo stays on
+  loopback, wrong the first time somebody forwards a port to show a colleague.
+
 ## [0.2.1] — 2026-09-19
 
 **If you script installations, read the note at the end of this entry.**

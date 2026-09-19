@@ -499,6 +499,28 @@ func (c Config) validateWeb() Problems {
 		}
 	}
 
+	// MinAckKeyBytes is the shortest acknowledgement key worth having.
+	//
+	// The generated one is 32 random bytes rendered as 43 characters; this is
+	// a floor for a hand-written file, not a target.
+	const MinAckKeyBytes = 16
+
+	// A SHORT ACK KEY IS A FORGEABLE ACKNOWLEDGEMENT LINK.
+	//
+	// The key this product generates is 32 random bytes and nothing in the
+	// interface can change it -- so this only ever catches a hand-edited file,
+	// which is exactly where a one-word key gets typed. Reported rather than
+	// refused at the signer, because refusing there would stop an existing
+	// installation from starting, and a daemon that will not start is worse
+	// than one that says loudly what is wrong.
+	if k := strings.TrimSpace(c.Web.AckKey.Reveal()); !c.Web.AckKey.IsZero() && len(k) < MinAckKeyBytes {
+		p = append(p, fmt.Sprintf("web.ack_key is %d bytes long and an "+
+			"acknowledgement key needs at least %d. Anything shorter can be "+
+			"guessed, and guessing it means silencing alarms without seeing "+
+			"them. Delete the line and restart to have a proper one generated",
+			len(k), MinAckKeyBytes))
+	}
+
 	if c.Web.AckBaseURL == "" {
 		// A WARNING, not a refusal, and the reason is in the sentence itself:
 		// alerts still go out and can still be acknowledged, from the web UI.
@@ -520,6 +542,28 @@ func (c Config) validateWeb() Problems {
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		p = append(p, fmt.Sprintf("web.ack_base_url %q is not an http(s) URL", c.Web.AckBaseURL))
 		return p
+	}
+	// A BARE ORIGIN, because the acknowledgement path is appended to this.
+	//
+	// The three shapes below all parse, all look reasonable, and all break the
+	// link silently:
+	//
+	//   ...example.com/?a=b   puts the token in a QUERY STRING, so the route
+	//                         never matches and every acknowledgement 404s;
+	//   ...example.com/#x     puts it after a FRAGMENT, which browsers never
+	//                         send, so the server sees no token at all;
+	//   https://u:p@host      puts credentials into every alert this product
+	//                         emails, pushes and webhooks.
+	//
+	// None of them fails at configuration time and none of them fails at
+	// delivery: the alert goes out looking perfect and the link does not work,
+	// which is discovered during an alarm.
+	if u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		p = append(p, fmt.Sprintf("web.ack_base_url %q must be a bare address, "+
+			"optionally with a path: no query string, no #fragment and no "+
+			"username. The acknowledgement path is added to the end of it, so "+
+			"anything after the path moves the token somewhere the link will "+
+			"not work from", c.Web.AckBaseURL))
 	}
 	// THE SETTING PEOPLE GET WRONG.
 	//

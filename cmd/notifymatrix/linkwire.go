@@ -224,10 +224,26 @@ func (d linkDeps) build() link.Deps {
 		},
 		Record: func(r link.Receipt) {
 			d.state.record(r)
-			// Refusals reach the audit record as well as the receipt: a peer
-			// being turned away is a fact about the product's own behaviour,
-			// and the audit log is where those live.
-			if !r.Accepted {
+			// AUDITED ONLY ONCE A REAL PEER IS BEHIND IT.
+			//
+			// This used to append EVERY refusal, and the link port refuses a
+			// lot of things nobody authenticated for: no such route, wrong
+			// method, unsigned, malformed headers, bad signature, clock skew,
+			// and every pairing failure. All of them are reachable by anybody
+			// who can open the port, and each one was a durable append with an
+			// fsync -- one synchronous disk flush per stranger's packet.
+			//
+			// Worse than the cost: audit.jsonl rotates. Filling it with
+			// refusals evicts the record of WHO ACKNOWLEDGED WHAT, which is
+			// the thing the audit log exists for. An unauthenticated caller
+			// could erase it by knocking.
+			//
+			// internal/inbound settled this the same way and does not audit
+			// its rejections at all. The refusals still reach the operator in
+			// full, through the bounded in-memory receipts on a page that
+			// already needs a password -- which is where they were always the
+			// most use.
+			if !r.Accepted && auditedCause[r.Cause] {
 				_ = d.auditLog.Append(context.Background(), audit.Entry{
 					Kind: audit.KindService, Actor: "link",
 					Summary: "refused a link request",
@@ -236,6 +252,35 @@ func (d linkDeps) build() link.Deps {
 			}
 		},
 	}
+}
+
+// auditedCause is the set of refusals worth a durable record.
+//
+// The rule is ONE LINE: a refusal is audited only if reaching it required
+// authentication, or a successful pairing. Everything else on this port is
+// reachable by anybody and therefore cannot be allowed to write to disk.
+//
+// What survives the rule is what an operator would actually go looking for
+// later: a paired peer sending something it did not declare, being rate
+// limited, or hitting a storage failure. Those are facts about a product the
+// operator granted a credential to, and they are rare by construction.
+//
+// Everything absent is still on the receipts page with its reason. Nothing is
+// hidden; it simply is not written to a file a stranger can make rotate.
+var auditedCause = map[link.Cause]bool{
+	// After authentication.
+	link.CauseRateLimited:         true,
+	link.CauseNoPeer:              true,
+	link.CauseMalformedEnvelope:   true,
+	link.CauseInvalidEnvelope:     true,
+	link.CauseEnvelopeVersion:     true,
+	link.CauseUndeclaredCondition: true,
+	link.CauseStore:               true,
+	link.CauseIngest:              true,
+	// After a pairing proof was accepted: the peer got in and this product
+	// then failed to keep it, which leaves the two ends disagreeing about
+	// whether a credential exists. That is worth a durable line.
+	link.CausePairStore: true,
 }
 
 // storePeer persists a newly paired peer.

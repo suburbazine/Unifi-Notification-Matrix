@@ -1259,6 +1259,11 @@ process elevates. This will do it for you, prompting if it has to:
 		srv := &http.Server{
 			Addr:    cfg.Web.Listen,
 			Handler: mux,
+			// /ack/ is mounted here as well as on its own listener, so an
+			// operator who forwards THIS port -- which the documentation
+			// argues against and some people will do anyway -- gets the same
+			// header bound. Go's default is a megabyte per request.
+			MaxHeaderBytes: maxAckHeaderBytes,
 			// Bounded so a stalled client cannot hold a connection open
 			// indefinitely; this listens on a LAN that may include devices
 			// nobody is administering.
@@ -1333,17 +1338,28 @@ process elevates. This will do it for you, prompting if it has to:
 				fmt.Println("note:", config.AckPortPinnedMessage(resolved, config.Path(dataDir)))
 			}
 
-			ackMux := http.NewServeMux()
-			ackMux.Handle("/ack/", ackHandler)
+			// THIS IS THE PORT THE OPERATOR IS TOLD TO FORWARD, and it is
+			// therefore the one that gets scanned and fuzzed indefinitely.
+			// Everything in exposed.go is about what that COSTS: the safety
+			// of what it serves was always handled, the cost of being hammered
+			// was not. See exposed.go for why the in-flight cap matters most.
 			ackSrv := &http.Server{
-				Handler:           ackMux,
-				ReadHeaderTimeout: 10 * time.Second,
-				ReadTimeout:       30 * time.Second,
-				WriteTimeout:      30 * time.Second,
-				IdleTimeout:       60 * time.Second,
+				Handler: inFlight(maxAckInFlight, ackOnly(ackHandler)),
+				// A real acknowledgement URL is about 120 bytes. Go's default
+				// allows a megabyte of headers per request.
+				MaxHeaderBytes: maxAckHeaderBytes,
+				// Tighter than the LAN interface, because the legitimate
+				// traffic here is unusually well understood: two short
+				// requests from a phone, then nothing. A minute of idle
+				// keep-alive is a minute of held resources per scanner.
+				ReadHeaderTimeout: 5 * time.Second,
+				ReadTimeout:       10 * time.Second,
+				WriteTimeout:      10 * time.Second,
+				IdleTimeout:       5 * time.Second,
 			}
 			go func() {
-				if err := ackSrv.Serve(ackLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				err := ackSrv.Serve(limitListener(ackLn, maxAckConns))
+				if err != nil && !errors.Is(err, http.ErrServerClosed) {
 					fmt.Fprintf(os.Stderr, "the acknowledgement listener stopped: %v\n", err)
 				}
 			}()
