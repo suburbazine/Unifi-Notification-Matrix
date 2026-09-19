@@ -1,5 +1,25 @@
 # Running it on the UniFi gateway itself
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="images/whats-this-button-do-dark.gif">
+    <img alt="A stick figure standing in front of a server rack, contemplating the large red button on it" src="images/whats-this-button-do-light.gif" width="70%">
+  </picture>
+</p>
+
+**This exists because it could, not because it should.**
+
+Somebody was always going to press the button. Better that it works properly,
+refuses to install where it would do harm, and tells you at every start
+exactly what you gave up — than that it half-works on a router somewhere and
+nothing ever mentions it.
+
+So: **this is not the recommended way to run this product.** It is the
+supported way to do an unrecommended thing, which is a different promise and a
+smaller one. Everything below is the difference.
+
+---
+
 Short version: **it works, and it is the wrong place to put it.** Both halves
 of that sentence are true and neither cancels the other. If a gateway is the
 only hardware you have, this page is how to do it properly and what you are

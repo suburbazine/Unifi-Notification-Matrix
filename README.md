@@ -120,6 +120,11 @@ believed.
 **New here? [docs/SETUP.md](docs/SETUP.md) walks through a first installation
 from nothing.**
 
+Running it on the UniFi gateway itself is possible and is
+[documented](docs/GATEWAY.md), but it is **not the recommended way** — the
+daemon then shares fate with the equipment it is watching, so the one alarm it
+cannot send is the one that matters most.
+
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design,
 [docs/SOURCES.md](docs/SOURCES.md) for what each UniFi application actually
 exposes, and [docs/DESIGN-RULES.md](docs/DESIGN-RULES.md) for the rules the
