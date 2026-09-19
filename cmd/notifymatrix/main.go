@@ -767,6 +767,32 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	var linkPairer atomic.Pointer[link.Pairer]
 
 	supervisor, err := ingest.New(sources, ingest.Deps{
+		// The permanent record of what this site has. Written through on
+		// every event and read back at start, so "what did we have before the
+		// power went out" survives the power going out.
+		NoteEntity: func(ctx context.Context, e ingest.EntitySeen) {
+			if err := db.NoteEntity(ctx, store.ObservedEntity{
+				Source: e.Source, ID: e.ID, Name: e.Name, Kind: e.Kind,
+				MAC: e.MAC, FirstSeen: e.LastAt, LastSeen: e.LastAt,
+			}); err != nil {
+				fmt.Fprintln(os.Stderr, "ingest:", err)
+			}
+		},
+		KnownFrom: func(ctx context.Context) []ingest.EntitySeen {
+			prior, err := db.ObservedEntities(ctx)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "ingest: reading the entity record:", err)
+				return nil
+			}
+			out := make([]ingest.EntitySeen, 0, len(prior))
+			for _, e := range prior {
+				out = append(out, ingest.EntitySeen{
+					Source: e.Source, ID: e.ID, Name: e.Name, Kind: e.Kind,
+					MAC: e.MAC, FirstAt: e.FirstSeen, LastAt: e.LastSeen,
+				})
+			}
+			return out
+		},
 		Handle: func(ctx context.Context, ev event.Event) error {
 			// A PAIRED PEER THAT IS ACTUALLY SERVING THE CAPABILITY takes over
 			// raising for it, so one real-world event does not become two

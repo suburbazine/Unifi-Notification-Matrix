@@ -42,6 +42,16 @@ type Deps struct {
 	Logf func(format string, args ...any)
 	Now  func() time.Time
 
+	// NoteEntity persists something this product has seen an event about, and
+	// KnownFrom reads back what was recorded before this process started.
+	//
+	// Injected rather than taking a store, so this package still depends on
+	// nothing concrete. Both nil in a build that keeps no record -- the
+	// in-memory map remains and behaves as it always did, which is what the
+	// tests in this package run against.
+	NoteEntity func(ctx context.Context, e EntitySeen)
+	KnownFrom  func(ctx context.Context) []EntitySeen
+
 	// RestartDelay overrides how long a source that RETURNED is left before
 	// being started again. Zero takes the default.
 	//
@@ -123,6 +133,11 @@ func New(sources []event.Source, deps Deps) (*Supervisor, error) {
 // Protect cameras watched, and refusing to start anything would take away
 // working coverage to punish a typo.
 func (s *Supervisor) Run(ctx context.Context) error {
+	// BEFORE the sources start, and before the no-sources return below: an
+	// installation whose console has been unplugged still has a record of what
+	// it used to watch, and that is exactly when somebody wants to read it.
+	s.loadKnownEntities(ctx)
+
 	if len(s.sources) == 0 {
 		// Not an error, but it IS the thing an operator most needs told. A
 		// daemon with no sources is a daemon that will never raise anything.
@@ -323,11 +338,22 @@ type entityKey struct{ source, id, name string }
 // readable and changes when somebody renames a camera. An operator wants to
 // pick the name; a rule that has to survive a rename wants the id.
 type EntitySeen struct {
-	Source string    `json:"source"`
-	ID     string    `json:"id"`
-	Name   string    `json:"name"`
-	Kind   string    `json:"kind"`
-	LastAt time.Time `json:"last_at"`
+	Source string `json:"source"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Kind   string `json:"kind"`
+
+	// MAC is carried because it is the only identifier that survives BOTH a
+	// rename and a re-adoption. The name survives re-adoption and breaks on a
+	// rename; the id survives a rename and breaks on re-adoption, because a
+	// UniFi device id is generated at adoption time. Nothing matches on it
+	// yet; it is recorded so that the thing which will can be built.
+	MAC string `json:"mac,omitempty"`
+
+	// FirstAt is when this was first seen, where the durable record knows.
+	// Zero for an entity this process observed with nothing written down.
+	FirstAt time.Time `json:"first_at,omitempty"`
+	LastAt  time.Time `json:"last_at"`
 }
 
 // noteEntity remembers something an event was about.
@@ -355,9 +381,16 @@ func (s *Supervisor) noteEntity(source string, ent event.Entity) {
 		}
 		return
 	}
-	if len(s.entities) >= maxKnownEntities {
-		// Full. Drop the least recently seen, which is the one an operator is
-		// least likely to be writing a rule about.
+	if len(s.entities) >= maxKnownEntities && s.deps.NoteEntity == nil {
+		// Full, and nothing is writing this down. Drop the least recently
+		// seen.
+		//
+		// ONLY when there is no durable record. With one, evicting by recency
+		// discards the camera that stopped reporting first, which after a
+		// power cut or a lightning strike is precisely the row somebody needs
+		// -- the cache would forget the losses and keep the survivors. The
+		// bound stays for a build with no store because an unbounded map fed
+		// by arriving events is a memory leak dressed up as a convenience.
 		var oldestKey entityKey
 		var oldest time.Time
 		var haveOldest bool
@@ -369,7 +402,53 @@ func (s *Supervisor) noteEntity(source string, ent event.Entity) {
 		delete(s.entities, oldestKey)
 	}
 	s.entities[key] = &EntitySeen{
-		Source: source, ID: ent.ID, Name: ent.Name, Kind: ent.Kind, LastAt: now,
+		Source: source, ID: ent.ID, Name: ent.Name, Kind: ent.Kind,
+		MAC: ent.MAC, LastAt: now,
+	}
+	s.persist(EntitySeen{
+		Source: source, ID: ent.ID, Name: ent.Name, Kind: ent.Kind,
+		MAC: ent.MAC, LastAt: now,
+	})
+}
+
+// persist writes an entity to the durable record, if there is one.
+//
+// Called with the lock held and doing its own work outside it would be worse:
+// the write is a single upsert on an indexed primary key, and releasing the
+// lock to do it would let two events about one device race to create the row.
+// The store serialises writers anyway.
+func (s *Supervisor) persist(e EntitySeen) {
+	if s.deps.NoteEntity == nil {
+		return
+	}
+	s.deps.NoteEntity(context.Background(), e)
+}
+
+// loadKnownEntities seeds the in-memory map from the durable record.
+//
+// Without this the rules editor is empty for as long as it takes each device
+// to say something -- which for a camera that has been quiet since before the
+// restart is indefinitely, and for a device destroyed in the event that caused
+// the restart is for ever. The record is the answer to "what did this site
+// have", and it is useless if the product only consults it for things that
+// have already spoken again.
+func (s *Supervisor) loadKnownEntities(ctx context.Context) {
+	if s.deps.KnownFrom == nil {
+		return
+	}
+	prior := s.deps.KnownFrom(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.entities == nil {
+		s.entities = map[entityKey]*EntitySeen{}
+	}
+	for _, e := range prior {
+		key := entityKey{source: e.Source, id: e.ID, name: e.Name}
+		if _, ok := s.entities[key]; ok {
+			continue
+		}
+		seen := e
+		s.entities[key] = &seen
 	}
 }
 

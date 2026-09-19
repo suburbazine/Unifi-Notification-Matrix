@@ -108,6 +108,63 @@ var migrations = []migration{
 			`CREATE INDEX link_seen_events_seen_at ON link_seen_events (seen_at)`,
 		},
 	},
+	{
+		version: 3,
+		stmts: []string{
+			// EVERY THING THIS PRODUCT HAS EVER SEEN AN EVENT ABOUT, kept for
+			// good.
+			//
+			// This was a map in memory, capped at 500, evicting the least
+			// recently seen. Both of those were wrong for the question it
+			// turns out to answer.
+			//
+			// Not in memory, because the useful question is asked after a
+			// restart: a site loses power, comes back, and the operator needs
+			// to know WHAT IT HAD -- not what answered afterwards. An
+			// in-memory registry is empty at exactly that moment.
+			//
+			// Not evicted by recency, because the least recently seen entity
+			// after a lightning strike is the camera that was destroyed. The
+			// eviction policy discarded precisely the rows the record exists
+			// to preserve.
+			//
+			// Unbounded is safe here, and that was checked rather than
+			// assumed: every source keys entities on adopted hardware or on a
+			// configured hook -- Protect cameras and sensors, Access doors,
+			// adopted Network devices, and "hook/<name>" for the inbound
+			// receiver, which is per HOOK and not per client. Nothing emits an
+			// entity per DHCP lease. A row is roughly 200 bytes, so twenty
+			// thousand of them is four megabytes.
+			//
+			// Keyed on (source, id) and NOT on the name, unlike the map it
+			// replaces: there, renaming a camera created a second entry and
+			// the picker offered both. A rename updates this row in place.
+			`CREATE TABLE observed_entities (
+				source     TEXT NOT NULL,
+				id         TEXT NOT NULL,
+				name       TEXT NOT NULL DEFAULT '',
+				kind       TEXT NOT NULL DEFAULT '',
+				mac        TEXT NOT NULL DEFAULT '',
+				first_seen TEXT NOT NULL,
+				last_seen  TEXT NOT NULL,
+				PRIMARY KEY (source, id)
+			) STRICT`,
+
+			// The rules editor wants them newest-first.
+			`CREATE INDEX observed_entities_last_seen ON observed_entities (last_seen)`,
+
+			// THE MAC IS WHAT SURVIVES A RE-ADOPTION, and it is indexed
+			// because that is the lookup the reconciliation needs: a device
+			// whose id changed but whose hardware did not. A UniFi device id
+			// is generated AT ADOPTION TIME, so re-adopting a hub recreates
+			// every door or camera under it as a new entity -- a routine
+			// maintenance action that silently detaches every rule naming one
+			// by id. The name survives that and breaks on a rename; the id
+			// survives a rename and breaks on this. Only the MAC survives
+			// both.
+			`CREATE INDEX observed_entities_mac ON observed_entities (mac) WHERE mac <> ''`,
+		},
+	},
 }
 
 func latestVersion() int {

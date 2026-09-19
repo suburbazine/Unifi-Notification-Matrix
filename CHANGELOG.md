@@ -13,9 +13,42 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+Entries land here as work merges, and the heading is renamed to the version on
+the day it ships — writing a release's section from scratch at tag time is how
+0.1.8 nearly went out with none.
+
+### Changed
+
+- **The record of what this site has is now permanent, and survives a
+  restart.** It was a map in memory, capped at 500 entries, evicting the least
+  recently seen. Both of those were wrong for the question it turns out to
+  answer.
+
+  Not in memory, because the useful question is asked *after* a restart: the
+  power goes out, the site comes back, and the operator needs to know what it
+  HAD — not what answered afterwards. Not evicted by recency, because the
+  least recently seen entity after a lightning strike is the camera that was
+  destroyed. The old policy discarded precisely the rows the record exists to
+  preserve, keeping the survivors and forgetting the losses.
+
+  Each entity now carries when it was **first** seen as well as last, because
+  "here since March, stopped reporting on Tuesday" and "there is no such
+  camera" are different sentences and only one of them describes a loss. A
+  rename updates the row rather than creating a second one, which the old
+  in-memory key did.
+
+  Unbounded is safe here and that was checked rather than assumed: every
+  source keys entities on adopted hardware or on a configured hook, and
+  nothing emits one per DHCP lease. A row is about 200 bytes, so twenty
+  thousand of them is four megabytes.
+
+- **The MAC address is now recorded for every entity that has one.** Nothing
+  matches on it yet. It is there because it is the only identifier that
+  survives both of the two ways an entity's identity breaks: a UniFi device id
+  is generated at adoption time, so re-adopting a hub recreates every camera or
+  door under it with a new id and silently detaches every rule naming one —
+  while a rename breaks every rule naming one by name. The id survives a
+  rename; the name survives a re-adoption; only the MAC survives both.
 
 ## [0.2.0] — 2026-09-19
 

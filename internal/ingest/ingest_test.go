@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -442,5 +443,110 @@ func TestASourceInContactIsNotSilentEvenWithNothingToReport(t *testing.T) {
 	}
 	if _, raised, _ := r.counts(); raised != 1 {
 		t.Errorf("a source that genuinely stopped being in contact raised %d incident(s), want 1", raised)
+	}
+}
+
+// THE RECORD IS READ BACK BEFORE ANY SOURCE SPEAKS.
+//
+// Without this the rules editor is empty until each device says something --
+// indefinitely for a camera that has been quiet since before the restart, and
+// for ever for one destroyed in the event that caused the restart. The record
+// answers "what did this site have", and consulting it only for things that
+// have already spoken again would make it answer "what still works".
+func TestPriorEntitiesAreLoadedBeforeSourcesRun(t *testing.T) {
+	prior := []EntitySeen{
+		{Source: "protect", ID: "cam-gone", Name: "Destroyed Camera",
+			Kind: "camera", MAC: "aa:bb:cc:dd:ee:01"},
+	}
+	var asked bool
+	s, err := New(nil, Deps{
+		Handle:    func(context.Context, event.Event) error { return nil },
+		Logf:      func(string, ...any) {},
+		KnownFrom: func(context.Context) []EntitySeen { asked = true; return prior },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Run returns at once with no sources; the load happens first.
+	_ = s.Run(ctx)
+
+	if !asked {
+		t.Fatal("the durable record was never read")
+	}
+	known := s.KnownEntities()
+	if len(known) != 1 || known[0].ID != "cam-gone" {
+		t.Fatalf("known entities after start = %+v, want the recorded one", known)
+	}
+	if known[0].MAC != "aa:bb:cc:dd:ee:01" {
+		t.Errorf("the MAC did not survive the load: %+v", known[0])
+	}
+}
+
+// EVERY OBSERVED ENTITY REACHES THE RECORD, including its MAC -- which is the
+// only identifier that survives both a rename and a re-adoption.
+func TestObservedEntitiesArePersisted(t *testing.T) {
+	var written []EntitySeen
+	s, err := New(nil, Deps{
+		Handle:     func(context.Context, event.Event) error { return nil },
+		Logf:       func(string, ...any) {},
+		NoteEntity: func(_ context.Context, e EntitySeen) { written = append(written, e) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.noteEntity("protect", event.Entity{
+		ID: "cam-1", Name: "Front Gate", Kind: "camera", MAC: "aa:bb:cc:dd:ee:01",
+	})
+	if len(written) != 1 {
+		t.Fatalf("wrote %d entities, want 1", len(written))
+	}
+	if written[0].MAC != "aa:bb:cc:dd:ee:01" {
+		t.Errorf("the MAC was not recorded: %+v; nothing else survives a "+
+			"re-adoption AND a rename", written[0])
+	}
+}
+
+// EVICTION IS OFF WHEN THERE IS A RECORD, and that is the point.
+//
+// Dropping the least recently seen discards the camera that stopped reporting
+// first -- which after a power cut or a lightning strike is precisely the row
+// somebody needs. A cache that forgets the losses and keeps the survivors
+// answers the opposite of the question being asked.
+func TestWithADurableRecordNothingIsEvictedByRecency(t *testing.T) {
+	s, err := New(nil, Deps{
+		Handle:     func(context.Context, event.Event) error { return nil },
+		Logf:       func(string, ...any) {},
+		NoteEntity: func(context.Context, EntitySeen) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxKnownEntities+25; i++ {
+		s.noteEntity("network", event.Entity{ID: fmt.Sprintf("dev-%d", i), Kind: "device"})
+	}
+	if got := len(s.KnownEntities()); got != maxKnownEntities+25 {
+		t.Errorf("held %d entities, want all %d: the earliest -- the ones that "+
+			"stopped reporting first -- were evicted", got, maxKnownEntities+25)
+	}
+}
+
+// ...AND STAYS ON WITHOUT ONE. An unbounded map fed by arriving events, with
+// nothing writing them down, is a memory leak dressed up as a convenience.
+func TestWithNoRecordTheBoundStillApplies(t *testing.T) {
+	s, err := New(nil, Deps{
+		Handle: func(context.Context, event.Event) error { return nil },
+		Logf:   func(string, ...any) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxKnownEntities+25; i++ {
+		s.noteEntity("network", event.Entity{ID: fmt.Sprintf("dev-%d", i), Kind: "device"})
+	}
+	if got := len(s.KnownEntities()); got > maxKnownEntities {
+		t.Errorf("held %d entities with no durable record, want at most %d",
+			got, maxKnownEntities)
 	}
 }
