@@ -13,9 +13,33 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+Entries land here as work merges, and the heading is renamed to the version on
+the day it ships — writing a release's section from scratch at tag time is how
+0.1.8 nearly went out with none.
+
+### Changed
+
+- **`install` now hands you the setup token and waits until you say you have
+  it.** It used to print `install: ok` and stop. The service then started,
+  minted the one-time token and wrote it to a file — announcing it on a
+  console that does not exist, because a Windows service has no stdout. The
+  operator saw two words, opened the interface, and was asked for a token
+  nothing had ever shown them.
+
+  Worse on the elevated path: an unprivileged `install` relaunches itself in a
+  new elevated window, which Windows destroys the instant the program exits.
+
+  Now the install waits for the service to write the token, shows it, and does
+  not return until the operator types `copied`. A word rather than Enter,
+  because Enter is what people press to make a prompt go away — that would be
+  a pause dressed up as a confirmation.
+
+  It never blocks an unattended install: redirected, piped or absent stdin all
+  mean nobody is there, and a deployment hanging for ever is a far worse
+  failure than an unread prompt. It also says plainly that closing the window
+  does not lock you out, because `notifymatrix setup-token` retrieves it — a
+  prompt implying the value was unrecoverable would be a lie. Re-installing
+  over an existing password waits for nothing, since no token is minted.
 
 ## [0.2.0] — 2026-09-19
 

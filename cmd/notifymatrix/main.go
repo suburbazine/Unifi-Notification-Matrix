@@ -1516,6 +1516,15 @@ func serviceCmd(cmd, dataDir, user string, portable bool) int {
 	switch {
 	case err == nil:
 		fmt.Printf("%s: ok\n", cmd)
+		if cmd == "install" {
+			// The install is not finished when the service is running. It is
+			// finished when the operator holds the one thing that lets them
+			// claim the settings page -- and this is the last moment anything
+			// is talking to them, because the daemon's own announcement goes
+			// to a console a service does not have.
+			handOverSetupToken(os.Stdout, os.Stdin, dataDir,
+				someoneIsWatching(), tokenWaitFor, os.Args[0])
+		}
 		return 0
 
 	case errors.Is(err, service.ErrNeedsPrivilege):
