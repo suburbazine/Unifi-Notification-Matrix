@@ -13,6 +13,17 @@ view against the release before them.
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.3.4] — 2026-09-19
+
+**Gateway installs on 0.3.1 through 0.3.3 cannot start.** The daemon looked for
+its encryption key in a directory it was not using and refused to run rather
+than continue without credentials it could not read. Take this one. Windows and
+ordinary Linux installs are unaffected and always were.
+
 ### Added
 
 - **The interface now says when this installation cannot report its own
@@ -655,7 +666,8 @@ demo mode, and the signed reproducible release pipeline.
 They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
-[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.0...v0.3.1
