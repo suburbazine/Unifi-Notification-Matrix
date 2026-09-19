@@ -441,6 +441,7 @@ input[type=checkbox]:focus-visible,input[type=radio]:focus-visible{outline:2px s
 .msg{font-size:var(--fs-md);margin-top:var(--sp-2);line-height:var(--lh)}
 .msg:empty{display:none}
 .msg.ok{color:var(--ok)}
+.msg.warn{color:var(--warn)}
 .msg.err{color:var(--err)}
 
 

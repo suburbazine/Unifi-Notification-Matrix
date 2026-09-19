@@ -765,12 +765,36 @@ function serviceAction(action, button, msg) {
       return;
     }
     // A restart or a stop takes THIS page's server down with it, so there
-    // is no success response worth waiting for -- saying "reconnecting" is
-    // the honest description of what happens next.
+    // is no success response worth waiting for -- saying what happens next is
+    // the honest description.
+    //
+    // STOPPED IS NOT RESTARTING, and this said it was. Every action but
+    // "start" shared one message about the page going quiet "while it
+    // restarts", so an operator who had deliberately stopped their monitoring
+    // was told it was on its way back. It is not. Nothing is watched until
+    // somebody starts it again, and on this product that is the one sentence
+    // that must never be wrong.
+    if (action === "start") {
+      msg.className = "msg ok";
+      msg.textContent = "started.";
+      setTimeout(refreshAll, 6000);
+      return;
+    }
+    if (action === "stop") {
+      // Deliberately not the success colour. The action succeeded; the state
+      // it leaves behind is one nothing is watching, and a green line saying
+      // so reads as reassurance.
+      msg.className = "msg warn";
+      msg.textContent = "stopped. Nothing is being watched until you start it " +
+        "again. This page is served by the service, so it will stop " +
+        "responding in a moment — that is expected, not a second fault.";
+      // No refresh scheduled: there is nothing to come back to, and a page
+      // that reloads itself into an error looks like something went wrong
+      // beyond what was asked for.
+      return;
+    }
     msg.className = "msg ok";
-    msg.textContent = action === "start"
-      ? "started."
-      : "asked. This page will go quiet for a few seconds while it restarts.";
+    msg.textContent = "asked. This page will go quiet for a few seconds while it restarts.";
     setTimeout(refreshAll, 6000);
   });
 }

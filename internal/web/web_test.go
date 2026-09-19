@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -1621,5 +1623,72 @@ func TestSigningOutFromThePageStillWorks(t *testing.T) {
 	}
 	if res, _ := h.do("GET", "/api/settings", nil); res.StatusCode != http.StatusUnauthorized {
 		t.Error("the session survived signing out")
+	}
+}
+
+// STOPPING IS NOT RESTARTING, and the page said it was.
+//
+// serviceAction branched only on "start", so "stop" fell into the same
+// message as "restart": "this page will go quiet for a few seconds while it
+// restarts". An operator who had deliberately stopped their monitoring was
+// told it was coming back.
+//
+// On this product that is the worst sentence available. Everything here exists
+// to stop a state reading as healthy when it is not, and this was the
+// interface itself doing it -- about the one action that leaves nothing
+// watching at all.
+//
+// Asserted against the shipped asset because the bug is in a string. No Go
+// test could see it, and the browser is the only other thing that would have.
+func TestStoppingTheServiceIsNotDescribedAsARestart(t *testing.T) {
+	js, err := os.ReadFile(filepath.Join("assets", "app.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const start = "function serviceAction("
+	const end = "// restartOffer is what a Save appends"
+	from := bytes.Index(js, []byte(start))
+	to := bytes.Index(js, []byte(end))
+	if from < 0 || to <= from {
+		t.Fatalf("app.js has no %q ending at %q, so either the service "+
+			"controls are gone or these markers were renamed and this test is "+
+			"checking nothing", start, end)
+	}
+	body := string(js[from:to])
+
+	// The branch has to exist at all. Without it every non-start action
+	// shares one message, which is exactly how this happened.
+	if !strings.Contains(body, `action === "stop"`) {
+		t.Fatal("serviceAction does not branch on \"stop\", so stopping is " +
+			"described by whatever the restart path says")
+	}
+
+	// Bounded at the branch's own `return`, not at the next action check.
+	// The first version cut at `action === "start"`, which appears BEFORE the
+	// stop branch rather than after it -- so the slice ran on into the restart
+	// fallthrough and failed on that message instead. It found a real string
+	// in the wrong block, which is the kind of pass-or-fail-for-an-adjacent-
+	// reason this file is full of warnings about.
+	stop := body[strings.Index(body, `action === "stop"`):]
+	if i := strings.Index(stop, "return;"); i >= 0 {
+		stop = stop[:i]
+	} else {
+		t.Fatal("the stop branch does not end in a return, so this test cannot " +
+			"tell where it stops and is reading the restart message too")
+	}
+	if strings.Contains(stop, "restart") {
+		t.Errorf("the stop branch mentions restarting:\n%s", stop)
+	}
+	for _, want := range []string{"Nothing is being watched", "until you start it"} {
+		if !strings.Contains(stop, want) {
+			t.Errorf("the stop message does not say %q, so it does not tell "+
+				"the operator what state they are now in", want)
+		}
+	}
+	// Not the success colour: the action worked, and the state it leaves is
+	// one nothing is watching.
+	if !strings.Contains(stop, `"msg warn"`) {
+		t.Error("the stop message is not styled as a warning, so leaving the " +
+			"site unwatched reads as reassurance")
 	}
 }
