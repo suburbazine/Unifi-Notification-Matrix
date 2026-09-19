@@ -13,9 +13,13 @@ view against the release before them.
 
 ## [Unreleased]
 
-Entries land here as work merges, and the heading is renamed to the version on
-the day it ships — writing a release's section from scratch at tag time is how
-0.1.8 nearly went out with none.
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.2.1] — 2026-09-19
+
+**If you script installations, read the note at the end of this entry.**
 
 ### Changed
 
@@ -40,6 +44,12 @@ the day it ships — writing a release's section from scratch at tag time is how
   does not lock you out, because `notifymatrix setup-token` retrieves it — a
   prompt implying the value was unrecoverable would be a lie. Re-installing
   over an existing password waits for nothing, since no token is minted.
+
+  **Scripted installs:** a run with redirected, piped or absent stdin never
+  prompts, so CI, MDM and scheduled tasks are unaffected. A script run by hand
+  from a terminal inherits that terminal, so it WILL stop and wait — which is
+  usually right, because somebody is sitting there. To opt out, redirect stdin:
+  `notifymatrix install < NUL` on Windows, `< /dev/null` elsewhere.
 
 ## [0.2.0] — 2026-09-19
 
@@ -340,7 +350,8 @@ demo mode, and the signed reproducible release pipeline.
 They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
-[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.10...v0.2.0
 [0.1.10]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.8...v0.1.9
