@@ -51,16 +51,89 @@ you have monitoring that cannot report its own death.
 
 ## Install
 
-Nothing special to run. SSH into the gateway (UniFi gateways log in as root),
-put the `linux-arm64` binary somewhere under `/data`, and install as usual:
+SSH into the gateway — UniFi gateways log in as root, so there is no `sudo`
+here — and paste this:
 
 ```bash
-/data/notifymatrix/notifymatrix install
+case "$(uname -m)" in aarch64|arm64) A=arm64 ;; x86_64|amd64) A=amd64 ;; *) echo "unsupported: $(uname -m)"; exit 1 ;; esac
+mkdir -p /data/notifymatrix && cd /data/notifymatrix
+wget -qO notifymatrix.new "https://github.com/suburbazine/Unifi-Notification-Matrix/releases/latest/download/notifymatrix-linux-$A"
+wget -qO SHA256SUMS "https://github.com/suburbazine/Unifi-Notification-Matrix/releases/latest/download/SHA256SUMS"
+grep " notifymatrix-linux-$A$" SHA256SUMS | sed "s|notifymatrix-linux-$A|notifymatrix.new|" | sha256sum -c - || { echo "CHECKSUM FAILED - not installing"; rm -f notifymatrix.new; exit 1; }
+chmod +x notifymatrix.new && mv notifymatrix.new notifymatrix
+./notifymatrix install
 ```
 
-The installer detects the platform and adjusts itself. You do not pass a flag,
-because the differences are corrections rather than preferences — an operator
-who had to know to ask for them would get a unit that does not start.
+If `wget` is missing, `curl -fsSL -o <file> <url>` does the same job and is
+present on every current UniFi OS image.
+
+**The checksum step is not decoration and it fails closed.** It renames the
+published checksum line to match the downloaded filename, and if the two
+disagree the file is deleted rather than installed. A downloaded binary you
+did not check is a binary somebody else may have chosen for you — and this one
+is about to run as root on the device that routes your network.
+
+**It downloads to `notifymatrix.new` and moves it into place**, which is not
+fussiness. On Linux, opening a currently-executing binary for writing fails
+with `ETXTBSY`, so `wget -O notifymatrix` would fail outright when re-run to
+update. Renaming over it works, because the running process keeps the old
+inode while the directory entry points at the new one.
+
+For the stronger check — which proves *which workflow in which repository*
+built the file, rather than only that it matches a checksum published beside
+it — every release also ships a cosign bundle. See §1 of `RELEASING.md`.
+
+The installer detects the platform and adjusts itself. There is no flag to
+pass: the differences below are corrections rather than preferences, and an
+operator who had to know to ask for them would get a unit that does not start.
+
+### Straight after installing
+
+**Copy the setup token.** `install` prints a one-time token and waits for you
+to type `copied` before it lets go. Run it in an interactive SSH session, not
+from a script, or you will have to fetch it afterwards with
+`./notifymatrix setup-token`.
+
+**Set a listen address you can actually reach.** The default is
+`127.0.0.1:8322`, which on a gateway means the interface is reachable only
+from a shell on the gateway itself. Edit `/data/notifymatrix/config.yaml`:
+
+```yaml
+web:
+  listen: 0.0.0.0:8322
+```
+
+and restart with `systemctl restart notifymatrix`. Do **not** forward that port
+— it carries the settings sign-in. Only `ack_listen` is meant to be forwarded.
+
+### Updating
+
+Re-run the same block, then **restart**:
+
+```bash
+systemctl restart notifymatrix
+```
+
+The restart is the part that matters, and it is easy to miss.
+`./notifymatrix install` ends with `systemctl start`, which is a **no-op on a
+unit that is already running** — so an update that stops at `install` leaves
+the new binary on disk and the old one still executing, with every version
+indicator claiming the upgrade worked. Restart, then confirm with
+`./notifymatrix version` and the version shown in the interface agreeing.
+
+The config, the incident store and the unit itself are untouched by any of
+this.
+
+### Uninstalling
+
+```bash
+/data/notifymatrix/notifymatrix uninstall
+```
+
+The state directory is left behind on purpose — it holds the incident history,
+and an uninstall that silently deleted the record of every alarm the site has
+had is not a thing to do without being asked. Remove `/data/notifymatrix` by
+hand when you are sure.
 
 ### What it does differently here
 
