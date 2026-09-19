@@ -33,6 +33,46 @@ var (
 // Path returns the config path inside a data directory.
 func Path(dataDir string) string { return filepath.Join(dataDir, FileName) }
 
+// KeyFileName is the key-file tier's key, beside the config it protects.
+const KeyFileName = "secret.key"
+
+// bindKeyFile points the key-file tier at THIS data directory.
+//
+// Called from every entry point that reads or writes the config, because the
+// key has to be found wherever the config is -- and the alternative is one
+// call site somewhere in the daemon that a later one forgets.
+//
+// It replaces a fallback chain that looked reasonable and was not:
+//
+//	$STATE_DIRECTORY, else /var/lib/notifymatrix/secret.key
+//
+// $STATE_DIRECTORY is set by systemd only for a unit with StateDirectory=.
+// The ordinary Linux unit has one, pointing at /var/lib/notifymatrix, which is
+// also its data directory -- so the two agreed by coincidence and nothing ever
+// exercised the difference.
+//
+// They stop agreeing the moment anything uses --data-dir somewhere else, and
+// the UniFi gateway unit is the first SHIPPED configuration that does: it
+// cannot use StateDirectory at all, because that directive is always relative
+// to /var/lib and the gateway keeps its state on /data. So $STATE_DIRECTORY
+// was unset, the hardcoded path won, and the daemon looked for its key in a
+// directory it was not using -- reporting, correctly and uselessly, that the
+// key did not match the config.
+func bindKeyFile(dataDir string) {
+	if strings.TrimSpace(dataDir) == "" {
+		return
+	}
+	setKeyFile(filepath.Join(dataDir, KeyFileName))
+}
+
+// setKeyFile is a variable so a test can see WHAT WAS PASSED.
+//
+// The alternative is asking the secret package where it would look, which only
+// answers on platforms that have a key-file tier at all -- and the binding
+// being tested here is the same on all of them. A wrong path otherwise
+// surfaces as "the key does not match the config", which names neither path.
+var setKeyFile = secret.SetKeyFile
+
 // SecureExisting re-applies the read restriction to a configuration file that
 // is already on disk.
 //
@@ -62,6 +102,7 @@ func SecureExisting(dataDir string) error {
 
 // Load reads and validates the config.
 func Load(dataDir string) (*Config, error) {
+	bindKeyFile(dataDir)
 	path := Path(dataDir)
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -215,6 +256,7 @@ func needsHookTokens(cfg *Config) bool {
 // channels and no way to know why. Write-then-rename means a reader sees
 // either the old file or the new one.
 func Save(dataDir string, cfg *Config) error {
+	bindKeyFile(dataDir)
 	if cfg == nil {
 		return errors.New("config: refusing to write a nil config")
 	}
@@ -344,6 +386,9 @@ func Save(dataDir string, cfg *Config) error {
 
 // LoadOrCreate reads the config, writing a default one if none exists.
 func LoadOrCreate(dataDir string) (*Config, error) {
+	// No bindKeyFile here: every path below goes through Load or Save, and
+	// both bind before they touch anything. A third call would be one no test
+	// could ever fail on.
 	cfg, err := Load(dataDir)
 	if err == nil {
 		// A hook added by hand has no token, and a hook with no token has no

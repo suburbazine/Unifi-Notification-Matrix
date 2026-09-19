@@ -13,9 +13,25 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Fixed
+
+- **The encryption key now follows `--data-dir`.** It never did. The key-file
+  tier took its path from `$STATE_DIRECTORY`, else a hardcoded
+  `/var/lib/notifymatrix/secret.key` — and `SetKeyFile`, whose own comment said
+  config called it, was never called by anything.
+
+  On an ordinary Linux install those two answers coincide, because
+  `StateDirectory=` puts the state at `/var/lib/notifymatrix` and that is also
+  the data directory. They stop agreeing the moment anything runs with
+  `--data-dir` somewhere else, and the UniFi gateway unit is the first shipped
+  configuration that does: it cannot use `StateDirectory` at all, since that
+  directive is always relative to `/var/lib` while the gateway keeps state on
+  `/data`.
+
+  The symptom was a daemon that refused to start, reporting — correctly, and
+  uselessly — that *the key file does not match the value in the config*,
+  naming a path in a directory it was not using. Every entry point that reads
+  or writes the config now binds the key beside it.
 
 ## [0.3.3] — 2026-09-19
 

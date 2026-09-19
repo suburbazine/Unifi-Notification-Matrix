@@ -43,8 +43,11 @@ var (
 	keyPathOvr string
 )
 
-// SetKeyFile overrides where the key-file tier keeps its key. Called from
-// config once the data directory is known.
+// SetKeyFile points the key-file tier at a key beside the config it protects.
+//
+// Called from config.Load, config.Save and config.LoadOrCreate -- every entry
+// point that touches the file -- so the key follows --data-dir wherever it
+// goes. It used not to be called at ALL, and the comment here said it was.
 func SetKeyFile(path string) {
 	keyMu.Lock()
 	defer keyMu.Unlock()
@@ -58,8 +61,16 @@ func keyPath() string {
 	if p != "" {
 		return p
 	}
-	// systemd sets $STATE_DIRECTORY for a unit with StateDirectory=, and it is
-	// already correctly owned and moded for the service user.
+	// EVERYTHING BELOW IS A LAST RESORT, reached only when nothing has loaded
+	// a config yet. Both guesses were the whole answer once, and the pair of
+	// them cost a working install: $STATE_DIRECTORY is set by systemd only for
+	// a unit with StateDirectory=, so a unit that cannot use that directive --
+	// the UniFi gateway one, because it is always relative to /var/lib -- fell
+	// through to the hardcoded path and looked for its key in a directory it
+	// was not using.
+	//
+	// They are kept because a guess beats a crash for a caller that has not
+	// named a directory, and because on the ordinary unit they are right.
 	if d := os.Getenv("STATE_DIRECTORY"); d != "" {
 		return filepath.Join(d, "secret.key")
 	}
