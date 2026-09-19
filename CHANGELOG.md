@@ -13,6 +13,19 @@ view against the release before them.
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.3.0] — 2026-09-19
+
+Two new operator-facing surfaces, and the results of two security reviews.
+
+**Read the security section before upgrading if you have peers paired or
+unusual configuration**: sessions now end after seven days however much they
+are used, product slugs that were previously accepted are now refused, and a
+failed pairing fingerprint no longer counts against your pairing code.
+
 ### Added
 
 - **The rules are now checked against what this site has actually had.** Every
@@ -498,7 +511,8 @@ demo mode, and the signed reproducible release pipeline.
 They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
-[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.10...v0.2.0
 [0.1.10]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.9...v0.1.10
