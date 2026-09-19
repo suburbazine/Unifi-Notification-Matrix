@@ -239,3 +239,84 @@ func TestTheCanonicalStringIsExactlyAsSpecified(t *testing.T) {
 		t.Errorf("canonical string drifted:\n got %q\nwant %q", got, want)
 	}
 }
+
+// A FUTURE-STAMPED REQUEST STAYS UNREPLAYABLE FOR AS LONG AS IT STAYS VALID.
+//
+// The window is SYMMETRIC on purpose: a stamp up to Window in the future is
+// accepted, because two machines' clocks disagree and refusing that breaks a
+// peer whose clock runs fast.
+//
+// That symmetry is what made expiring nonces by ARRIVAL time wrong. A request
+// stamped now+Window-1s was accepted now, its nonce was dropped a moment
+// later, and its own timestamp stayed inside the window for nearly another
+// Window -- so the identical signed request was accepted a second time, which
+// is the whole thing the nonce exists to prevent.
+//
+// It fails silently in both directions, which is why this test walks the clock
+// rather than checking one instant.
+func TestAFutureStampedRequestCannotBeReplayedWhileItIsStillInWindow(t *testing.T) {
+	v := verifier()
+	c := creds()[0]
+
+	// Stamped almost a full window ahead, and accepted -- that is the
+	// behaviour being protected, not a bug.
+	stamp := signedAt.Add(Window - time.Second)
+	req := signed(c, "POST", "/link/v1/events", []byte(`{}`), stamp, "future-nonce")
+	if _, err := v.Verify(creds(), req); err != nil {
+		t.Fatalf("a request from a peer whose clock runs fast was refused: %v", err)
+	}
+
+	// Walk forward in steps. At every point the SAME signed request must be
+	// answered either as a replay or as out of window -- never accepted.
+	for _, ahead := range []time.Duration{
+		time.Second,
+		Window / 2,
+		Window,
+		Window + time.Second,
+		Window + Window/2,
+		2*Window - 2*time.Second,
+	} {
+		at := signedAt.Add(ahead)
+		v.Now = func() time.Time { return at }
+		_, err := v.Verify(creds(), req)
+		switch {
+		case err == nil:
+			t.Fatalf("%s later the identical signed request was accepted again; "+
+				"its stamp is still %s from that moment, so it was inside the "+
+				"window with nothing remembering it",
+				ahead, at.Sub(stamp).Round(time.Second))
+		case errors.Is(err, ErrReplay), errors.Is(err, ErrSkew):
+		default:
+			t.Fatalf("%s later: unexpected %v", ahead, err)
+		}
+	}
+}
+
+// AND THE ENTRY IS NOT KEPT FOR EVER EITHER.
+//
+// Expiring on the stamp has to drop the nonce once no request bearing it could
+// pass the skew check -- otherwise the cache fills with entries that can never
+// matter and a busy peer is refused as full.
+func TestANonceIsForgottenOnceNothingCarryingItCouldStillBeAccepted(t *testing.T) {
+	v := verifier()
+	c := creds()[0]
+
+	stamp := signedAt.Add(Window - time.Second)
+	req := signed(c, "POST", "/link/v1/events", []byte(`{}`), stamp, "future-nonce")
+	if _, err := v.Verify(creds(), req); err != nil {
+		t.Fatal(err)
+	}
+
+	// Well past the point where anything carrying that stamp would be refused
+	// for skew, the table must be empty again.
+	at := stamp.Add(Window + time.Second)
+	v.Now = func() time.Time { return at }
+	for i := 0; i < MaxNonces; i++ {
+		fresh := signed(c, "POST", "/link/v1/events", []byte(`{}`), at, "fresh"+strconv.Itoa(i))
+		if _, err := v.Verify(creds(), fresh); err != nil {
+			t.Fatalf("refused a fresh request at %d; the expired entry was "+
+				"never dropped and the cache is filling with nonces that can "+
+				"no longer matter: %v", i, err)
+		}
+	}
+}

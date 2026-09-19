@@ -25,6 +25,13 @@ import (
 // at pairing. There is no verification of the client at the TLS layer: every
 // request carries its own signature, and a second identity here would be
 // another key to pair, rotate and lose.
+// MaxHeaderBytes caps the request head on the link port.
+//
+// Generous for what a peer actually sends -- an id, a timestamp, a nonce and a
+// base64 signature come to a few hundred bytes -- and small enough that an
+// unauthenticated caller cannot decide how much memory a request costs.
+const MaxHeaderBytes = 8 << 10
+
 func Serve(ctx context.Context, ln net.Listener, h http.Handler, cfg *tls.Config) error {
 	srv := &http.Server{
 		Handler: onlyLink(h),
@@ -36,7 +43,14 @@ func Serve(ctx context.Context, ln net.Listener, h http.Handler, cfg *tls.Config
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
-		TLSConfig:         cfg,
+		// A peer sends four short headers: the link id, a timestamp, a nonce
+		// and a signature. Go's default allows a MEGABYTE of them per request,
+		// and this port is reachable by whatever the operator forwarded -- so
+		// without this, an unauthenticated caller chooses how much memory each
+		// request costs, and the header values are retained afterwards in the
+		// receipt ring.
+		MaxHeaderBytes: MaxHeaderBytes,
+		TLSConfig:      cfg,
 	}
 
 	done := make(chan error, 1)

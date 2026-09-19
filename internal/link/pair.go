@@ -249,12 +249,25 @@ func (p *Pairer) Complete(req PairRequest) (PairResponse, Peer, error) {
 	// operator's receipt can say "the peer saw a different certificate" --
 	// which means something is terminating TLS between them -- rather than the
 	// generic "wrong code" that would send them retyping it.
+	//
+	// NEITHER OF THESE TWO CHARGES AN ATTEMPT, and that is a change from how
+	// it was. MaxCodeAttempts exists to stop a stranger GUESSING the code, so
+	// only a failed proof should spend one. Charging for a fingerprint or
+	// manifest failure meant anybody who could reach the port while a pairing
+	// window was open could void the operator's code with five junk POSTs --
+	// without knowing the code, and without ever being close to it. The
+	// operator then sees "voided after five wrong answers" about a code
+	// nobody guessed at.
+	//
+	// Nothing is lost by not counting them: both are still bounded by the
+	// code's ten-minute life and its single use, both still refuse the
+	// pairing, and both still reach the operator on the receipts page -- the
+	// fingerprint one loudly, because it means something is terminating TLS
+	// in between.
 	if NormaliseFingerprint(req.Fingerprint) != p.Fingerprint {
-		p.attempts++
 		return PairResponse{}, Peer{}, ErrFingerprint
 	}
 	if err := req.Manifest.Validate(req.Slug); err != nil {
-		p.attempts++
 		return PairResponse{}, Peer{}, fmt.Errorf("%w: %v", ErrManifestNeeded, err)
 	}
 

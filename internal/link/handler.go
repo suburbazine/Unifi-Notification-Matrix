@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
@@ -379,7 +378,15 @@ func (rc *Receiver) peer(linkID string) (Peer, bool) {
 		return Peer{}, false
 	}
 	for _, p := range rc.deps.Peers() {
-		if strings.EqualFold(p.LinkID, linkID) {
+		// EXACT, because Verify is exact.
+		//
+		// This matched case-insensitively while authentication matched byte
+		// for byte, so two configured ids differing only in case would
+		// authenticate against one credential and then resolve to the OTHER
+		// peer -- arriving under the wrong product's slug, with the wrong
+		// manifest deciding what it may send. Link ids are machine-minted and
+		// never retyped, so nothing legitimate needed the leniency.
+		if p.LinkID == linkID {
 			return p, true
 		}
 	}

@@ -91,7 +91,50 @@ type Peer struct {
 	MaxSeverity incident.Severity `json:"max_severity,omitempty"`
 }
 
+// MaxSlugChars bounds a product slug.
+const MaxSlugChars = 32
+
+// reservedSlugs are names this product's OWN sources already answer to.
+//
+// The slug becomes the event source and therefore the first segment of every
+// dedup key the peer produces. A peer calling itself "access" would mint keys
+// indistinguishable from the ones the native Access source mints, so an
+// incident raised by the peer and one raised by this product would merge --
+// and the capability machinery, which is named after the source a peer
+// DISPLACES, would be reasoning about a peer that is pretending to be the
+// thing it displaces.
+var reservedSlugs = map[string]bool{
+	"protect": true, "access": true, "network": true,
+	"inbound": true, "internal": true,
+}
+
+// ValidSlug reports whether a product slug is usable.
+//
+// Lower-case, digits and hyphens, starting with an alphanumeric. The slug is
+// not decoration: it is an event source, the first segment of every stored
+// dedup key for ever, an audit field, and the path segment of
+// DELETE /api/link/peers/{slug}. A slug containing a slash could not be
+// unpaired from the page at all, and one containing spaces or mixed case
+// produces dedup keys that look like two different devices.
+func ValidSlug(slug string) bool {
+	if len(slug) == 0 || len(slug) > MaxSlugChars {
+		return false
+	}
+	for i := 0; i < len(slug); i++ {
+		c := slug[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case c == '-' && i > 0:
+		default:
+			return false
+		}
+	}
+	return !reservedSlugs[slug]
+}
+
 var (
+	ErrSlug = errors.New("link: product slug is not usable as an event source")
+
 	ErrManifestEmpty    = errors.New("link: a manifest with no conditions declares nothing")
 	ErrManifestTooLarge = errors.New("link: manifest is too large to review")
 	ErrNoCapability     = errors.New("link: manifest declares no capability")
@@ -102,6 +145,14 @@ var (
 
 // Validate checks a manifest against what can be reviewed and honoured.
 func (m Manifest) Validate(slug string) error {
+	// THE SLUG FIRST, because everything below is stated in terms of it: the
+	// condition prefix rule is meaningless if the prefix itself is not a name
+	// this product can carry.
+	if !ValidSlug(slug) {
+		return fmt.Errorf("%w: %q (want lower-case letters, digits and "+
+			"hyphens, at most %d, and not one of this product's own source "+
+			"names)", ErrSlug, slug, MaxSlugChars)
+	}
 	if strings.TrimSpace(m.Capability) == "" {
 		return ErrNoCapability
 	}

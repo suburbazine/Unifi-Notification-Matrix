@@ -9,11 +9,27 @@ import (
 )
 
 // secretFields are the config keys whose values are credentials.
-// link_tls_key and link_key are here because the regex below is how a
-// credential left in plain text is FOUND. A new secret field that is not
-// listed is one this product will never notice sitting readable on disk --
-// which is the same silence it exists to break.
-var secretFields = []string{"api_key", "token", "password", "link_tls_key", "link_key"}
+//
+// The regex below is how a credential left in plain text is FOUND, so a secret
+// field missing from this list is one this product will never notice sitting
+// readable on disk -- the same silence the check exists to break.
+//
+// It is a list rather than something derived, because the detector works on
+// RAW BYTES: it runs before the file has been parsed, on purpose, so that a
+// configuration which fails to load still reports the credentials sitting in
+// it. That means it cannot ask the type system what the secret fields are.
+//
+// TestEveryCredentialFieldIsWatched walks config.Config with reflection and
+// fails if a secret.Secret field's json tag is not here. That is what keeps
+// the two in step: the list is hand-written, and forgetting to extend it
+// breaks the build rather than going quiet.
+//
+// Five of the ten were missing when an audit checked -- ack_key among them,
+// which signs every acknowledgement link this product sends.
+var secretFields = []string{
+	"api_key", "token", "password", "link_tls_key", "link_key",
+	"ack_key", "bearer", "secret", "user", "account_sid",
+}
 
 // knownPrefixes are the markers a protected value carries.
 var knownPrefixes = []string{

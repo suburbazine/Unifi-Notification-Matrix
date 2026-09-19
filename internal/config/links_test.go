@@ -149,3 +149,39 @@ func TestBuildLinksHandsOverTheDecodedKeyBytes(t *testing.T) {
 		t.Error("the credential key is not the stored key")
 	}
 }
+
+// THE SAME SLUG RULE PAIRING ENFORCES, APPLIED TO A HAND-WRITTEN FILE.
+//
+// Pairing validates the slug, but a configuration can also be written by hand
+// or restored from a backup, and the slug is not decoration: it is the event
+// source, the first segment of every stored dedup key for ever, and the path
+// segment of DELETE /api/link/peers/{slug} -- so one containing a slash is a
+// peer that cannot be unpaired from the page at all.
+func TestAConfiguredSlugHasToBeUsableAsAnEventSource(t *testing.T) {
+	for _, bad := range []string{"Sentry", "door matrix", "a/b", "access", "protect"} {
+		c := Config{Links: []Link{{
+			Slug: bad, LinkID: "lnk_1", Key: secret.Secret(strings.Repeat("k", 32)),
+		}}}
+		probs := c.validateLinks()
+		found := false
+		for _, p := range probs {
+			if strings.Contains(p, "product slug") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("slug %q was accepted; problems were %v", bad, probs)
+		}
+	}
+
+	// And an ordinary one produces no complaint about the slug, or this is
+	// refusing everything and proving nothing.
+	c := Config{Links: []Link{{
+		Slug: "sentry", LinkID: "lnk_1", Key: secret.Secret(strings.Repeat("k", 32)),
+	}}}
+	for _, p := range c.validateLinks() {
+		if strings.Contains(p, "product slug") {
+			t.Errorf("a perfectly ordinary slug was refused: %s", p)
+		}
+	}
+}

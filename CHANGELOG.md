@@ -109,6 +109,62 @@ only what a hostile request COSTS.
   signing with a fixed one from the source. Harmless while a demo stays on
   loopback, wrong the first time somebody forwards a port to show a colleague.
 
+- **A signed request can no longer be replayed while it is still in window.**
+  The skew window is symmetric on purpose — a peer whose clock runs fast has to
+  work — but the replay cache expired a nonce by when the request ARRIVED, so a
+  request stamped nearly a window ahead had its nonce forgotten while its own
+  timestamp was still valid, and the identical signed request was accepted a
+  second time. Nonces now expire on the timestamp the request carried, which is
+  exactly as long as anything bearing it could still pass the skew check.
+
+- **The peer link port bounds its request head** at 8 KiB, and **receipts no
+  longer retain whatever a stranger sends.** Three receipt fields come straight
+  off the wire before anyone has authenticated — the link id header, the URL
+  path, and the reason quoting the offending value back — and two hundred of
+  them are held until the next restart. Each is clipped to 256 bytes, on a rune
+  boundary so the page never renders a broken character.
+
+- **A pairing that fails to happen no longer swaps the credential in memory.**
+  A re-pair wrote into the slice the running configuration points at before the
+  save was attempted, so a save that failed left this process using the new key
+  — with the old one already dead — while the peer was told the pairing failed.
+  Intermittent by construction, because it was invisible whenever the slice
+  happened to be exactly full.
+
+- **Product slugs are validated.** A slug becomes the event source, the first
+  segment of every stored dedup key for ever, and the path segment of the
+  unpair route — so one containing a slash was a peer that could not be
+  unpaired from the page at all. Now lower-case letters, digits and hyphens,
+  at most 32, and not one of this product's own source names: a peer calling
+  itself `access` would mint dedup keys indistinguishable from the native
+  source's. Enforced at pairing and when reading the configuration.
+
+- **A stranger can no longer void your pairing code.** `MaxCodeAttempts` exists
+  to stop a code being ground down by guessing, but a wrong TLS fingerprint or
+  an unapprovable manifest also spent an attempt — so anybody who could reach
+  the port during a pairing window could burn all five with junk that never
+  came near the code, and you would be told it was voided after five wrong
+  answers. Only a failed proof counts now.
+
+- **Two link ids differing only in case are no longer confused.**
+  Authentication matched byte for byte while the peer lookup matched
+  case-insensitively, so a request could authenticate against one credential
+  and resolve to the other peer — arriving under the wrong product's slug, with
+  the wrong manifest deciding what it may send.
+
+- **The plaintext-credential check covers all ten credential fields,** not
+  five. `ack_key` was among the missing ones, which signs every acknowledgement
+  link this product sends: pasted into the file by hand it would have sat there
+  readable and nothing would have said so. A test now walks the configuration
+  struct with reflection and fails the build if a credential field is added
+  without extending the list.
+
+- **A signed-in session now has an absolute ceiling of seven days.** The
+  existing timeout refreshed on every request, so a tab left open on a wall
+  display — which polls — never let it expire, and the honest answer to how
+  long the cookie was good for was "until the daemon restarts". Signing out
+  also gets the cross-origin check every other state change has.
+
 ## [0.2.1] — 2026-09-19
 
 **If you script installations, read the note at the end of this entry.**

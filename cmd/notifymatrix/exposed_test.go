@@ -1,14 +1,18 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/link"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 )
 
 // ==========================================================================
@@ -376,3 +380,101 @@ type fakeConn struct{ net.Conn }
 func (fakeConn) Close() error { return nil }
 
 func (fakeConn) LocalAddr() net.Addr { return &net.TCPAddr{} }
+
+// ---------------------------------------------------------------------------
+// The link port's retained state
+// ---------------------------------------------------------------------------
+
+// A STRANGER DOES NOT GET TO CHOOSE HOW MUCH MEMORY THIS DAEMON HOLDS.
+//
+// Three receipt fields come straight off the wire from a caller who has not
+// authenticated: LinkID is the raw X-Link-Id header, Route is the raw URL
+// path, and Reason quotes the offending value back. The ring holds two hundred
+// of them until the next restart.
+func TestReceiptsDoNotRetainWhateverAStrangerSends(t *testing.T) {
+	s := newLinkState(nil)
+	huge := strings.Repeat("A", 1<<20)
+
+	for i := 0; i < maxReceipts+50; i++ {
+		s.record(link.Receipt{
+			At: time.Now(), LinkID: huge, Route: "/link/" + huge,
+			Reason: "malformed: " + huge,
+		})
+	}
+
+	got := s.Receipts()
+	if len(got) > maxReceipts {
+		t.Fatalf("held %d receipts, the bound is %d", len(got), maxReceipts)
+	}
+	for i, r := range got {
+		for name, v := range map[string]string{
+			"LinkID": r.LinkID, "Route": r.Route, "Reason": r.Reason,
+		} {
+			if len(v) > maxReceiptField+8 {
+				t.Fatalf("receipt %d kept %d bytes of %s chosen by the caller",
+					i, len(v), name)
+			}
+		}
+	}
+}
+
+// AND IT DOES NOT CUT A CHARACTER IN HALF.
+//
+// The receipts render on a page. A clamp landing mid-rune shows a replacement
+// glyph, which reads as corruption in the one place an operator goes when they
+// already think something is wrong.
+func TestClampingAReceiptFieldDoesNotBreakACharacter(t *testing.T) {
+	long := strings.Repeat("é", maxReceiptField)
+	got := clipReceiptField(long)
+	if !utf8.ValidString(got) {
+		t.Errorf("clipped to invalid UTF-8: %q", got)
+	}
+	if len(got) > maxReceiptField+8 {
+		t.Errorf("clip left %d bytes", len(got))
+	}
+	// Something short is untouched, or every reason on the page grows an
+	// ellipsis.
+	if got := clipReceiptField("short reason"); got != "short reason" {
+		t.Errorf("a short value was altered: %q", got)
+	}
+}
+
+// A FAILED SAVE MUST NOT LEAVE THE NEW CREDENTIAL LIVE IN MEMORY.
+//
+// `next := *cur` is a shallow copy, so next.Links shares a backing array with
+// the configuration this process is USING, and the re-pair branch assigns
+// straight into it. A save that then fails leaves the daemon running the new
+// key, with the old one already gone, while the peer is told the pairing did
+// not happen.
+//
+// Intermittent by construction: the append branch allocates whenever the slice
+// is exactly full, so the fixture below gives it spare capacity on purpose.
+func TestAFailedPairingDoesNotSwapTheCredentialInMemory(t *testing.T) {
+	cur := &config.Config{Links: append(make([]config.Link, 0, 8),
+		config.Link{Slug: "sentry", LinkID: "lnk_old", Key: secret.Secret("old")},
+	)}
+	d := linkDeps{
+		cfg:      func() *config.Config { return cur },
+		saveCfg:  func(*config.Config) error { return errors.New("the disk is full") },
+		state:    newLinkState(nil),
+		auditLog: &capturingLog{},
+	}
+
+	err := d.storePeer(link.Peer{
+		Slug: "sentry", LinkID: "lnk_new",
+		Manifest: link.Manifest{Capability: "access"},
+	}, []byte("a new key"))
+	if err == nil {
+		t.Fatal("a failed save was reported as a success")
+	}
+
+	if got := cur.Links[0].LinkID; got != "lnk_old" {
+		t.Errorf("the running configuration now holds %q; the peer was told "+
+			"the pairing failed and the old credential has already stopped "+
+			"working", got)
+	}
+	if got := cur.Links[0].Key.Reveal(); got != "old" {
+		t.Error("the key in the running configuration was replaced by a " +
+			"pairing that did not happen")
+	}
+}

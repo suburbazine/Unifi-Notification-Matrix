@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
@@ -109,7 +110,38 @@ func (s *linkState) address() string {
 	return s.addr
 }
 
+// maxReceiptField bounds each string a receipt retains.
+//
+// Three of them come straight off the wire from a caller who has not
+// authenticated: LinkID is the raw X-Link-Id header, Route is the raw URL
+// path, and Reason quotes the offending value back. The ring holds two hundred
+// receipts, so without a clamp a stranger choosing megabyte-long headers
+// decides how much memory this daemon holds -- and holds it in the one
+// structure that survives until the next restart.
+//
+// Long enough that nothing real is cut: a link id is a short token, a route is
+// a fixed string from a list of five, and a reason worth reading is a
+// sentence. The audit copy was already capped at 2000 bytes by scrub(); this
+// is the ring catching up with it.
+const maxReceiptField = 256
+
+func clipReceiptField(v string) string {
+	if len(v) <= maxReceiptField {
+		return v
+	}
+	// Cut on a rune boundary so the page never renders a broken character.
+	cut := maxReceiptField
+	for cut > 0 && !utf8.RuneStart(v[cut]) {
+		cut--
+	}
+	return v[:cut] + "..."
+}
+
 func (s *linkState) record(r link.Receipt) {
+	r.LinkID = clipReceiptField(r.LinkID)
+	r.Route = clipReceiptField(r.Route)
+	r.Reason = clipReceiptField(r.Reason)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.receipts = append(s.receipts, r)
@@ -287,6 +319,19 @@ var auditedCause = map[link.Cause]bool{
 func (d linkDeps) storePeer(p link.Peer, key []byte) error {
 	cur := d.cfg()
 	next := *cur
+	// CLONED BEFORE ANYTHING IS WRITTEN INTO IT.
+	//
+	// `next := *cur` is a shallow copy, so next.Links and cur.Links share a
+	// backing array -- and the re-pair branch below assigns straight into it.
+	// Two consequences, both silent: a concurrent Credentials() reader races
+	// on the element, and a save that FAILS leaves this process running the
+	// new credential while the operator is told the pairing did not happen,
+	// with the old key already gone until a restart.
+	//
+	// Intermittent by construction, because the append branch allocates a new
+	// array whenever the slice is exactly full -- so it is invisible in any
+	// test whose fixture happens to have no spare capacity.
+	next.Links = slices.Clone(cur.Links)
 
 	conds := make([]config.LinkCondition, 0, len(p.Manifest.Conditions))
 	for _, c := range p.Manifest.Conditions {

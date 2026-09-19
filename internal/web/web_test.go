@@ -1517,3 +1517,109 @@ func TestASaveNamingAListenAddressThisMachineDoesNotHaveIsRefused(t *testing.T) 
 		t.Errorf("the refusal does not say where the address belongs instead:\n%s", err)
 	}
 }
+
+// A SESSION IN CONTINUOUS USE WAS IMMORTAL.
+//
+// sessionTTL is an idle timeout and it refreshes on every request, so a tab
+// left open on a wall display -- which polls the board -- never let it expire.
+// The honest answer to "how long is this credential good for" was "until the
+// daemon restarts", which for a service that restarts rarely is months.
+func TestASessionInConstantUseStillEndsEventually(t *testing.T) {
+	h := newHarness(t)
+	h.setPassword(testPassword)
+
+	now := time.Now()
+	h.srv.now = func() time.Time { return now }
+	h.srv.auth.nowFunc = h.srv.now
+	h.signIn()
+
+	// Used continuously, well inside the idle timeout each time round, so the
+	// idle rule can never be what ends it. age is tracked explicitly because
+	// the assertion is about the session's age, not about how many times the
+	// loop went round.
+	step := sessionTTL / 2
+	var age time.Duration
+	for age+step < sessionMaxAge {
+		now = now.Add(step)
+		age += step
+		if res, _ := h.do("GET", "/api/settings", nil); res.StatusCode != http.StatusOK {
+			t.Fatalf("signed out %s into continuous use, before the %s "+
+				"ceiling: %d", age, sessionMaxAge, res.StatusCode)
+		}
+	}
+
+	now = now.Add(step) // now past sessionMaxAge
+	if res, _ := h.do("GET", "/api/settings", nil); res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("a session %s old is still valid; using it kept pushing the "+
+			"only limit there was", sessionMaxAge)
+	}
+}
+
+// The ordinary idle timeout still works, or the ceiling has quietly replaced
+// it with something eight times more generous.
+func TestAnIdleSessionStillExpiresOnTheShorterRule(t *testing.T) {
+	h := newHarness(t)
+	h.setPassword(testPassword)
+
+	now := time.Now()
+	h.srv.now = func() time.Time { return now }
+	h.srv.auth.nowFunc = h.srv.now
+	h.signIn()
+
+	now = now.Add(sessionTTL + time.Minute)
+	if res, _ := h.do("GET", "/api/settings", nil); res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("an idle session outlived sessionTTL: %d", res.StatusCode)
+	}
+}
+
+// SIGNING OUT IS A STATE CHANGE AND GETS THE SAME ORIGIN CHECK.
+//
+// This route sits outside requireAuth -- signing out has to work whether or
+// not the session is still live -- so it never got the check the gated routes
+// get. SameSite=Lax means the cookie was never sent cross-site, so the session
+// itself was safe; the RESPONSE still carried Set-Cookie with MaxAge=-1, which
+// clears the operator's cookie from whatever page they happened to be on.
+func TestSigningOutRefusesACrossOriginRequest(t *testing.T) {
+	h := newHarness(t)
+	h.setPassword(testPassword)
+	h.signIn()
+
+	req, err := http.NewRequest("POST", h.http.URL+"/api/signout", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", "https://somewhere-else.example.com")
+	res, err := h.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", res.StatusCode)
+	}
+	for _, c := range res.Cookies() {
+		if c.Name == sessionCookie && c.MaxAge < 0 {
+			t.Error("the response cleared the operator's session cookie anyway")
+		}
+	}
+	// And the session still works.
+	if r2, _ := h.do("GET", "/api/settings", nil); r2.StatusCode != http.StatusOK {
+		t.Errorf("the session was dropped by a refused cross-origin signout: %d",
+			r2.StatusCode)
+	}
+}
+
+// AND AN ORDINARY SIGN-OUT STILL WORKS, or this has broken the button.
+func TestSigningOutFromThePageStillWorks(t *testing.T) {
+	h := newHarness(t)
+	h.setPassword(testPassword)
+	h.signIn()
+
+	if res, _ := h.do("POST", "/api/signout", nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("signing out returned %d", res.StatusCode)
+	}
+	if res, _ := h.do("GET", "/api/settings", nil); res.StatusCode != http.StatusUnauthorized {
+		t.Error("the session survived signing out")
+	}
+}

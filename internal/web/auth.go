@@ -51,6 +51,20 @@ const (
 	// process; a restart signing everyone out is correct for a daemon whose
 	// restarts are themselves an event worth noticing.
 	sessionTTL = 8 * time.Hour
+
+	// sessionMaxAge is how long a session may live NO MATTER HOW MUCH IT IS
+	// USED.
+	//
+	// sessionTTL alone is an idle timeout, and an idle timeout that refreshes
+	// on every request never fires for a tab left open on a wall display or a
+	// browser polling the board. A cookie in continuous use was immortal --
+	// for as long as the daemon ran, which for a service that restarts rarely
+	// is months.
+	//
+	// Seven days is chosen so the honest answer to "how long is this
+	// credential good for" is a number rather than "until something
+	// restarts". Signing in again is a password field on a page already open.
+	sessionMaxAge = 7 * 24 * time.Hour
 )
 
 // ErrWeakPassword is returned for a password under the minimum length.
@@ -119,13 +133,28 @@ func newToken() (string, error) {
 // Sessions
 // ---------------------------------------------------------------------------
 
+// session is one signed-in browser.
+type session struct {
+	// born is when the password was entered. NEVER updated: it is the only
+	// thing standing between a tab left open on a wall display and a
+	// credential that outlives the reason it was granted.
+	born time.Time
+
+	// expires is the idle timeout, pushed forward on every use.
+	expires time.Time
+}
+
 type authState struct {
 	mu sync.Mutex
 
 	// sessions is keyed by the SHA-256 of the cookie value, so the raw token
 	// is not sitting in process memory in a form that a heap dump hands
 	// straight back.
-	sessions map[[32]byte]time.Time
+	//
+	// Two times are kept, and they answer different questions: expires is the
+	// idle timeout and moves forward on every use; born never moves, and is
+	// what stops a cookie in continuous use from living for ever.
+	sessions map[[32]byte]session
 
 	// setupToken authorises setting the FIRST password, once.
 	setupToken string
@@ -142,7 +171,7 @@ type failRecord struct {
 
 func newAuthState(now func() time.Time) *authState {
 	return &authState{
-		sessions: map[[32]byte]time.Time{},
+		sessions: map[[32]byte]session{},
 		fails:    map[string]*failRecord{},
 		nowFunc:  now,
 	}
@@ -195,12 +224,16 @@ func (a *authState) newSession() (string, error) {
 	now := a.nowFunc()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for k, exp := range a.sessions {
-		if now.After(exp) {
+	// Sweep the dead on the way in, by either rule.
+	for k, sess := range a.sessions {
+		if now.After(sess.expires) || now.Sub(sess.born) >= sessionMaxAge {
 			delete(a.sessions, k)
 		}
 	}
-	a.sessions[sha256.Sum256([]byte(tok))] = now.Add(sessionTTL)
+	a.sessions[sha256.Sum256([]byte(tok))] = session{
+		born:    now,
+		expires: now.Add(sessionTTL),
+	}
 	return tok, nil
 }
 
@@ -213,15 +246,19 @@ func (a *authState) valid(tok string) bool {
 	k := sha256.Sum256([]byte(tok))
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	exp, ok := a.sessions[k]
+	sess, ok := a.sessions[k]
 	if !ok {
 		return false
 	}
-	if now.After(exp) {
+	// Idle first, then the ceiling. Either one ends it, and the ceiling is
+	// the one that cannot be pushed back by using the session -- which is the
+	// whole reason it exists.
+	if now.After(sess.expires) || now.Sub(sess.born) >= sessionMaxAge {
 		delete(a.sessions, k)
 		return false
 	}
-	a.sessions[k] = now.Add(sessionTTL)
+	sess.expires = now.Add(sessionTTL)
+	a.sessions[k] = sess
 	return true
 }
 
@@ -241,7 +278,7 @@ func (a *authState) drop(tok string) {
 func (a *authState) dropAll() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.sessions = map[[32]byte]time.Time{}
+	a.sessions = map[[32]byte]session{}
 }
 
 // ---------------------------------------------------------------------------
@@ -471,6 +508,19 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSignOut(w http.ResponseWriter, r *http.Request) {
+	// THE SAME ORIGIN CHECK AS EVERY OTHER STATE CHANGE.
+	//
+	// This route is outside requireAuth -- signing out must work whether or
+	// not the session is still live -- so it did not get the check the gated
+	// routes get. SameSite=Lax withholds the cookie from a cross-site POST, so
+	// the session itself was never droppable from elsewhere; but the RESPONSE
+	// still carried Set-Cookie with MaxAge=-1, which clears the operator's
+	// cookie from whatever page they were on. A nuisance rather than a
+	// breach, and one line to close.
+	if origin := r.Header.Get("Origin"); origin != "" && !sameOrigin(origin, r) {
+		writeJSON(w, http.StatusForbidden, errorBody("cross-origin request refused"))
+		return
+	}
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		s.auth.drop(c.Value)
 	}

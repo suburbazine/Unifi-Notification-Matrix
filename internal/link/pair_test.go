@@ -200,3 +200,71 @@ func TestPairProofsAreDomainSeparated(t *testing.T) {
 		t.Error("the client and server proofs are identical")
 	}
 }
+
+// A STRANGER CANNOT VOID THE OPERATOR'S CODE WITHOUT GUESSING IT.
+//
+// MaxCodeAttempts exists to stop a code being ground down by guessing, so only
+// a failed PROOF should spend one. Charging for a fingerprint or manifest
+// failure meant anybody who could reach the port during a pairing window could
+// burn all five with junk that never came near the code -- and the operator
+// would be told their code was voided after five wrong answers, about a code
+// nobody had guessed at.
+func TestJunkThatNeverGuessesTheCodeDoesNotVoidIt(t *testing.T) {
+	p, code := pairer(t)
+
+	// Far more than MaxCodeAttempts, none of which is a guess: a wrong
+	// certificate fingerprint, then a manifest that cannot be approved.
+	for i := 0; i < MaxCodeAttempts*3; i++ {
+		if _, _, err := p.Complete(pairReq(code, fpB)); !errors.Is(err, ErrFingerprint) {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+	}
+	for i := 0; i < MaxCodeAttempts*3; i++ {
+		req := pairReq(code, fpA)
+		req.Manifest.Conditions = nil
+		if _, _, err := p.Complete(req); !errors.Is(err, ErrManifestNeeded) {
+			t.Fatalf("manifest attempt %d: %v", i, err)
+		}
+	}
+
+	// The operator's code still works.
+	if _, _, err := p.Complete(pairReq(code, fpA)); err != nil {
+		t.Errorf("the code was voided by traffic that never guessed it: %v", err)
+	}
+}
+
+// AND GUESSING STILL COSTS. The counter has to keep doing its actual job.
+func TestGuessingTheCodeStillVoidsIt(t *testing.T) {
+	p, code := pairer(t)
+
+	for i := 0; i < MaxCodeAttempts; i++ {
+		req := pairReq(code, fpA)
+		req.Proof = PairProof("WRONG"+code, "client", "sentry", fpA, "pair-nonce")
+		if _, _, err := p.Complete(req); !errors.Is(err, ErrBadProof) {
+			t.Fatalf("guess %d gave %v", i, err)
+		}
+	}
+	if _, _, err := p.Complete(pairReq(code, fpA)); !errors.Is(err, ErrCodeVoided) {
+		t.Errorf("five wrong guesses did not void the code: %v", err)
+	}
+}
+
+// A SLUG THAT COULD NOT BE AN EVENT SOURCE IS REFUSED AT PAIRING.
+//
+// The slug outlives the credential: it is the first segment of every dedup key
+// this peer ever produces, so it cannot be fixed later without orphaning
+// everything the peer has already raised.
+func TestAPeerCannotPairUnderAnUnusableSlug(t *testing.T) {
+	for _, bad := range []string{"Sentry", "door matrix", "a/b", "access", ""} {
+		p, code := pairer(t)
+		req := pairReq(code, fpA)
+		req.Slug = bad
+		req.Proof = PairProof(code, "client", bad, fpA, "pair-nonce")
+		req.Manifest.Conditions = []ConditionSpec{{
+			Name: bad + "-thing", Meaning: "m", Severity: "high",
+		}}
+		if _, _, err := p.Complete(req); !errors.Is(err, ErrManifestNeeded) {
+			t.Errorf("slug %q paired, or failed for the wrong reason: %v", bad, err)
+		}
+	}
+}

@@ -74,6 +74,17 @@ func (c Config) validateLinks() Problems {
 		if strings.TrimSpace(l.Slug) == "" {
 			p = append(p, fmt.Sprintf("%s: a link needs a product slug; it becomes "+
 				"the event source and the first part of every dedup key", where))
+		} else if !link.ValidSlug(l.Slug) {
+			// The same rule pairing enforces, applied to a file somebody may
+			// have written by hand. A slug is an event source, the first
+			// segment of every stored dedup key for ever, and the path segment
+			// of the unpair route -- so one containing a slash is a peer that
+			// cannot be forgotten from the page.
+			p = append(p, fmt.Sprintf("%s: %q is not usable as a product slug. "+
+				"It becomes the event source and the first part of every dedup "+
+				"key, so it has to be lower-case letters, digits and hyphens, "+
+				"at most %d of them, and not one of this product's own source "+
+				"names", where, l.Slug, link.MaxSlugChars))
 		}
 		if strings.TrimSpace(l.LinkID) == "" {
 			p = append(p, fmt.Sprintf("%s: a link needs a link_id", where))

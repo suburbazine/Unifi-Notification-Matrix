@@ -341,3 +341,41 @@ func TestHeartbeatAndPingAreServed(t *testing.T) {
 		}
 	}
 }
+
+// TWO LINK IDS DIFFERING ONLY IN CASE MUST NOT BE CONFUSED.
+//
+// Authentication matched byte for byte and the peer lookup matched
+// case-insensitively, so a request could authenticate against one credential
+// and then resolve to the OTHER peer -- arriving under the wrong product's
+// slug, with the wrong manifest deciding what it is allowed to send. Ids are
+// machine-minted and never retyped, so nothing legitimate needed the
+// leniency.
+func TestAPeerLookupDoesNotMatchADifferentCase(t *testing.T) {
+	peers := []Peer{
+		{Slug: "sentry", LinkID: "lnk_abc"},
+		{Slug: "doormatrix", LinkID: "LNK_ABC"},
+	}
+	rc := NewReceiver(Deps{Peers: func() []Peer { return peers }})
+
+	got, ok := rc.peer("lnk_abc")
+	if !ok || got.Slug != "sentry" {
+		t.Fatalf("exact lookup returned %+v ok=%v", got, ok)
+	}
+	got, ok = rc.peer("LNK_ABC")
+	if !ok || got.Slug != "doormatrix" {
+		t.Fatalf("the other exact lookup returned %+v ok=%v", got, ok)
+	}
+	if _, ok := rc.peer("Lnk_Abc"); ok {
+		t.Error("a spelling matching neither credential resolved to a peer; " +
+			"an authenticated request would then arrive under the wrong " +
+			"product's slug and manifest")
+	}
+}
+
+// receiptCount reports how many receipts the harness has recorded, under the
+// lock the listener tests need because the receiver runs on its own goroutine.
+func (h *harness) receiptCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.receipts)
+}

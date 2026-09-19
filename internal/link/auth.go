@@ -179,6 +179,29 @@ func (v *Verifier) now() time.Time {
 // on, and one that says "unauthorised" confirms something is listening here.
 // The specific error is returned so it can be written to that link's receipt,
 // where a signed-in operator can read it.
+//
+// # What that does and does not cover
+//
+// Identical on the WIRE: same status, same body, same headers, for every
+// failure below.
+//
+// NOT identical in TIME, and the difference is deliberate rather than
+// overlooked. The shape and skew checks return before the credential scan, so
+// a malformed or stale request is answered faster than a well-formed in-window
+// one, and the scan's own duration grows with the number of paired peers. What
+// that reveals is "this was well formed and the clock was close" and "roughly
+// how many peers are configured" -- neither of which is a secret, and neither
+// of which narrows a 256-bit key.
+//
+// What IS protected against timing is the part that matters: which credential
+// matched, and how much of a guessed signature was right. The scan below has
+// no early break and every comparison is constant-time, so those two questions
+// take the same time to answer wrongly as rightly.
+//
+// Running the scan unconditionally to hide the first difference would cost a
+// full HMAC per garbage packet on a LAN-reachable port and make the most
+// security-critical function here harder to read, to conceal something a
+// port scan already tells you.
 func (v *Verifier) Verify(creds []Credential, req Request) (Credential, error) {
 	sig, ok := parseAuthorization(req.Authorization)
 	if !ok {
@@ -193,7 +216,8 @@ func (v *Verifier) Verify(creds []Credential, req Request) (Credential, error) {
 		return Credential{}, fmt.Errorf("%w: timestamp %q", ErrMalformed, req.Timestamp)
 	}
 	now := v.now()
-	if d := now.Sub(time.Unix(secs, 0)); d > Window || d < -Window {
+	stamped := time.Unix(secs, 0)
+	if d := now.Sub(stamped); d > Window || d < -Window {
 		return Credential{}, fmt.Errorf("%w: %s off", ErrSkew, d.Round(time.Second))
 	}
 
@@ -229,14 +253,30 @@ func (v *Verifier) Verify(creds []Credential, req Request) (Credential, error) {
 	// Consuming it earlier would let anybody who can reach the port fill a
 	// peer's replay cache with nonces of their choosing and have real requests
 	// refused as full.
-	if err := v.useNonce(found.LinkID, req.Nonce, now); err != nil {
+	if err := v.useNonce(found.LinkID, req.Nonce, stamped, now); err != nil {
 		return Credential{}, err
 	}
 	return found, nil
 }
 
 // useNonce records a nonce, refusing a repeat or a full cache.
-func (v *Verifier) useNonce(linkID, nonce string, now time.Time) error {
+//
+// A nonce is remembered against the timestamp THE REQUEST CLAIMED, never
+// against when it happened to arrive.
+//
+// The distinction is the whole correctness of the replay cache, and getting it
+// wrong is invisible. The window is symmetric -- a stamp up to Window in the
+// FUTURE is accepted, because the two machines' clocks disagree and refusing
+// that would break a peer whose clock runs fast. So a request stamped
+// now+Window-1s is accepted now, and if its nonce were expired by arrival time
+// it would be forgotten a moment later while its own timestamp remained inside
+// the window for nearly another Window -- leaving a signed request replayable
+// for the rest of that span.
+//
+// Expiring on the stamp closes it exactly: the entry lives precisely as long
+// as a request carrying it could still pass the skew check above, and not one
+// second longer.
+func (v *Verifier) useNonce(linkID, nonce string, stamped, now time.Time) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -245,8 +285,9 @@ func (v *Verifier) useNonce(linkID, nonce string, now time.Time) error {
 		seen = map[string]time.Time{}
 		v.nonces[linkID] = seen
 	}
-	// Expire first: a nonce older than the window can never be accepted again
-	// anyway, because its timestamp is already outside it.
+	// Expire first. `at` is the stamp the request carried, so a nonce is
+	// dropped exactly when a request bearing it would start failing the skew
+	// check -- which is the only moment it stops needing to be remembered.
 	for n, at := range seen {
 		if now.Sub(at) > Window {
 			delete(seen, n)
@@ -258,7 +299,7 @@ func (v *Verifier) useNonce(linkID, nonce string, now time.Time) error {
 	if len(seen) >= MaxNonces {
 		return ErrNonceFull
 	}
-	seen[nonce] = now
+	seen[nonce] = stamped
 	return nil
 }
 

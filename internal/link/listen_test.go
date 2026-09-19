@@ -268,3 +268,60 @@ func TestTheListenerScopesEvenAWideOpenHandler(t *testing.T) {
 		t.Errorf("the link prefix answered %d; the wrapper is blocking everything", resp.StatusCode)
 	}
 }
+
+// AN UNAUTHENTICATED CALLER DOES NOT CHOOSE HOW MUCH MEMORY A REQUEST COSTS.
+//
+// A peer sends four short headers. Go's default allows a MEGABYTE of them per
+// request, this port is reachable by whatever the operator forwarded, and the
+// header values are then retained in the receipt ring -- so the cost outlives
+// the request.
+//
+// Driven through liveLink, over real TLS, so the refusal can only be the cap.
+// The first version of this test dialled plain HTTP at a TLS listener: the
+// handshake failed, the client timed out after five seconds, the handler had
+// indeed not run, and the test passed without the bound existing at all. It
+// went green with MaxHeaderBytes deleted, which is the only reason it was
+// caught.
+func TestTheLinkListenerRefusesAnOversizedRequestHead(t *testing.T) {
+	base, _, h, client := liveLink(t)
+
+	// A control first: the same request with an ordinary header reaches the
+	// receiver and is answered (with a 404, like every unauthenticated
+	// request here). Without this, a test asserting only on refusal passes
+	// when nothing works at all.
+	before := h.receiptCount()
+	res, err := client.Post(base+RouteEvents, "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("an ordinary request did not reach the listener: %v", err)
+	}
+	res.Body.Close()
+	if h.receiptCount() == before {
+		t.Fatal("an ordinary request produced no receipt, so this test is not " +
+			"reaching the receiver and proves nothing")
+	}
+
+	// Now one whose head is over the cap and far under Go's own default, so a
+	// refusal can only be MaxHeaderBytes.
+	after := h.receiptCount()
+	req, err := http.NewRequest("POST", base+RouteEvents, strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Link-Id", strings.Repeat("A", MaxHeaderBytes*2))
+
+	res, err = client.Do(req)
+	if err == nil {
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusRequestHeaderFieldsTooLarge &&
+			res.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 431 or 400", res.StatusCode)
+		}
+	}
+	// Either way, it must not have reached the receiver -- which is where the
+	// header would have been retained.
+	if h.receiptCount() != after {
+		t.Error("an oversized request head reached the receiver, so the caller " +
+			"chose how much memory this request cost and how much of it the " +
+			"receipt ring keeps")
+	}
+}
