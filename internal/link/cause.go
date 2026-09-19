@@ -52,8 +52,16 @@ const (
 	// Split after the first live pairing, where every event was refused for
 	// this and the label said only "invalid-envelope".
 	CauseEnvelopeVersion Cause = "envelope-version"
-	CauseStore           Cause = "store-failed"
-	CauseIngest          Cause = "ingest-failed"
+
+	// CauseUndeclaredCondition is split out from CauseInvalidEnvelope for the
+	// same reason CauseEnvelopeVersion is: the operator does a DIFFERENT thing
+	// about it. Every other invalid envelope is a bug to report to the peer's
+	// author; this one is usually their next release carrying a condition
+	// nobody has been asked about yet, and the answer is a button. See
+	// propose.go.
+	CauseUndeclaredCondition Cause = "undeclared-condition"
+	CauseStore               Cause = "store-failed"
+	CauseIngest              Cause = "ingest-failed"
 
 	// Pairing, which is the one route a stranger can reach.
 	CausePairUnavailable Cause = "pairing-unavailable"
@@ -150,6 +158,7 @@ func pairCause(err error) Cause {
 // forgetting visible.
 func AllCauses() []Cause {
 	return []Cause{
+		CauseUndeclaredCondition,
 		CauseMethod, CauseNoRoute, CauseBodyUnreadable, CauseBodyTooLarge,
 		CauseUnsigned, CauseMalformedAuth, CauseUnknownLink, CauseBadSignature,
 		CauseClockSkew, CauseReplay, CauseNonceFull, CauseNoPeer,

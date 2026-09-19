@@ -117,8 +117,17 @@ func TestEachKindOfRefusalGetsItsOwnCause(t *testing.T) {
 			h.raw(RouteEvents, h.cred.LinkID, stamp, "n",
 				good(h, RouteEvents, "n", body), body)
 		}},
-		{"an envelope the manifest does not allow", CauseInvalidEnvelope, func(h *harness) {
+		// SPLIT OUT FROM CauseInvalidEnvelope, because the operator does a
+		// different thing about it: every other invalid envelope is a bug to
+		// report to the peer's author, and this one is usually their next
+		// release carrying a condition nobody has been asked about yet.
+		{"a condition the manifest does not declare", CauseUndeclaredCondition, func(h *harness) {
 			body := h.envelope(t, func(e *Envelope) { e.Condition = "sentry-not-declared" })
+			h.raw(RouteEvents, h.cred.LinkID, stamp, "n",
+				good(h, RouteEvents, "n", body), body)
+		}},
+		{"an envelope the manifest does not allow", CauseInvalidEnvelope, func(h *harness) {
+			body := h.envelope(t, func(e *Envelope) { e.Severity = "urgent" })
 			h.raw(RouteEvents, h.cred.LinkID, stamp, "n",
 				good(h, RouteEvents, "n", body), body)
 		}},

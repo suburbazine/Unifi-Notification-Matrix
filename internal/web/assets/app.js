@@ -1811,7 +1811,188 @@ function renderLinkSection(body, ctx) {
   }
   body.appendChild(pc);
 
+  // ABOVE the receipts, deliberately. Without it, a peer shipping a new
+  // condition is a run of identical refusals in a log, and the only way
+  // forward was a text editor.
+  body.appendChild(proposalsCard(st.proposals || []));
+
   body.appendChild(receiptsCard(st.receipts || [], st.since_seconds || 0));
+}
+
+// proposalsCard is what a peer is asking to be allowed to send.
+//
+// The vocabulary a peer may use is closed, and stays closed: a condition
+// outside the approved manifest is refused rather than bucketed, because a
+// silent catch-all recreates the open vocabulary a closed one exists to
+// prevent. This does not widen what arrives. It changes what SAYING YES costs.
+//
+// Before it, a peer shipping a twelfth condition meant opening config.yaml on
+// the operator's machine, or re-pairing the product -- which rotates a working
+// credential in order to fix a spelling, and is how a second site's peer gets
+// revoked by accident.
+function proposalsCard(list) {
+  var card = el("div", "card");
+  card.appendChild(el("div", "card-title", "Waiting for your decision"));
+  if (!list.length) {
+    card.appendChild(el("div", "muted",
+      "No peer is sending anything it has not declared."));
+    return card;
+  }
+  card.appendChild(el("div", "muted small",
+    "These events were REFUSED and stay refused until you approve them. A " +
+    "peer's next release usually does this: it has learned to report " +
+    "something your approved list does not have a name for."));
+  list.forEach(function (p) { card.appendChild(proposalRow(p)); });
+  return card;
+}
+
+function proposalRow(p) {
+  var row = el("div", "card");
+  var head = el("div", "row");
+  head.appendChild(badge(p.product, "is-muted"));
+  head.appendChild(el("strong", "grow", p.condition));
+  // The count, not just the fact. One refusal is a peer's author testing
+  // something; forty-seven is a door that has been reporting a real condition
+  // to nobody for two days.
+  head.appendChild(badge(p.count + " refused", p.count > 1 ? "is-warn" : "is-muted"));
+  row.appendChild(head);
+
+  if (p.title) {
+    row.appendChild(el("div", "muted small",
+      "Its own words for the last one: “" + p.title + "”"));
+  }
+  row.appendChild(el("div", "muted small",
+    "First tried " + stamp(p.first) + ", last " + stamp(p.last) + "."));
+
+  // What was NOT listed. A card showing four proposals and silently dropping
+  // ninety tells the operator their peer sends four things it does not
+  // declare.
+  if (p.unusable) {
+    row.appendChild(callout(p.unusable + " other name" + (p.unusable === 1 ? "" : "s") +
+      " from this peer cannot be approved at all: a condition has to begin " +
+      "with the product's own name. That is a bug at its end, not a decision " +
+      "for you.", "warn"));
+  }
+  if (p.overflowed) {
+    row.appendChild(callout(p.overflowed + " further name" +
+      (p.overflowed === 1 ? " was" : "s were") + " turned away because this " +
+      "list is full. Something at its end is generating condition names.", "warn"));
+  }
+
+  row.appendChild(proposalForm(p));
+  return row;
+}
+
+// proposalForm is the decision. The MEANING is required and starts empty of
+// anything the peer wrote, because a meaning nobody wrote is a meaning nobody
+// reviewed -- and this sentence is what the next person reads when the alarm
+// goes off at three in the morning.
+function proposalForm(p) {
+  var box = el("div", "");
+
+  var meaning = keepOutOfPasswordManagers(el("input"));
+  meaning.type = "text";
+  meaning.placeholder = p.title || "what this means, in your own words";
+  box.appendChild(labelled("What does it mean?", meaning,
+    "Required. You are approving this sentence, not the peer's."));
+
+  var sev = el("select");
+  ["critical", "high", "medium", "low", "info"].forEach(function (v) {
+    var o = document.createElement("option");
+    o.value = v; o.textContent = v;
+    if (v === p.severity) o.selected = true;
+    sev.appendChild(o);
+  });
+  box.appendChild(labelled("Treat it as", sev,
+    "The peer proposed " + (p.severity || "nothing usable") + ". Your rules " +
+    "can still change it."));
+
+  var mom = el("input");
+  mom.type = "checkbox";
+  mom.style.width = "auto";
+  box.appendChild(labelled("It is momentary: it clears by itself", mom,
+    "Tick this for something that comes and goes on its own. An incident " +
+    "that cleared before its first rung is then not delivered at all, which " +
+    "is right for a busy condition and wrong for one that matters."));
+
+  box.appendChild(el("div", "note",
+    "A condition that should hand a capability BACK to this product while it " +
+    "is raised — “alive, but cannot see the doors” — cannot be set here. That " +
+    "belongs with the whole manifest at pairing, where the peer declares it."));
+
+  var bar = el("div", "formbar");
+  var msg = el("div", "msg");
+
+  var ok = el("button", "act primary small", "Approve it");
+  ok.type = "button";
+  ok.addEventListener("click", function () {
+    var m = meaning.value.trim();
+    if (!m) {
+      msg.className = "msg err";
+      fill(msg, "Write what it means first. A condition with no meaning " +
+        "cannot be reviewed by anybody later, including you.");
+      meaning.focus();
+      return;
+    }
+    ok.disabled = true;
+    msg.className = "msg";
+    fill(msg, "");
+    api("POST", "/api/link/peers/" + encodeURIComponent(p.product) + "/conditions", {
+      condition: p.condition, meaning: m, severity: sev.value,
+      momentary: mom.checked
+    }).then(function (res) {
+      ok.disabled = false;
+      if (!res.ok) {
+        msg.className = "msg err";
+        fill(msg, (res.data && res.data.error) || "that could not be approved");
+        return;
+      }
+      afterAmendment(p.condition);
+    });
+  });
+
+  var no = el("button", "act small", "Not now");
+  no.type = "button";
+  no.addEventListener("click", function () {
+    no.disabled = true;
+    api("DELETE", "/api/link/peers/" + encodeURIComponent(p.product) +
+      "/conditions/" + encodeURIComponent(p.condition)).then(function () {
+      afterAmendment("");
+    });
+  });
+
+  bar.appendChild(ok);
+  bar.appendChild(no);
+  box.appendChild(bar);
+  box.appendChild(msg);
+  box.appendChild(el("div", "note",
+    "“Not now” only clears it from this list. The peer goes on sending it and " +
+    "the question comes back, because a peer that keeps sending something is " +
+    "a fact about the peer rather than something to hide."));
+  return box;
+}
+
+// afterAmendment re-reads the link state and, when something was approved,
+// says what still has to happen.
+//
+// The notice goes in the section FOOT for the same reason the rule review's
+// does: redraw() refills the body, so anything appended to the card is
+// detached the moment the list is rebuilt -- and the one sentence that matters
+// would be appended to an element no longer on the page.
+function afterAmendment(approved) {
+  var ctx = settingsCtx;
+  if (!ctx) { refreshSettings(); return; }
+  api("GET", "/api/link").then(function (res) {
+    if (settingsCtx !== ctx) return;
+    if (res.ok) ctx.link = res.data || {};
+    ctx.redraw("link");
+    if (!approved) return;
+    var sec = ctx.sections.link;
+    if (sec && sec.foot) {
+      clear(sec.foot);
+      sec.foot.appendChild(restartOffer("Approving " + approved + ", and that"));
+    }
+  });
 }
 
 // pairingCard offers a code, or shows the one on offer with its clock.
@@ -1972,7 +2153,8 @@ var LINK_CAUSES = {
   "nonce-table-full": "It sent far more than expected in five minutes. Nothing is lost, but something on that end is looping.",
   "no-peer-for-link": "It authenticated against a credential with no product behind it. That should not be possible; tell somebody.",
   "malformed-envelope": "It authenticated and then sent something that is not an event.",
-  "invalid-envelope": "It sent a condition or severity outside the manifest you approved. It is claiming something it did not declare.",
+  "invalid-envelope": "It sent something outside the manifest you approved — a severity, a state or a field that does not match what it declared.",
+  "undeclared-condition": "It sent a condition its approved manifest does not contain, and the event was refused. Usually its next release doing something new. There is nothing to fix at the other end: the proposal is above, with what it means and what it wants to raise, and approving it is what lets the next one through.",
   "envelope-version": "It speaks a different version of the link protocol. Nothing is wrong with your setup; one of the two products needs upgrading.",
   "over-the-rate-limit": "It sent far more in a minute than any working peer does. Nothing is lost — it will retry — but something on that end is looping, or somebody has a credential they should not.",
   "store-failed": "This machine could not record the event id. The peer will retry.",

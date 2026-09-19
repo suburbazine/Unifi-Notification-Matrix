@@ -1,11 +1,13 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 )
 
 // noLinkListener is the one answer every link route gives when this build has
@@ -48,6 +50,16 @@ type LinkPairing struct {
 	// a password.
 	Receipts []LinkReceiptView `json:"receipts"`
 
+	// Proposals are conditions paired peers have sent that their approved
+	// manifest does not contain, waiting for a decision.
+	//
+	// The event was REFUSED, and stays refused until the operator says yes.
+	// What this list changes is only that saying yes stops being a text
+	// editor: a peer shipping a twelfth condition used to mean opening the
+	// configuration file by hand, or re-pairing the product -- rotating a
+	// working credential to fix a spelling.
+	Proposals []LinkProposalView `json:"proposals"`
+
 	// SinceSeconds is how long this service has been collecting receipts:
 	// the receipts are IN MEMORY and start empty at every restart.
 	//
@@ -74,6 +86,33 @@ type LinkReceiptView struct {
 	// be identical.
 	Cause  string `json:"cause,omitempty"`
 	Reason string `json:"reason,omitempty"`
+}
+
+// LinkProposalView is one condition a peer is asking to be allowed to send.
+type LinkProposalView struct {
+	Product   string `json:"product"`
+	Condition string `json:"condition"`
+
+	// Severity and Title are the peer's own words from the refused event,
+	// offered as a starting point for the form rather than as a decision. A
+	// meaning nobody wrote is a meaning nobody reviewed.
+	Severity string `json:"severity,omitempty"`
+	Title    string `json:"title,omitempty"`
+
+	// Count is how many events have been refused for this, which separates a
+	// peer that fired once during its own testing from a door that has been
+	// reporting something real and unheard for two days.
+	Count int       `json:"count"`
+	First time.Time `json:"first"`
+	Last  time.Time `json:"last"`
+
+	// Unusable and Overflowed are what this peer sent that is NOT in the list:
+	// names that could never be approved because they do not begin with the
+	// peer's slug, and names that arrived after the list was full. Carried on
+	// each row so the page can say it without a second shape; the server sends
+	// the same numbers on every row of a peer.
+	Unusable   int `json:"unusable,omitempty"`
+	Overflowed int `json:"overflowed,omitempty"`
 }
 
 // LinkPeerView is one paired peer, as an operator needs to see it.
@@ -175,4 +214,121 @@ func (s *Server) handleLinkUnpair(w http.ResponseWriter, r *http.Request) {
 		Fields:  map[string]string{"product": slug},
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "forgotten"})
+}
+
+// ---------------------------------------------------------------------------
+// Amending an approved manifest
+//
+// The vocabulary a peer may use is closed, and stays closed: this does not
+// widen what arrives, it changes what SAYING YES costs. Before it, a peer
+// shipping one more condition meant hand-editing YAML on the operator's
+// machine, or re-pairing the product -- which rotates a working credential in
+// order to fix a spelling, and is how a second site's credential gets revoked
+// by accident (see storePeer).
+//
+// Everything a pairing manifest has to satisfy, an amendment satisfies too:
+// the name must begin with the peer's slug, the severity must be real, the
+// meaning must be written by the person approving it, and the whole manifest
+// is revalidated before it is saved. And it may only name a condition a peer
+// has ACTUALLY TRIED to send, so this is not a general way to write config.
+// ---------------------------------------------------------------------------
+
+// approveConditionRequest is the operator's decision about one proposal.
+type approveConditionRequest struct {
+	Condition string `json:"condition"`
+
+	// Meaning is what they are approving and is REQUIRED. The peer's event
+	// title is offered as a starting point by the page; a condition with no
+	// meaning cannot be reviewed by whoever reads the list next year.
+	Meaning  string `json:"meaning"`
+	Severity string `json:"severity"`
+
+	// Momentary is the operator's classification. The peer cannot propose it
+	// here -- an event envelope carries no such flag -- so unlike at pairing
+	// there is nothing to override, and this is simply their answer.
+	Momentary bool `json:"momentary"`
+}
+
+// handleLinkApproveCondition adds one proposed condition to a peer's manifest.
+func (s *Server) handleLinkApproveCondition(w http.ResponseWriter, r *http.Request) {
+	if s.deps.LinkApproveCondition == nil {
+		writeJSON(w, http.StatusNotFound, errorBody(noLinkListener))
+		return
+	}
+	slug := strings.TrimSpace(r.PathValue("slug"))
+	if slug == "" {
+		writeJSON(w, http.StatusBadRequest, errorBody("which peer?"))
+		return
+	}
+	var req approveConditionRequest
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody("that request could not be read"))
+		return
+	}
+	req.Condition = strings.TrimSpace(req.Condition)
+	req.Meaning = strings.TrimSpace(req.Meaning)
+	if req.Condition == "" {
+		writeJSON(w, http.StatusBadRequest, errorBody("which condition?"))
+		return
+	}
+	if req.Meaning == "" {
+		writeJSON(w, http.StatusBadRequest, errorBody(
+			"write what this condition means before approving it; a condition "+
+				"with no meaning cannot be reviewed by anybody later"))
+		return
+	}
+	if len([]rune(req.Meaning)) > 200 {
+		req.Meaning = string([]rune(req.Meaning)[:200])
+	}
+
+	err := s.deps.LinkApproveCondition(slug, ApprovedCondition{
+		Condition: req.Condition,
+		Meaning:   req.Meaning,
+		Severity:  req.Severity,
+		Momentary: req.Momentary,
+	})
+	switch {
+	case errors.Is(err, ErrNotProposed):
+		// Covers the stale page and the invented name in one answer: this is
+		// not a way to write a condition a peer has never tried to send.
+		writeJSON(w, http.StatusConflict, errorBody(
+			"that peer is not asking for "+req.Condition+" — it may have been "+
+				"approved already, or this page may be out of date"))
+	case errors.Is(err, config.ErrInvalid):
+		writeJSON(w, http.StatusBadRequest, errorBody(err.Error()))
+	case err != nil:
+		s.fail(w, r, "approving a peer condition", err)
+	default:
+		s.record(r, audit.Entry{
+			Kind: audit.KindConfigChanged, Actor: "web",
+			Summary: "approved a new condition for a paired peer",
+			Fields: map[string]string{
+				"product": slug, "condition": req.Condition,
+				"severity": req.Severity,
+			},
+		})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "approved"})
+	}
+}
+
+// handleLinkDismissCondition drops a proposal without approving it.
+//
+// Not the same as refusing for ever, and the page says so: the peer goes on
+// sending it and the proposal comes back. There is no "never ask again",
+// because a peer that keeps sending something is a fact about the peer, and a
+// product that lets an operator hide a fact about a peer is one that will be
+// asked why it stopped mentioning it.
+func (s *Server) handleLinkDismissCondition(w http.ResponseWriter, r *http.Request) {
+	if s.deps.LinkDismissCondition == nil {
+		writeJSON(w, http.StatusNotFound, errorBody(noLinkListener))
+		return
+	}
+	slug := strings.TrimSpace(r.PathValue("slug"))
+	cond := strings.TrimSpace(r.PathValue("condition"))
+	if slug == "" || cond == "" {
+		writeJSON(w, http.StatusBadRequest, errorBody("which peer, and which condition?"))
+		return
+	}
+	s.deps.LinkDismissCondition(slug, cond)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
 }

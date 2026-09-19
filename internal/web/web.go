@@ -98,6 +98,18 @@ type Deps struct {
 	LinkCancelCode func()
 	LinkUnpair     func(slug string) (found bool, err error)
 
+	// LinkApproveCondition adds one PROPOSED condition to a peer's approved
+	// manifest, and LinkDismissCondition drops the proposal without approving
+	// it.
+	//
+	// The vocabulary stays closed either way: these change what saying yes
+	// COSTS, not what a peer may send without being asked. An implementation
+	// must refuse a condition the peer has not actually tried to send --
+	// ErrNotProposed -- so this cannot become a general way to write
+	// configuration through one POST.
+	LinkApproveCondition func(slug string, c ApprovedCondition) error
+	LinkDismissCondition func(slug, condition string)
+
 	// TestChannel sends one channel's proof-of-configuration message and
 	// reports what happened. Optional: a build that does not supply it simply
 	// has no test button.
@@ -174,6 +186,25 @@ type Deps struct {
 	// Version is shown in the header. Optional.
 	Version string
 }
+
+// ApprovedCondition is the operator's decision about one proposed condition.
+type ApprovedCondition struct {
+	Condition string
+	Meaning   string
+	Severity  string
+
+	// Momentary decides whether an incident that cleared before its first rung
+	// is still delivered. Getting it wrong on a high-volume condition floods
+	// whoever is on call, so it is the operator's call rather than a default.
+	Momentary bool
+}
+
+// ErrNotProposed is returned when the named condition is not one this peer has
+// been refused for.
+//
+// The guard that keeps the amendment route narrow: an operator may approve
+// what a peer ASKED for, not whatever a request body contains.
+var ErrNotProposed = errors.New("web: that condition has not been proposed by this peer")
 
 // Health is the diagnostic surface: per-source liveness, per-channel queue
 // state, and whether the service will come back by itself. Plain data, built by
@@ -368,6 +399,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/link/code", s.requireAuth(http.HandlerFunc(s.handleLinkPairCode)))
 	mux.Handle("DELETE /api/link/code", s.requireAuth(http.HandlerFunc(s.handleLinkCancelCode)))
 	mux.Handle("DELETE /api/link/peers/{slug}", s.requireAuth(http.HandlerFunc(s.handleLinkUnpair)))
+	// Amending an approved manifest is granting a peer the right to raise a
+	// new kind of alarm here, so it is gated exactly like pairing was.
+	mux.Handle("POST /api/link/peers/{slug}/conditions",
+		s.requireAuth(http.HandlerFunc(s.handleLinkApproveCondition)))
+	mux.Handle("DELETE /api/link/peers/{slug}/conditions/{condition}",
+		s.requireAuth(http.HandlerFunc(s.handleLinkDismissCondition)))
 	mux.Handle("GET /api/update", s.requireAuth(http.HandlerFunc(s.handleUpdateState)))
 	mux.Handle("POST /api/update/check", s.requireAuth(http.HandlerFunc(s.handleUpdateCheck)))
 	mux.Handle("POST /api/update/apply", s.requireAuth(http.HandlerFunc(s.handleUpdateApply)))

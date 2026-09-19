@@ -870,6 +870,32 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 		// it; every change needs the password.
 		var cfgMu sync.RWMutex
 		current := cfg
+
+		// The amendment path needs the same things the link receiver's deps
+		// need, and it is built HERE rather than inside the listener block
+		// because the interface is assembled first. Approving a condition is
+		// a configuration change made from a signed-in page, so it has to
+		// work whenever the page does -- including on a build whose link
+		// listener never started, where the proposals list is simply empty.
+		amend := linkDeps{
+			cfg: func() *config.Config {
+				cfgMu.RLock()
+				defer cfgMu.RUnlock()
+				return current
+			},
+			saveCfg: func(c *config.Config) error {
+				if err := config.Save(dataDir, c); err != nil {
+					return err
+				}
+				cfgMu.Lock()
+				current = c
+				cfgMu.Unlock()
+				return nil
+			},
+			state:    links,
+			auditLog: auditLog,
+		}
+
 		ui, err := web.New(web.Deps{
 			Store: db,
 			Audit: auditLog,
@@ -1009,6 +1035,10 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 					p.Cancel()
 				}
 			},
+			LinkApproveCondition: amend.approveCondition,
+			LinkDismissCondition: func(slug, condition string) {
+				links.proposals.Forget(slug, condition)
+			},
 			LinkUnpair: func(slug string) (bool, error) {
 				cfgMu.RLock()
 				next, capability, found := forgetPeer(current, slug)
@@ -1030,6 +1060,13 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 				// events and stop ours, and the doors would be watched by
 				// nobody while the page said a peer was holding them.
 				links.release(capability)
+
+				// The pending questions go with the peer. Leaving them would
+				// mean an unpaired product still asking the operator for
+				// vocabulary -- and a DIFFERENT installation of that product,
+				// pairing later under the same slug, inheriting the first
+				// one's queue of things to approve.
+				links.proposals.ForgetPeer(slug)
 				return true, nil
 			},
 			TestChannel: func(ctx context.Context, name string) (string, error) {

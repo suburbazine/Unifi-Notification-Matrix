@@ -32,12 +32,21 @@ func TestEveryLinkRouteIsRefusedToASignedOutCaller(t *testing.T) {
 		t.Error("a signed-out caller unpaired a peer")
 		return false, nil
 	}
+	h.srv.deps.LinkApproveCondition = func(string, ApprovedCondition) error {
+		t.Error("a signed-out caller widened a peer's approved manifest")
+		return nil
+	}
+	h.srv.deps.LinkDismissCondition = func(string, string) {
+		t.Error("a signed-out caller dismissed a proposal")
+	}
 
 	for _, r := range []struct{ method, path string }{
 		{"GET", "/api/link"},
 		{"POST", "/api/link/code"},
 		{"DELETE", "/api/link/code"},
 		{"DELETE", "/api/link/peers/sentry"},
+		{"POST", "/api/link/peers/sentry/conditions"},
+		{"DELETE", "/api/link/peers/sentry/conditions/sentry-x"},
 	} {
 		res, body := h.do(r.method, r.path, nil)
 		if res.StatusCode != http.StatusUnauthorized {
@@ -182,6 +191,12 @@ func TestTheInterfaceRendersEveryLinkFieldTheServerSends(t *testing.T) {
 		"product", "link_id", "capability", "conditions", "holding", "why",
 		// LinkReceiptView
 		"accepted", "duplicate", "cause", "reason", "route", "since_seconds",
+		// LinkProposalView -- the amendment surface. "count" in particular:
+		// a peer that fired once during its own testing and a door that has
+		// been reporting something real and unheard for two days are the same
+		// row without it.
+		"proposals", "condition", "severity", "title", "count", "unusable",
+		"overflowed",
 	}
 	for _, f := range fields {
 		if !bytes.Contains(js, []byte(f)) {
@@ -192,7 +207,7 @@ func TestTheInterfaceRendersEveryLinkFieldTheServerSends(t *testing.T) {
 
 	// The routes themselves: a page that renders the state and cannot act on
 	// it is the gap this section was built to close.
-	for _, route := range []string{"/api/link/code", "/api/link/peers/"} {
+	for _, route := range []string{"/api/link/code", "/api/link/peers/", "/conditions"} {
 		if !bytes.Contains(js, []byte(route)) {
 			t.Errorf("app.js never calls %s, so pairing is still something that "+
 				"needs a terminal", route)

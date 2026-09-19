@@ -35,6 +35,25 @@ view against the release before them.
   empty. "Nothing is wrong" and "nothing was checked" look identical on a
   screen and are opposite facts, so it says which one it means.
 
+- **A peer's new condition can be approved from the page instead of by editing
+  YAML.** The vocabulary a peer may use is closed and stays closed — an
+  undeclared condition is still refused, and nothing arrives until you say yes.
+  What changes is what saying yes costs. A peer shipping a twelfth condition
+  used to mean opening `config.yaml` on the machine, or re-pairing the product,
+  which rotates a working credential in order to fix a spelling.
+
+  Settings → Peer link now lists what a paired peer has tried to send and been
+  refused for, with its own words, its proposed severity, and how many events
+  it has cost. Approving one takes a meaning you write yourself and runs the
+  same validator pairing runs. Only a condition the peer has actually been
+  refused for can be approved, so this is not a second way to write
+  configuration.
+
+  A refusal for an undeclared condition is now labelled `undeclared-condition`
+  rather than lumped in with `invalid-envelope`, because you do a different
+  thing about it: one is a bug to report to the peer's author, the other is a
+  decision waiting for you.
+
 ## [0.2.1] — 2026-09-19
 
 **If you script installations, read the note at the end of this entry.**

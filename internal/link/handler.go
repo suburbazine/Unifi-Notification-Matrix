@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 )
 
 // PathPrefix is where the receiver is mounted. Everything under it that is not
@@ -97,6 +98,14 @@ type Deps struct {
 	// Record notes what happened for the operator-facing receipt. Never
 	// returned to the caller: the wire answer is always the same.
 	Record func(Receipt)
+
+	// Propose remembers a condition an AUTHENTICATED peer sent that its
+	// approved manifest does not contain, so the operator can approve it from
+	// the page instead of editing the configuration file.
+	//
+	// The event is still refused. What this changes is only that the way to
+	// say yes stops being a text editor. See propose.go.
+	Propose func(slug, condition string, sev incident.Severity, title string, now time.Time)
 
 	Now      func() time.Time
 	SeenFor  time.Duration
@@ -281,6 +290,21 @@ func (rc *Receiver) events(w http.ResponseWriter, r *http.Request, cred Credenti
 		if errors.Is(err, ErrVersion) {
 			cause = CauseEnvelopeVersion
 		}
+		// AN UNDECLARED CONDITION IS THE ONE REFUSAL WITH AN ANSWER.
+		//
+		// Every other envelope failure is a bug to fix at the sender. This one
+		// is usually the peer's next release carrying a condition the operator
+		// has simply not been asked about yet, and until now the only way to
+		// say yes was to edit YAML by hand. Remembered, not accepted: the
+		// event is still refused, exactly as it was.
+		//
+		// Labelled apart from the rest of CauseInvalidEnvelope so the page can
+		// tell "approve this?" from "your peer is broken".
+		if errors.Is(err, ErrCondition) {
+			cause = CauseUndeclaredCondition
+			rc.propose(peer.Slug, env.Condition,
+				incident.Severity(env.Severity), env.Title, now)
+		}
 		deny(cred.LinkID, cause, err.Error())
 		return
 	}
@@ -367,6 +391,15 @@ func (rc *Receiver) claim(slug string) *Claim {
 		return nil
 	}
 	return rc.deps.Claim(slug)
+}
+
+// propose hands an undeclared condition to whatever is collecting them.
+func (rc *Receiver) propose(slug, condition string, sev incident.Severity,
+	title string, now time.Time) {
+	if rc.deps.Propose == nil {
+		return
+	}
+	rc.deps.Propose(slug, condition, sev, title, now)
 }
 
 func (rc *Receiver) record(r Receipt) {

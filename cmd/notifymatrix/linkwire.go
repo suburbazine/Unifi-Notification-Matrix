@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/link"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/store"
@@ -29,6 +31,12 @@ type linkState struct {
 
 	// addr is where the listener actually bound, empty until it has.
 	addr string
+
+	// proposals are conditions paired peers have tried to send that their
+	// approved manifest does not contain. Bounded and in memory, like the
+	// receipts: a proposal is a prompt to look rather than a record, and the
+	// peer re-sends within minutes.
+	proposals *link.Proposals
 }
 
 // peerSilentAfter is how long a peer may go without contact before this
@@ -50,7 +58,7 @@ const maxReceipts = 200
 const shownReceipts = 25
 
 func newLinkState(peers []link.Peer) *linkState {
-	s := &linkState{claims: map[string]*link.Claim{}}
+	s := &linkState{claims: map[string]*link.Claim{}, proposals: link.NewProposals()}
 	for _, p := range peers {
 		if cap := strings.TrimSpace(p.Manifest.Capability); cap != "" {
 			s.claims[cap] = link.NewClaim(cap, 0)
@@ -205,7 +213,10 @@ func (d linkDeps) build() link.Deps {
 			}
 			return out
 		},
-		Claim:   func(slug string) *link.Claim { return d.state.claimFor(peers(), slug) },
+		Claim: func(slug string) *link.Claim { return d.state.claimFor(peers(), slug) },
+		Propose: func(slug, condition string, sev incident.Severity, title string, now time.Time) {
+			d.state.proposals.Note(slug, condition, sev, title, now)
+		},
 		Pairer:  d.pairer,
 		Version: d.version,
 		OnPaired: func(_ context.Context, p link.Peer, key []byte) error {
@@ -355,6 +366,20 @@ func (s *linkState) view(cfg func() *config.Config, p *link.Pairer, now time.Tim
 	if !startedAt.IsZero() && now.After(startedAt) {
 		out.SinceSeconds = int(now.Sub(startedAt) / time.Second)
 	}
+	// Proposals, with what was refused from the SAME peer carried on every
+	// row of it: a page showing four and silently discarding ninety is telling
+	// the operator their peer sends four things it does not declare.
+	out.Proposals = []web.LinkProposalView{}
+	for _, pr := range s.proposals.All() {
+		unusable, overflowed := s.proposals.Refused(pr.Slug)
+		out.Proposals = append(out.Proposals, web.LinkProposalView{
+			Product: pr.Slug, Condition: pr.Condition,
+			Severity: string(pr.Severity), Title: pr.Title,
+			Count: pr.Count, First: pr.First, Last: pr.Last,
+			Unusable: unusable, Overflowed: overflowed,
+		})
+	}
+
 	rs := s.Receipts()
 	out.Receipts = []web.LinkReceiptView{}
 	for i := len(rs) - 1; i >= 0 && len(out.Receipts) < shownReceipts; i-- {
@@ -416,4 +441,108 @@ func forgetPeer(cur *config.Config, slug string) (next *config.Config, capabilit
 		n.Links = append(n.Links, l)
 	}
 	return &n, capability, found
+}
+
+// approveCondition adds one PROPOSED condition to a peer's approved manifest.
+//
+// The narrow write. Three things have to hold, and each one closes a way this
+// could otherwise become a general "edit the config with one POST":
+//
+//   - the condition must be one this peer has ACTUALLY BEEN REFUSED FOR. An
+//     operator may approve what a peer asked for, not whatever arrives in a
+//     request body, and without this the endpoint would let a session grant a
+//     peer vocabulary the peer never wanted;
+//   - the resulting manifest must pass link.Manifest.Validate, the same check
+//     pairing runs -- so the slug prefix, the severity, the meaning and the
+//     size limit all still hold for an amendment;
+//   - the save must succeed before the proposal is forgotten, or a refused
+//     write would lose the prompt and the operator would be left with a peer
+//     that goes on being refused and a page that has stopped mentioning it.
+//
+// The operator's OVERRIDES are untouched. They are decisions about conditions
+// rather than about the manifest, and an amendment is not a reason to undo one.
+func (d linkDeps) approveCondition(slug string, c web.ApprovedCondition) error {
+	cond := strings.TrimSpace(c.Condition)
+	if !d.state.proposals.Has(slug, cond) {
+		return web.ErrNotProposed
+	}
+
+	sev := incident.Severity(strings.TrimSpace(c.Severity))
+	if !sev.Valid() {
+		return fmt.Errorf("%w: %q is not a severity (want critical, high, "+
+			"medium, low or info)", config.ErrInvalid, c.Severity)
+	}
+
+	cur := d.cfg()
+	next := *cur
+	next.Links = slices.Clone(cur.Links)
+
+	at := -1
+	for i, l := range next.Links {
+		if strings.EqualFold(l.Slug, slug) {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return fmt.Errorf("%w: no peer named %q is paired here", config.ErrInvalid, slug)
+	}
+
+	entry := next.Links[at]
+	for _, existing := range entry.Conditions {
+		if existing.Name == cond {
+			// Already approved, which is the shape a second browser tab takes.
+			// Forget the proposal rather than adding a duplicate the manifest
+			// validator would then refuse.
+			d.state.proposals.Forget(slug, cond)
+			return nil
+		}
+	}
+	entry.Conditions = append(slices.Clone(entry.Conditions), config.LinkCondition{
+		Name: cond, Meaning: strings.TrimSpace(c.Meaning), Severity: sev,
+		Momentary: c.Momentary,
+		// DemotesClaim is deliberately NOT settable here. It means "alive, but
+		// cannot serve what I claimed", so raising it hands a capability back
+		// to this product's own source -- a decision that belongs with the
+		// whole manifest at pairing, where the peer declares which of its
+		// conditions mean that, rather than with one row in a form.
+	})
+
+	// The same validator pairing runs. An amendment that could produce a
+	// manifest pairing would have refused is an amendment that has found a way
+	// round the review.
+	if err := (link.Manifest{
+		Capability: entry.Capability,
+		Conditions: manifestConditions(entry.Conditions),
+	}).Validate(entry.Slug); err != nil {
+		return fmt.Errorf("%w: %s", config.ErrInvalid, err.Error())
+	}
+
+	next.Links[at] = entry
+	if err := d.saveCfg(&next); err != nil {
+		return err
+	}
+	d.state.proposals.Forget(slug, cond)
+
+	_ = d.auditLog.Append(context.Background(), audit.Entry{
+		Kind: audit.KindConfigChanged, Actor: "web",
+		Summary: "approved a new condition for a paired peer",
+		Fields: map[string]string{
+			"product": slug, "condition": cond, "severity": string(sev),
+			"conditions": fmt.Sprint(len(entry.Conditions)),
+		},
+	})
+	return nil
+}
+
+// manifestConditions converts stored conditions into what the validator takes.
+func manifestConditions(in []config.LinkCondition) []link.ConditionSpec {
+	out := make([]link.ConditionSpec, 0, len(in))
+	for _, c := range in {
+		out = append(out, link.ConditionSpec{
+			Name: c.Name, Meaning: c.Meaning, Severity: c.Severity,
+			Momentary: c.Momentary, DemotesClaim: c.DemotesClaim,
+		})
+	}
+	return out
 }
