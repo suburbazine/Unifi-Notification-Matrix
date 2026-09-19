@@ -13,14 +13,16 @@ view against the release before them.
 
 ## [Unreleased]
 
-**The next release is 0.2.0**, decided by the operator on 2026-09-18 rather
-than derived from what happens to land here. The 0.1 line has run from the
-first working product to a paired first-party integration; the next one starts
-a new minor line regardless of whether its contents look like a patch.
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
 
-Entries land here as work merges, and the heading is renamed to the version on
-the day it ships — writing a release's section from scratch at tag time is how
-0.1.8 nearly went out with none.
+## [0.2.0] — 2026-09-19
+
+The 0.1 line ran from the first working product to a paired first-party
+integration. This starts a new minor line, and it starts it by having the
+product check something about itself that it had only ever checked about a
+download.
 
 ### Added
 
@@ -281,7 +283,8 @@ demo mode, and the signed reproducible release pipeline.
 They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
-[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.10...HEAD
+[Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.10...v0.2.0
 [0.1.10]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.1.7...v0.1.8
