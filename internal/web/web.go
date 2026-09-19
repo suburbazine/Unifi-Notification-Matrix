@@ -150,6 +150,12 @@ type Deps struct {
 	// they are fine.
 	ObservedEntities func(ctx context.Context) ([]reconcile.Entity, error)
 
+	// SelfWatch reports whether anything outside this machine would notice if
+	// this installation stopped. Optional: a build that does not supply it
+	// says nothing, which is right for every deployment where the answer is
+	// yes by construction.
+	SelfWatch func() SelfWatch
+
 	// Checklist reports what is still needed to make this installation work.
 	//
 	// Optional: a build that does not supply it simply has no setup panel. The
@@ -205,6 +211,37 @@ type ApprovedCondition struct {
 // The guard that keeps the amendment route narrow: an operator may approve
 // what a peer ASKED for, not whatever a request body contains.
 var ErrNotProposed = errors.New("web: that condition has not been proposed by this peer")
+
+// SelfWatch answers one question: if this installation stopped, would
+// anything say so?
+//
+// Normally the answer is yes by construction -- the daemon runs somewhere
+// other than the equipment it watches, so the equipment failing and the
+// daemon failing are different events. On a UniFi gateway they are the same
+// event, and the alarm about it is the one thing that cannot be sent.
+//
+// PUBLIC, on the same endpoint as the incident counts, and that is
+// deliberate. A wall display showing "all clear" is exactly who needs the
+// caveat: without it, the board cannot be told apart from one whose daemon
+// died an hour ago. The demo banner is here for the same reason -- somebody
+// arriving at a tab somebody else left open has to be able to tell what they
+// are looking at without reading anything else.
+type SelfWatch struct {
+	// AtRisk is true when the daemon shares fate with what it watches AND
+	// nothing outside this machine would notice it stop.
+	//
+	// Both halves. Sharing fate is a fact about where it runs and not in
+	// itself a problem; it becomes one only when nothing else is watching,
+	// which is why pairing a peer elsewhere clears this rather than merely
+	// adding a feature.
+	AtRisk bool `json:"at_risk"`
+
+	// Detail is what the banner says. It names the LIMITATION and not the
+	// hardware or the remedy, because this reaches anybody who can see the
+	// board: that this installation cannot report its own failure is
+	// something an operator must know, and which box it runs on is not.
+	Detail string `json:"detail,omitempty"`
+}
 
 // Health is the diagnostic surface: per-source liveness, per-channel queue
 // state, and whether the service will come back by itself. Plain data, built by

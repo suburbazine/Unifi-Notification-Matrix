@@ -13,6 +13,28 @@ view against the release before them.
 
 ## [Unreleased]
 
+### Added
+
+- **The interface now says when this installation cannot report its own
+  failure.** Running on the equipment it watches, the daemon shares fate with
+  it — so "all clear" and "this died an hour ago and cannot tell you" render
+  identically, which is the exact state this product exists to refuse.
+
+  Until now that was said only to stderr and the audit log. A service has no
+  console, so the warning reliably reached nobody while the one screen an
+  operator actually looks at said nothing.
+
+  It appears as a banner on every screen **including signed out**, because a
+  wall display is precisely who needs the caveat, and in the Health tab beside
+  "will this come back on its own" — where somebody is already asking the
+  neighbouring question. The public wording names the limitation and not the
+  hardware or the fix; the signed-in one can say both.
+
+  **It clears itself.** The problem was never where the daemon runs, it is
+  that nothing outside the machine would notice it stop — so pairing a peer at
+  another site makes it false, and the warning goes away rather than needing
+  to be dismissed.
+
 ### Fixed
 
 - **The encryption key now follows `--data-dir`.** It never did. The key-file

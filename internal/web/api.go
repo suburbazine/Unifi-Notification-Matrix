@@ -218,7 +218,20 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"incidents":           counts,
 		"health":              s.healthView(s.deps.Health()),
 		"setup":               s.setupSummary(),
+		"self_watch":          s.selfWatch(),
 	})
+}
+
+// selfWatch reports whether anything would notice this installation stopping.
+//
+// On the PUBLIC status payload on purpose: see the type. A board that cannot
+// be told apart from a dead one is the failure this product exists to refuse,
+// and the board is served to anybody who can reach it.
+func (s *Server) selfWatch() SelfWatch {
+	if s.deps.SelfWatch == nil {
+		return SelfWatch{}
+	}
+	return s.deps.SelfWatch()
 }
 
 // setupSummary is the two numbers the page needs on EVERY poll, not only

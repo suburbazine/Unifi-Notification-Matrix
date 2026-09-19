@@ -727,6 +727,25 @@ function renderHealth(h) {
       "The last exit was unclean \u2014 a crash, or a power cut."));
   }
 
+  // WHERE SOMEBODY IS ALREADY ASKING THE RIGHT QUESTION.
+  //
+  // This card answers "will this come back on its own", which is one step
+  // away from "and would anybody know if it did not". On an installation that
+  // shares fate with the equipment it watches, the honest answer to the
+  // second is no -- and unlike the banner, this one can say what to do about
+  // it, because reaching this card took a password.
+  if (state.selfWatch && state.selfWatch.at_risk) {
+    card.appendChild(callout(
+      "This daemon runs on the equipment it is watching, so it shares fate " +
+      "with it: a reboot, a wedge or a power cut takes the alarm about that " +
+      "down too, and the restart settings above cannot help \u2014 nothing " +
+      "would be left to act on them.\n\n" +
+      "Pair a peer at another site under Settings \u2192 Peer link and each " +
+      "installation will see the other go quiet. This notice clears itself " +
+      "when something outside this machine is watching.",
+      "warn", "Nothing outside this machine is watching it"));
+  }
+
   // Channels, policies and rules are all built once, at start. Until this
   // button existed, applying a saved change meant opening a terminal -- told
   // to somebody whose reason for being on this page is that they would rather
@@ -999,6 +1018,8 @@ function refreshStatus(done) {
         state.setupRequired ? "setup required" : "signed out"));
     }
     renderDemoBanner(d.demo);
+    state.selfWatch = d.self_watch || {};
+    renderSelfWatchBanner(state.selfWatch);
     renderHealth(d.health);
     if (wasAuthed !== state.authed) refreshTab();
     if (done) done();
@@ -4492,6 +4513,45 @@ function renderDemoBanner(text) {
   var b = el("div", "banner is-err", text);
   b.id = "demo-banner";
   document.body.insertBefore(b, document.body.firstChild);
+}
+
+// renderSelfWatchBanner says, on every screen, that a quiet board here cannot
+// be trusted.
+//
+// THE BOARD IS THE THING THAT LIES. When the daemon runs on the equipment it
+// watches, "all clear" and "this died an hour ago and cannot tell you" render
+// identically -- and the second one is the state this whole product exists to
+// refuse. Nothing else on any screen would ever reveal it, because the symptom
+// is silence.
+//
+// Shown SIGNED OUT as well as in, which is the wall-display case and the one
+// that most needs it. The server decides, so a page cannot claim to be safe by
+// being reloaded and a screenshot carries the warning too -- the same
+// reasoning as the demo banner above.
+//
+// It clears itself. The problem is not where the daemon runs, it is that
+// nothing outside this machine would notice it stop, and pairing a peer
+// elsewhere makes that false. An operator who fixes it watches this go away
+// rather than reading that it is fixed.
+function renderSelfWatchBanner(sw) {
+  var existing = byId("selfwatch-banner");
+  if (!sw || !sw.at_risk || !sw.detail) {
+    if (existing) existing.parentNode.removeChild(existing);
+    return;
+  }
+  if (existing) { existing.textContent = sw.detail; return; }
+  var b = el("div", "banner is-warn", sw.detail);
+  b.id = "selfwatch-banner";
+  // Under the demo banner when both are present: fabricated data is the more
+  // urgent thing to know about a screen.
+  var demo = byId("demo-banner");
+  if (demo && demo.nextSibling) {
+    document.body.insertBefore(b, demo.nextSibling);
+  } else if (demo) {
+    document.body.appendChild(b);
+  } else {
+    document.body.insertBefore(b, document.body.firstChild);
+  }
 }
 
 // ---------- outbound webhooks ----------

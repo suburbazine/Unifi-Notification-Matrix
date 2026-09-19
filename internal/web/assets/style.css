@@ -277,6 +277,8 @@ section[hidden]{display:none}
   padding:8px var(--sp-4);text-align:center;font-weight:600;font-size:var(--fs-md);
   color:var(--tone);background:var(--tint);border-bottom:1px solid var(--tone);
 }
+.banner.is-err{--tone:var(--err);--tint:var(--err-tint)}
+.banner.is-warn{--tone:var(--warn);--tint:var(--warn-tint)}
 
 /* A credential meant to be selected and pasted, not read. Wrapped rather
    than scrolled: a hook URL that runs off the edge of the box gets

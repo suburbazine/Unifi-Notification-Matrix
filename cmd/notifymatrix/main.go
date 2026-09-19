@@ -1057,6 +1057,41 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 					p.Cancel()
 				}
 			},
+			// IF THIS STOPS, WOULD ANYTHING SAY SO?
+			//
+			// Computed per request rather than at start, because the answer
+			// CHANGES: pairing a peer at another site is what makes it yes,
+			// and an operator who has just done that should watch the banner
+			// go away rather than be told to restart to find out.
+			//
+			// Coverage means a paired peer today. An off-site heartbeat would
+			// count too and does not exist yet; when it does it belongs in
+			// this condition and nowhere else.
+			SelfWatch: func() web.SelfWatch {
+				if !service.OnUniFiOS() {
+					return web.SelfWatch{}
+				}
+				cfgMu.RLock()
+				peers := len(current.Links)
+				cfgMu.RUnlock()
+				if peers > 0 {
+					// Something elsewhere is paired to this installation and
+					// will notice it go quiet. The deployment is still
+					// co-located; it is no longer unwatched, and only the
+					// second half was ever the problem.
+					return web.SelfWatch{}
+				}
+				return web.SelfWatch{
+					AtRisk: true,
+					// No mention of the hardware or the fix: this is served to
+					// anybody who can see the board. What they need is that a
+					// quiet board here cannot be trusted to mean quiet.
+					Detail: "This installation runs on the equipment it is " +
+						"watching, so if it stops, nothing will raise an alarm " +
+						"about it — including this screen. Treat a quiet board " +
+						"here as unconfirmed.",
+				}
+			},
 			LinkApproveCondition: amend.approveCondition,
 			LinkDismissCondition: func(slug, condition string) {
 				links.proposals.Forget(slug, condition)
