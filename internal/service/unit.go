@@ -37,6 +37,32 @@ ExecStart={{.ExePath}} run --data-dir {{.DataDir}}
 User={{.User}}
 {{- end}}
 
+{{- if .Appliance}}
+
+# RUNNING ON THE DEVICE IT WATCHES. See internal/service/unifios.go.
+#
+# The state directory is /data, the partition UniFi OS documents as persistent.
+# StateDirectory cannot say that -- it is always relative to /var/lib -- so the
+# hole in ProtectSystem=strict is punched directly instead. The daemon creates
+# the directory itself at 0700 on first run.
+ReadWritePaths={{.DataDir}}
+
+# A memory fence, because this box also routes.
+#
+# Not a tuning knob: it is a backstop so a fault in this process cannot take
+# capacity from the routing and inspection paths on the same hardware. The
+# steady state is far below the soft limit. Being throttled is survivable;
+# being killed stops the alerting, which is why the hard limit is well clear of
+# the soft one.
+MemoryHigh={{.MemoryHighMB}}M
+MemoryMax={{.MemoryMaxMB}}M
+
+# No SupplementaryGroups=tss here. There is no TPM on these devices, and
+# systemd FAILS a unit whose SupplementaryGroups names a group that does not
+# exist -- so the line that protects the secret store elsewhere would stop the
+# daemon from starting at all here.
+{{- else}}
+
 # TPM access for the secret store.
 #
 # The daemon runs unprivileged, so it cannot use systemd-creds' host key --
@@ -48,6 +74,7 @@ SupplementaryGroups=tss
 # Creates and owns {{.DataDir}} as the service user.
 StateDirectory={{.StateDirectory}}
 StateDirectoryMode=0700
+{{- end}}
 
 Restart=always
 RestartSec=5
@@ -97,6 +124,10 @@ type unitData struct {
 	DataDir        string
 	StateDirectory string
 	User           string
+
+	Appliance    bool
+	MemoryHighMB int
+	MemoryMaxMB  int
 }
 
 // RenderUnit produces the systemd unit for these options.
@@ -113,17 +144,30 @@ func RenderUnit(o InstallOptions) (string, error) {
 	if o.DataDir == "" {
 		return "", fmt.Errorf("service: no data directory for the unit")
 	}
-	// ProtectSystem=strict makes everything read-only except what
-	// StateDirectory grants, and StateDirectory is relative to /var/lib. A
-	// data directory outside it would leave the daemon unable to write its own
-	// store -- which fails at the first incident, not at start.
-	stateDir, ok := strings.CutPrefix(o.DataDir, "/var/lib/")
-	if !ok || stateDir == "" || strings.Contains(stateDir, "..") {
-		return "", fmt.Errorf(
-			"service: --data-dir must be under /var/lib for the systemd unit "+
-				"(got %q); ProtectSystem=strict makes the rest of the "+
-				"filesystem read-only, so the daemon could not write its "+
-				"incident store there", o.DataDir)
+	var stateDir string
+	if o.Appliance {
+		// ReadWritePaths takes an absolute path and needs no /var/lib
+		// relationship, but it must still be absolute and free of traversal:
+		// it is the one hole in an otherwise read-only filesystem.
+		if !strings.HasPrefix(o.DataDir, "/") || strings.Contains(o.DataDir, "..") {
+			return "", fmt.Errorf(
+				"service: --data-dir must be an absolute path with no \"..\" "+
+					"for the appliance unit (got %q)", o.DataDir)
+		}
+	} else {
+		// ProtectSystem=strict makes everything read-only except what
+		// StateDirectory grants, and StateDirectory is relative to /var/lib. A
+		// data directory outside it would leave the daemon unable to write its
+		// own store -- which fails at the first incident, not at start.
+		var ok bool
+		stateDir, ok = strings.CutPrefix(o.DataDir, "/var/lib/")
+		if !ok || stateDir == "" || strings.Contains(stateDir, "..") {
+			return "", fmt.Errorf(
+				"service: --data-dir must be under /var/lib for the systemd unit "+
+					"(got %q); ProtectSystem=strict makes the rest of the "+
+					"filesystem read-only, so the daemon could not write its "+
+					"incident store there", o.DataDir)
+		}
 	}
 
 	var sb strings.Builder
@@ -134,6 +178,9 @@ func RenderUnit(o InstallOptions) (string, error) {
 		DataDir:        o.DataDir,
 		StateDirectory: stateDir,
 		User:           o.User,
+		Appliance:      o.Appliance,
+		MemoryHighMB:   MemoryHighMB,
+		MemoryMaxMB:    MemoryMaxMB,
 	})
 	if err != nil {
 		return "", fmt.Errorf("service: rendering unit: %w", err)

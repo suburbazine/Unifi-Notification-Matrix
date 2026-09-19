@@ -13,9 +13,29 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Added
+
+- **It installs on a UniFi gateway.** `install` detects UniFi OS — UCG, UXG,
+  UDM, UDR, EFG — and adjusts itself: state under `/data` (the persistent
+  partition, and not configurable), `ReadWritePaths` instead of
+  `StateDirectory`, no `tss` group because there is no TPM and systemd fails a
+  unit naming a group that does not exist, a memory fence so a fault here
+  cannot take capacity from routing and inspection on the same box, and a
+  refusal to install with under 256 MB available. No flag to pass: these are
+  corrections for the platform rather than preferences, and an operator who had
+  to know to ask for them would get a unit that does not start.
+
+  **It is the wrong place to run this, and it says so at every start.** Hosted
+  on the gateway, the daemon shares fate with the equipment it watches: when
+  that box reboots, wedges or loses power, the alarm about it is the one thing
+  that cannot be sent. Cover it with a peer paired at another site, or an
+  off-site heartbeat that alarms on silence — either is enough, and with
+  neither you have monitoring that cannot report its own death. See
+  `docs/GATEWAY.md`, which is honest about the rest of the trade too: the
+  service runs as root, and the secret store falls to the key-file tier, which
+  is not machine-bound.
+
+  For operators with no spare hardware. Not a recommendation.
 
 ## [0.3.0] — 2026-09-19
 

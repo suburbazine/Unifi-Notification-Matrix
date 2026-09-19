@@ -734,6 +734,28 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			config.Path(dataDir))
 	}
 
+	// RUNNING ON THE DEVICE IT WATCHES.
+	//
+	// Said at EVERY start rather than once at install, because install output
+	// is read once by somebody who has already decided, and this is the
+	// sentence that matters later. Same reasoning as the
+	// only-source-of-door-events warning: a structural limitation nothing else
+	// on any screen would ever reveal, because the symptom of it is silence.
+	//
+	// Recorded as well as printed. A service has no console, so on the
+	// installation this most likely describes -- installed on the gateway and
+	// then left alone -- the audit log is the only place anybody would find it
+	// afterwards.
+	if service.OnUniFiOS() {
+		warning := service.CoLocationWarning(service.UniFiOSModel())
+		fmt.Fprintln(os.Stderr, "WARNING:", warning)
+		_ = auditLog.Append(ctx, audit.Entry{
+			Kind: audit.KindService, Actor: "system",
+			Summary: "running on the UniFi device it watches",
+			Fields:  map[string]string{"detail": warning},
+		})
+	}
+
 	// The inbound receiver. Alarm Manager rules exist only in the UniFi UI, so
 	// the console pushes to us and there is nothing to poll -- which also means
 	// there is nothing to verify until an alarm actually arrives. The receiver

@@ -64,11 +64,39 @@ func withLinuxDefaults(o InstallOptions) InstallOptions {
 	if o.ExePath == "" {
 		o.ExePath, _ = os.Executable()
 	}
+
+	// A UNIFI GATEWAY IS A DIFFERENT PLATFORM, not a Linux box with different
+	// defaults, and the differences are corrections rather than preferences --
+	// so they are detected rather than asked for. An operator who had to know
+	// to pass a flag would otherwise get a unit that does not start.
+	o.Appliance = o.Appliance || OnUniFiOS()
+
 	if o.DataDir == "" {
-		o.DataDir = defaultDataDir()
+		if o.Appliance {
+			o.DataDir = UniFiOSDataDir
+		} else {
+			o.DataDir = defaultDataDir()
+		}
 	}
 	if o.User == "" {
-		o.User = DefaultUser
+		if o.Appliance {
+			// ROOT ON THE APPLIANCE, and this is a real departure from
+			// ARCHITECTURE.md 9a's least-privilege rule, so it is stated
+			// rather than slipped in.
+			//
+			// A UniFi gateway has no useradd on every image, administers
+			// itself as root, and keeps /etc on an overlay shared with the
+			// firmware. Creating a system account there is a change to
+			// somebody else's base image that has to survive their upgrades,
+			// for a boundary that buys little on a box where the operator's
+			// own shell is root already.
+			//
+			// --user still works for anybody who has made an account and
+			// knows their image keeps it.
+			o.User = "root"
+		} else {
+			o.User = DefaultUser
+		}
 	}
 	return o
 }
@@ -82,12 +110,29 @@ func (m systemdManager) Install(o InstallOptions) error {
 	}
 	o = withLinuxDefaults(o)
 
+	// HEADROOM BEFORE ANYTHING IS WRITTEN. On a gateway the thing being
+	// protected is not this product: it is the routing and inspection sharing
+	// the hardware. Checked first so a refusal leaves nothing behind.
+	if o.Appliance {
+		if _, _, err := CheckHeadroom(); err != nil {
+			return err
+		}
+	}
+
 	unit, err := RenderUnit(o)
 	if err != nil {
 		return err
 	}
 	if err := ensureUser(o.User); err != nil {
 		return err
+	}
+	// The appliance unit has no StateDirectory to create it, so the daemon's
+	// own directory is made here, at the same mode StateDirectoryMode would
+	// have given it.
+	if o.Appliance {
+		if err := os.MkdirAll(o.DataDir, 0o700); err != nil {
+			return fmt.Errorf("service: creating %s: %w", o.DataDir, err)
+		}
 	}
 	// 0644: systemd must read it, and it contains no secret -- the credential
 	// it references is encrypted and lives elsewhere.

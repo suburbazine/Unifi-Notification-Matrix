@@ -64,6 +64,20 @@ type InstallOptions struct {
 	// service runs as LocalSystem so it shares one machine-scope DPAPI config
 	// with the operator's browser session (ARCHITECTURE.md §6).
 	User string
+
+	// Appliance renders the unit for a UniFi OS gateway.
+	//
+	// Set from OnUniFiOS() at install rather than asked for: the differences
+	// below are all corrections for that platform, not preferences, and an
+	// operator who had to know to pass a flag would get a unit that does not
+	// start. See internal/service/unifios.go.
+	//
+	//   - the state directory is /data, which StateDirectory cannot express
+	//     because it is always relative to /var/lib;
+	//   - there is no TPM and no tss group, and SupplementaryGroups naming a
+	//     group that does not exist fails the unit at start;
+	//   - a memory fence, because this is a box that also routes.
+	Appliance bool
 }
 
 // Manager installs and controls the platform's service.
