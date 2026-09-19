@@ -246,17 +246,51 @@ upgrade untouched.
 
 ## What has and has not been verified
 
-Verified in the build: the `linux-arm64` binary is a **statically linked** ELF
-with no glibc dependency, so the gateway's glibc version is irrelevant. The
-unit renders correctly for the platform, detection requires both signals, and
-the memory fence and the headroom floor agree with each other.
+**The whole path works on real hardware**, confirmed on a UniFi gateway running
+UniFi OS 6: install, the service staying up, the setup token, and the web
+interface reachable from the LAN. `ProtectSystem=strict`, `ReadWritePaths`,
+`MemoryHigh`/`MemoryMax` and the absence of the `tss` group all behave as
+written.
 
-**Verified on real hardware**, on a UniFi gateway running UniFi OS 6:
-`ProtectSystem=strict`, `ReadWritePaths`, `MemoryHigh`/`MemoryMax` and the
-absence of the `tss` group all behave. The syscall filter did **not** — see the
-`@chown` note above — and that was found by running it, not by reading it. The
-install, the service and the acknowledgement path work with the grant in place.
+From the build: the `linux-arm64` binary is a **statically linked** ELF with no
+glibc dependency, so the gateway's glibc version is irrelevant.
 
-Still not verified: whether `/var/lib` would persist across a firmware upgrade.
-The `/data` pin sidesteps that question rather than answering it, and it stays
-pinned for exactly that reason.
+### What it costs on the box
+
+Around **15–20 MB** resident, against a 256 MB soft fence — so the fence is
+better than ten times the working set, which is what a backstop against a fault
+should look like rather than a ceiling the daemon lives against.
+
+Read that as an order of magnitude, not a specification. It was measured on an
+**idle** installation: no console configured, nothing ingesting, no incidents
+open. A working site carries an entity record and live incidents and will sit
+higher. Both are bounded by construction — 500 entities, 200 link receipts —
+so not dramatically higher, but this is not a number to tune a limit against.
+
+### Found by running it, not by reading it
+
+Four things broke on first contact with real hardware, and none was reachable
+from any test written for them. They are listed because they share a shape:
+each was something a change depended on **without declaring that it did**.
+
+- **The syscall filter killed the daemon.** Running as root makes SQLite reach
+  for `chown`, which `@privileged` denies. See the `@chown` note above.
+- **The key file did not follow `--data-dir`.** It was resolved from
+  `$STATE_DIRECTORY`, which only exists for a unit with `StateDirectory=` —
+  the directive this platform cannot use. Removing it silently moved the key.
+- **The gateway data directory never applied.** The path was resolved for every
+  subcommand before the installer ran, so the installer's own default could
+  never fire, and everything agreed on the wrong directory.
+- **The install instructions downloaded into the state directory**, because
+  `install` relocates the program to `/usr/local/bin` and nothing said so.
+
+### Still not verified
+
+Whether `/var/lib` would persist across a firmware upgrade. The `/data` pin
+sidesteps that question rather than answering it, and it stays pinned for
+exactly that reason.
+
+Nothing here has been through a firmware upgrade yet. The overlay argument says
+the unit, the binary and the state all survive one; that is reasoning from how
+UniFi OS is built, not a report from the other side of an upgrade. If you take
+one and something does not come back, that is the bug report worth having.
