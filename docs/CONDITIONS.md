@@ -116,6 +116,7 @@ has to use the same string, or it becomes two incidents that both nag.
 | `stream-unintelligible` | A source connected and nothing it sent could be understood. A live-but-mute stream is silent total failure of that source. | `protect`, `access` |  |
 | `source-silent` | A source stopped being in contact with its console for longer than it promised. | `internal` |  |
 | `unclean-shutdown` | The daemon did not shut down cleanly last time -- it crashed, or stopped with an error it recorded -- so alarms may have been missed while it was down. | `internal` | yes |
+| `binary-changed` | The program file this service runs from is not the one it recorded last time, and nothing about an ordinary update explains the difference. | `internal` | yes |
 
 ---
 

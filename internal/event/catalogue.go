@@ -193,6 +193,9 @@ var catalogue = []ConditionDoc{
 	{ConditionUncleanShutdown, GroupSelf,
 		"The daemon did not shut down cleanly last time -- it crashed, or stopped with an error it recorded -- so alarms may have been missed while it was down.",
 		[]string{SurfaceInternal}},
+	{ConditionBinaryChanged, GroupSelf,
+		"The program file this service runs from is not the one it recorded last time, and nothing about an ordinary update explains the difference.",
+		[]string{SurfaceInternal}},
 }
 
 // momentary classifies a condition by whether its clear is expected almost
@@ -239,6 +242,7 @@ var momentary = map[string]bool{
 	ConditionThreat:          true,
 	ConditionInboundAlarm:    true,
 	ConditionUncleanShutdown: true,
+	ConditionBinaryChanged:   true,
 }
 
 // IsMomentary reports whether a condition must be delivered at least once even

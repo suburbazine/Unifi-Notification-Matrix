@@ -29,3 +29,15 @@ func VerifyPublisher(candidate, installed string) error {
 		"so it will not install one. Verify the download with cosign (see " +
 		"docs/RELEASING.md) and replace the binary yourself")
 }
+
+// SignerOf cannot answer on this platform.
+//
+// There is no Authenticode for an ELF binary, and the sigstore bundle
+// published beside a release is not installed alongside it and would need a
+// verifier this program does not embed. Returning ErrNoPublisherIdentity
+// rather than an empty string is deliberate: a caller must be able to tell
+// "this file is unsigned" from "this platform cannot tell you", because only
+// the first of those is a finding.
+func SignerOf(path string) (string, error) {
+	return "", fmt.Errorf("%w", ErrNoPublisherIdentity)
+}

@@ -139,4 +139,14 @@ const (
 	// restarts, the UI looks healthy, and the only evidence is a gap in the
 	// history that nobody reads.
 	ConditionUncleanShutdown = "unclean-shutdown"
+
+	// ConditionBinaryChanged is the product reporting that the file it is
+	// running from is not the one this installation recorded. Raised at start.
+	//
+	// internal/service warns at INSTALL time that a service running out of a
+	// user-writable folder can be replaced by anyone who can write there,
+	// "with no prompt and none of the updater's signature checking involved".
+	// Nothing acted on that warning afterwards: the replacement started, ran
+	// with the service account's privileges, and every surface read healthy.
+	ConditionBinaryChanged = "binary-changed"
 )

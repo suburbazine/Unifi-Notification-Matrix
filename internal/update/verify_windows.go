@@ -244,3 +244,16 @@ func VerifyPublisher(candidate, installed string) error {
 	}
 	return nil
 }
+
+// SignerOf verifies a file's Authenticode signature and returns who signed it.
+//
+// Exported so the daemon can ask the same question about ITSELF at startup
+// that the updater asks about a download. The two are the same question --
+// "who signed this, and does the signature hold?" -- separated only by which
+// file is being asked about.
+func SignerOf(path string) (string, error) {
+	if err := verifyTrust(path); err != nil {
+		return "", err
+	}
+	return signerName(path)
+}

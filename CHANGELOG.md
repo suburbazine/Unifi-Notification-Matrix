@@ -22,6 +22,43 @@ Entries land here as work merges, and the heading is renamed to the version on
 the day it ships — writing a release's section from scratch at tag time is how
 0.1.8 nearly went out with none.
 
+### Added
+
+- **The daemon now checks, at every start, that it is running the binary it
+  was installed as** — and raises an incident when it is not.
+
+  This closes a gap the product already knew about and did nothing with.
+  Installing warns that a service running out of a user-writable folder is
+  "a file anybody running as that user can replace, choosing what runs as the
+  service account next time it starts, with no prompt and none of the
+  updater's signature checking involved". That was true, and nothing looked
+  afterwards: the replacement started, ran with the service account's
+  privileges, and every surface read healthy.
+
+  What is reported: a binary that **changed without its version changing**
+  (an update changes both; a replacement changes one), and on Windows a binary
+  that **stopped being signed** or that is **signed by a different publisher**
+  than the one this installation ran before. An ordinary update is silent, and
+  a change is reported once rather than at every start — an alarm that repeats
+  forever for something the operator has decided to live with becomes
+  wallpaper, and takes the credibility of every other alarm with it.
+
+  **What it cannot do, stated plainly.** It is a tripwire, not a defence:
+  anyone who can rewrite both the binary and the reference beside it can
+  silence it. It earns its keep where those two differ in privilege — most
+  sharply on Windows, where the install can sit in a user-writable directory
+  while the data directory is ACL'd to administrators and SYSTEM.
+
+  **On Linux it detects change, not authenticity.** There is no Authenticode
+  for an ELF binary, and the sigstore bundle published beside a release is not
+  installed alongside it and would need a verifier this program does not
+  embed. So Linux gets the hash comparison and no publisher identity — which
+  catches a careless replacement and cannot tell you the original was
+  authentic. On a default install the binary and the data directory are both
+  root-owned, so there is no privilege asymmetry there to rely on either.
+  `notifymatrix selfcheck` now says which of these applies on the machine you
+  run it on, rather than leaving a quiet startup to be read as a guarantee.
+
 ## [0.1.10] — 2026-09-18
 
 **No functional change. There is no reason to upgrade to this from 0.1.9.**

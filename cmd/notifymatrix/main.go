@@ -42,6 +42,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/inbound"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ingest"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/integrity"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/link"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/rule"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
@@ -186,6 +187,32 @@ func wrapText(s string, width int) string {
 				out.WriteString(" ")
 				line++
 			}
+		}
+		out.WriteString(w)
+		line += len(w)
+	}
+	return out.String()
+}
+
+// wrapIndent wraps to width and indents every line, including the first.
+//
+// wrapText hard-codes the nine-space continuation that its WARNING callers
+// want; selfcheck's columns are a different shape, so this takes the indent
+// rather than the two of them drifting apart over one constant.
+func wrapIndent(s string, indent, width int) string {
+	pad := strings.Repeat(" ", indent)
+	var out strings.Builder
+	line := 0
+	for i, w := range strings.Fields(s) {
+		switch {
+		case i == 0:
+			out.WriteString(pad)
+		case line+1+len(w) > width-indent:
+			out.WriteString("\n" + pad)
+			line = 0
+		default:
+			out.WriteString(" ")
+			line++
 		}
 		out.WriteString(w)
 		line += len(w)
@@ -642,6 +669,38 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			incident.SeverityHigh, title,
 			service.CrashDetail(prev)); err != nil {
 			fmt.Fprintln(os.Stderr, "         could not raise it as an incident:", err)
+		}
+	}
+
+	// IS THIS THE BINARY WE INSTALLED? Asked at every start, because the
+	// install-time warning about a replaceable binary was never followed by
+	// anything that looked.
+	//
+	// HIGH rather than critical, and the reason is the false positive rather
+	// than the severity of the true one. The likeliest cause by far is an
+	// operator who replaced the binary by hand -- a self-built one, a manual
+	// rollback -- and quiet hours never apply to critical, so getting that
+	// wrong wakes somebody for their own action. An operator who wants this to
+	// page at 3am can say so in a rule, which is what rules are for.
+	if exe, err := os.Executable(); err == nil {
+		finding, ierr := integrity.Check(exe, dataDir, version)
+		if ierr != nil {
+			// Never fatal. A tripwire that cannot arm is a thing to report,
+			// not a reason to leave the site unwatched.
+			fmt.Fprintln(os.Stderr, "note: could not check the running binary:", ierr)
+		}
+		if finding.Changed {
+			fmt.Fprintln(os.Stderr, "\nWARNING: "+finding.Title)
+			fmt.Fprintln(os.Stderr, wrapText(finding.Detail, 72))
+			_ = auditLog.Append(ctx, audit.Entry{
+				Kind: audit.KindService, Actor: "system",
+				Summary: finding.Title,
+				Fields:  map[string]string{"detail": finding.Detail, "path": exe},
+			})
+			if _, err := engine.RaiseInternal(ctx, event.ConditionBinaryChanged,
+				incident.SeverityHigh, finding.Title, finding.Detail); err != nil {
+				fmt.Fprintln(os.Stderr, "         could not raise it as an incident:", err)
+			}
 		}
 	}
 
@@ -1672,6 +1731,26 @@ func selfcheck(dataDir string) int {
 	} else {
 		fmt.Println("     not locked -- no daemon is running here")
 	}
+
+	// WHAT THIS PLATFORM CAN ESTABLISH ABOUT ITS OWN BINARY, stated here
+	// because "what this machine can do" is the question this command answers
+	// and because the honest answer differs sharply between platforms. A
+	// reader on Linux should find out here that change is detected and
+	// authenticity is not, rather than inferring from a quiet startup that
+	// the binary has been vouched for.
+	fmt.Println("\nRunning binary")
+	fmt.Println("--------------")
+	if exe, err := os.Executable(); err != nil {
+		fmt.Printf("  -- could not locate this executable: %v\n", err)
+	} else {
+		fmt.Printf("     %s\n", exe)
+		if _, statErr := os.Stat(filepath.Join(dataDir, integrity.PinName)); statErr == nil {
+			fmt.Println("  OK a reference is recorded; it is compared at every start")
+		} else {
+			fmt.Println("  -- no reference recorded yet; the next start will take one")
+		}
+	}
+	fmt.Println(wrapIndent(integrity.Limitation(), 5, 72))
 
 	fmt.Println("\nSecret storage")
 	fmt.Println("--------------")
