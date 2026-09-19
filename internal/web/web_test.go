@@ -21,6 +21,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/reconcile"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
 )
@@ -204,6 +205,18 @@ type harness struct {
 
 	// entities stands in for what the running daemon has seen.
 	entities []EntitySeen
+
+	// observed stands in for the PERMANENT record, and observedErr for the
+	// read of it failing -- which is a case the review has to report as a
+	// failed read rather than as a clean bill of health.
+	observed    []reconcile.Entity
+	observedErr error
+
+	// onConfigRead fires on every Config() call, with h.mu ALREADY HELD, so a
+	// test can change the configuration BETWEEN two reads inside one request.
+	// That is the only way to exercise a check-then-write guard, and a guard
+	// no test can make fail is a guard nobody will keep working.
+	onConfigRead func()
 }
 
 // testConfig is valid, exercises every secret-bearing field, and plants the
@@ -267,10 +280,17 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 	}
 
 	srv, err := New(Deps{
-		Store:      h.store,
-		Audit:      h.log,
-		Version:    "test",
-		Config:     func() *config.Config { h.mu.Lock(); defer h.mu.Unlock(); return h.cfg },
+		Store:   h.store,
+		Audit:   h.log,
+		Version: "test",
+		Config: func() *config.Config {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if h.onConfigRead != nil {
+				h.onConfigRead()
+			}
+			return h.cfg
+		},
 		SaveConfig: h.save,
 		Health: func() Health {
 			return Health{
@@ -304,6 +324,11 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			return h.entities
+		},
+		ObservedEntities: func(context.Context) ([]reconcile.Entity, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return h.observed, h.observedErr
 		},
 		HookTestMode: func(name string, minutes int) (time.Time, error) {
 			h.mu.Lock()

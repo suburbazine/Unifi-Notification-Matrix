@@ -44,6 +44,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ingest"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/integrity"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/link"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/reconcile"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/rule"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/service"
@@ -1094,6 +1095,26 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 					})
 				}
 				return out
+			},
+			// The permanent record, NOT the in-memory one KnownEntities
+			// serves. Read straight from the store on each request so the
+			// review reflects what the site has had rather than what this
+			// process happens to have seen since it started -- which after a
+			// restart is the difference between finding a re-adoption and
+			// being unable to see one.
+			ObservedEntities: func(ctx context.Context) ([]reconcile.Entity, error) {
+				rows, err := db.ObservedEntities(ctx)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]reconcile.Entity, 0, len(rows))
+				for _, e := range rows {
+					out = append(out, reconcile.Entity{
+						Source: e.Source, ID: e.ID, Name: e.Name, Kind: e.Kind,
+						MAC: e.MAC, FirstSeen: e.FirstSeen, LastSeen: e.LastSeen,
+					})
+				}
+				return out, nil
 			},
 			HookTestMode: func(name string, minutes int) (time.Time, error) {
 				if minutes <= 0 {

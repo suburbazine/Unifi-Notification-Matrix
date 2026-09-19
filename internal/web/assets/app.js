@@ -1120,9 +1120,9 @@ function refreshSettings() {
   // pairing section is part of this page, and a second request that can fail
   // separately would give it a second loading state to be in.
   Promise.all([api("GET", "api/settings"), api("GET", "/api/checklist"),
-    api("GET", "/api/link")])
+    api("GET", "/api/link"), api("GET", "/api/rules/review")])
     .then(function (both) {
-    var res = both[0], list = both[1], lk = both[2];
+    var res = both[0], list = both[1], lk = both[2], rv = both[3];
     if (res.status === 401) {
       setLede("settings", "gear", "Change what it does.", "");
       settingsCtx = null;
@@ -1134,7 +1134,8 @@ function refreshSettings() {
       body.appendChild(errorState(res.data.error || "could not load settings", refreshSettings));
       return;
     }
-    renderSettings(body, res.data, hookCredsFrom(list), (lk.ok && lk.data) || {});
+    renderSettings(body, res.data, hookCredsFrom(list), (lk.ok && lk.data) || {},
+      (rv.ok && rv.data) || {});
   });
 }
 
@@ -1159,12 +1160,13 @@ function refreshWebhooks() {
   });
 }
 
-function renderSettings(body, s, creds, linkState) {
+function renderSettings(body, s, creds, linkState, review) {
   clear(body);
   // A working copy: the inputs edit this, and this is what gets posted back
   // -- one section at a time.
   var draft = JSON.parse(JSON.stringify(s));
-  var ctx = { draft: draft, saved: s, creds: creds || {}, link: linkState || {}, sections: {} };
+  var ctx = { draft: draft, saved: s, creds: creds || {}, link: linkState || {},
+    review: review || {}, sections: {} };
   ctx.redraw = function (key) {
     var sc = ctx.sections[key];
     if (!sc) return;
@@ -1377,6 +1379,11 @@ var SECTION_RENDERERS = {
   },
   rules: function (body, ctx) {
     var s = ctx.saved;
+    // The review goes ABOVE the editor. A rule that no longer points at
+    // anything is not something you find by reading the list -- it looks
+    // exactly like a rule that works -- so it has to be the first thing on
+    // the section rather than a note under it.
+    body.appendChild(reviewCard(ctx.review));
     renderRules(body, ctx.draft, s.conditions || [], s.entities || []);
   },
   quiet: renderQuietSection,
@@ -3465,6 +3472,204 @@ function durationField(obj, key, own) {
   i.value = (obj[key] === undefined || obj[key] === null) ? "" : obj[key];
   i.addEventListener("input", function () { own()[key] = i.value.trim(); });
   return i;
+}
+
+// ---------- rule review ----------
+//
+// The other direction. Everything else on this page reports on what arrived;
+// this reports on what was CONFIGURED and never matched -- the set nothing
+// else can see, because a rule that points at a device which no longer
+// answers to that id produces no event, no error and no entry anywhere. It
+// simply never fires, and the board stays green.
+//
+// A UniFi device id is generated AT ADOPTION TIME, so re-adopting a hub gives
+// every door and camera under it a new id and silently detaches every rule
+// naming one. The MAC is the only identifier that survives both that and a
+// rename, and the permanent record keeps it -- which is what lets this card
+// offer a specific replacement rather than just a worry.
+
+function reviewCard(rev) {
+  var card = el("div", "card");
+  card.appendChild(el("div", "card-title", "Do these rules still point at anything?"));
+
+  // "NOTHING IS WRONG" AND "NOTHING WAS CHECKED" LOOK IDENTICAL ON A SCREEN
+  // AND ARE OPPOSITE FACTS. A failed read of the record has to say so; shown
+  // as a clean result it would be the most reassuring thing this card can
+  // display, produced by the one case where it knows nothing at all.
+  if (!rev || !rev.available) {
+    card.appendChild(callout(
+      (rev && rev.detail) || "The rules have not been checked against what " +
+      "this site has.", "warn", "Not checked"));
+    return card;
+  }
+
+  var findings = rev.findings || [];
+  if (!findings.length) {
+    card.appendChild(stateBlock("empty", {
+      icon: "check", tone: "ok", compact: true,
+      title: "Every rule points at something this site has had",
+      text: "Checked against " + rev.known + " " +
+        (rev.known === 1 ? "thing" : "things") + " this product has ever seen " +
+        "an event about."
+    }));
+    return card;
+  }
+
+  card.appendChild(el("div", "muted small",
+    "Checked against " + rev.known + " " + (rev.known === 1 ? "thing" : "things") +
+    " this product has ever seen an event about. A rule that matches nothing " +
+    "does not fail — it just never fires."));
+
+  // Superseded first: it is the one with evidence behind it and a button that
+  // does something. Sorting the weaker findings above it would bury the only
+  // row anybody can act on.
+  //
+  // RANKS START AT 1, NOT 0. The first version used 0 for superseded and
+  // `order[s] || 9` for the default, so the highest-priority finding scored a
+  // falsy 0, fell through to 9, and sorted LAST -- putting the only row with
+  // a button under three that have none. Every test passed; the screen is
+  // what said otherwise.
+  var order = { superseded: 1, unknown: 2, silent: 3 };
+  var rank = function (f) { return order[f.status] || 9; };
+  findings.slice().sort(function (a, b) {
+    return rank(a) - rank(b);
+  }).forEach(function (f) { card.appendChild(findingRow(f)); });
+  return card;
+}
+
+function findingRow(f) {
+  var row = el("div", "card");
+  var head = el("div", "row");
+  head.appendChild(badge(f.status === "superseded" ? "re-adopted?" :
+    f.status === "unknown" ? "never seen" : "gone quiet",
+    f.status === "superseded" ? "is-warn" : "is-muted"));
+  head.appendChild(el("strong", "grow", f.reference));
+  row.appendChild(head);
+  row.appendChild(el("div", "muted small", "in rule “" + f.rule + "”"));
+
+  row.appendChild(el("div", "", explainFinding(f)));
+  (f.successors || []).forEach(function (sc) {
+    row.appendChild(successorOffer(f, sc));
+  });
+  return row;
+}
+
+function explainFinding(f) {
+  if (f.status === "superseded") {
+    return "Last reported " + quietFor(f) + ". Something that looks like the " +
+      "same device is reporting now under a different id — which is what a " +
+      "re-adoption does: the id is generated when the hardware is adopted, so " +
+      "adopting it again makes a new one and leaves this rule pointing at the " +
+      "old one.";
+  }
+  if (f.status === "unknown") {
+    return f.pattern
+      ? "This pattern matches nothing this product has seen. That is fine if " +
+        "the devices it is for have not fired yet; it is a typo otherwise."
+      : "Nothing this product has ever seen an event about is called this. " +
+        "A rename does this, and so does a typo — and neither one fails, so " +
+        "the rule has simply never matched.";
+  }
+  return "Still resolves, to something last heard from " + quietFor(f) +
+    ", with nothing that looks like a replacement. A door nobody opens for a " +
+    "month looks exactly like this, so it may be nothing.";
+}
+
+// afterRepoint redraws the section from the server and says what still has to
+// happen.
+//
+// THE NOTICE GOES IN THE SECTION FOOT, NOT IN THE CARD. The first version put
+// it in the button's own message and then redrew the section, which detaches
+// that node -- so the write succeeded, the finding vanished, and the one
+// sentence that mattered was appended to an element no longer on the page.
+// The operator was left believing the gate was watched again. The foot is
+// built once, outside what redraw() refills, which is the whole reason
+// settingsSection has one.
+//
+// Both the review and the settings are re-read: the review because the
+// finding should now be gone, and the settings because the rule the editor
+// below is showing has just changed underneath it. Refetching one and not
+// the other would leave the form contradicting the card above it.
+function afterRepoint(newID) {
+  var ctx = settingsCtx;
+  if (!ctx) { refreshSettings(); return; }
+  Promise.all([api("GET", "/api/rules/review"), api("GET", "api/settings")])
+    .then(function (both) {
+      if (settingsCtx !== ctx) return; // the page was rebuilt underneath us
+      var rv = both[0], st = both[1];
+      if (rv.ok) ctx.review = rv.data || {};
+      if (st.ok && st.data) {
+        ctx.saved = st.data;
+        ctx.draft.rules = clone(st.data.rules || []);
+      }
+      ctx.redraw("rules");
+      var sec = ctx.sections.rules;
+      if (sec && sec.foot) {
+        clear(sec.foot);
+        sec.foot.appendChild(restartOffer("The rule now points at " + newID +
+          ", and that"));
+        if (SECTION_SAVES.rules) {
+          sec.foot.appendChild(saveBar(ctx, { key: "rules", title: "Rules" },
+            SECTION_SAVES.rules));
+        }
+      }
+      refreshStatus();
+    });
+}
+
+function quietFor(f) {
+  if (!f.last_seen) return "some time ago";
+  if (f.quiet_days >= 1) return f.quiet_days + " day" + (f.quiet_days === 1 ? "" : "s") + " ago";
+  return "today, at " + stamp(f.last_seen);
+}
+
+// successorOffer is the button, and the WORDING OF THE BUTTON IS THE POINT.
+//
+// A MAC match is evidence: it is the one identifier that survives both a
+// rename and a re-adoption. A name match is a hint. Presenting them as the
+// same offer would invite somebody to take the weaker answer without knowing
+// they were choosing.
+function successorOffer(f, sc) {
+  var box = el("div", "row");
+  var strong = sc.on === "mac";
+  box.appendChild(badge(strong ? "same MAC" : "same name", strong ? "is-ok" : "is-muted"));
+
+  var text = el("div", "grow");
+  text.appendChild(el("div", "", (sc.name ? sc.name + " — " : "") + sc.id));
+  text.appendChild(el("div", "muted small", strong
+    ? "The same hardware address, on a newer id. This is the identifier that " +
+      "survives both a rename and a re-adoption."
+    : "The same name, on a newer id. Weaker than a hardware address: two " +
+      "devices can share a name."));
+  box.appendChild(text);
+
+  var b = el("button", "act" + (strong ? " primary" : "") + " small", "Point the rule here");
+  b.type = "button";
+  var msg = el("div", "msg");
+  b.addEventListener("click", function () {
+    b.disabled = true;
+    msg.className = "msg";
+    fill(msg, "");
+    api("POST", "/api/rules/repoint", {
+      rule_index: f.rule_index, rule: f.rule, from: f.reference, to: sc.id
+    }).then(function (res) {
+      if (!res.ok) {
+        b.disabled = false;
+        msg.className = "msg err";
+        fill(msg, (res.data && res.data.error) || "that could not be applied");
+        return;
+      }
+      afterRepoint(sc.id);
+    });
+  });
+  var bar = el("div", "formbar");
+  bar.appendChild(b);
+  box.appendChild(bar);
+
+  var outer = el("div", "");
+  outer.appendChild(box);
+  outer.appendChild(msg);
+  return outer;
 }
 
 // ---------- rules ----------

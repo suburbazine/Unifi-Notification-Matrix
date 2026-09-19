@@ -46,6 +46,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/reconcile"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
 )
 
@@ -125,6 +126,17 @@ type Deps struct {
 	// honest suggestions are the things that have really come through. Empty
 	// on a fresh start, which is the truth rather than a gap.
 	KnownEntities func() []EntitySeen
+
+	// ObservedEntities is the PERMANENT record of what this site has had, as
+	// opposed to KnownEntities, which is what this process has seen.
+	//
+	// A different question, and the difference is the whole point of the rule
+	// review: the camera that stopped reporting before the last restart is
+	// absent from one and present in the other, and it is exactly the row that
+	// answers "was this lost, or did it never exist". Optional -- a build
+	// without a record says the rules were not checked rather than saying
+	// they are fine.
+	ObservedEntities func(ctx context.Context) ([]reconcile.Entity, error)
 
 	// Checklist reports what is still needed to make this installation work.
 	//
@@ -335,6 +347,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/settings", s.requireAuth(http.HandlerFunc(s.handleGetSettings)))
 	mux.Handle("POST /api/settings", s.requireAuth(http.HandlerFunc(s.handleSaveSettings)))
 	mux.Handle("GET /api/audit", s.requireAuth(http.HandlerFunc(s.handleAudit)))
+	// The other direction: what the rules point at, against what this site has
+	// actually had. Configuration detail, so it is behind a session like the
+	// settings it reports on.
+	mux.Handle("GET /api/rules/review", s.requireAuth(http.HandlerFunc(s.handleRuleReview)))
+	mux.Handle("POST /api/rules/repoint", s.requireAuth(http.HandlerFunc(s.handleRepointRule)))
 	mux.Handle("POST /api/password", s.requireAuth(http.HandlerFunc(s.handleChangePassword)))
 	mux.Handle("POST /api/channels/{name}/test", s.requireAuth(http.HandlerFunc(s.handleTestChannel)))
 	// Gated: arming makes this installation deliberately deaf to one hook, and

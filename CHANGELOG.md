@@ -13,9 +13,27 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Added
+
+- **The rules are now checked against what this site has actually had.** Every
+  other surface in this product reports on what arrived; nothing reported on
+  what was *configured and never matched* — which is invisible by construction,
+  because a rule pointing at a device that no longer answers to that id
+  produces no event, no error and no entry anywhere. It simply never fires,
+  and the board stays green. Settings → Rules now opens with a review of every
+  entity a rule names, against the permanent record added in 0.2.0.
+
+- **When a device has been re-adopted, it offers to repoint the rule.** A UniFi
+  device id is generated *at adoption time*, so re-adopting hardware gives it a
+  new id and silently detaches every rule naming the old one. The MAC is the
+  only identifier that survives both that and a rename, and the record keeps
+  it — so when one id goes quiet and another turns up carrying the same MAC,
+  the page says so and offers a one-click fix. A match on the name alone is
+  offered too, and is labelled as the weaker evidence it is.
+
+  The review reports nothing at all when the record could not be read, or is
+  empty. "Nothing is wrong" and "nothing was checked" look identical on a
+  screen and are opposite facts, so it says which one it means.
 
 ## [0.2.1] — 2026-09-19
 
