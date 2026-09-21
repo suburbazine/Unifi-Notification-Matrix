@@ -173,13 +173,21 @@ func diff(r *Report) []Finding {
 	// this build's catalogue, not about the console -- and an operator who
 	// has not issued an API key gets a report that looks like a survey of
 	// their firmware and is nothing of the kind.
-	refused, answered := map[string]bool{}, map[string]bool{}
+	refused, answered, pages := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, e := range r.Endpoints {
 		switch {
 		case answeredJSON(e):
 			answered[e.Product] = true
 		case e.Status == 401 || e.Status == 403:
 			refused[e.Product] = true
+		case e.Status == 200:
+			// A 200 that is not JSON is the console's own web front end
+			// answering on the API's behalf, which is what an application
+			// that is not installed, not licensed or not enabled looks like
+			// from out here. Nothing else in a report says so: it is not a
+			// refusal, and on a run where another product answered properly
+			// it is not a failure either.
+			pages[e.Product] = true
 		}
 	}
 	products := make([]string, 0, len(refused))
@@ -197,6 +205,23 @@ func diff(r *Report) []Finding {
 			Detail: "every request was refused",
 			Note: "no key was accepted for " + p + ", so nothing in this report " +
 				"describes what this firmware has",
+		})
+	}
+
+	unavailable := make([]string, 0, len(pages))
+	for p := range pages {
+		if !answered[p] && !refused[p] {
+			unavailable = append(unavailable, p)
+		}
+	}
+	sort.Strings(unavailable)
+	for _, p := range unavailable {
+		out = append(out, Finding{
+			Record: "finding", Kind: "product.unavailable", Product: p,
+			Detail: "answered with a web page rather than an API",
+			Note: "every path returned HTML, which is what this console does " +
+				"when " + p + " is not installed, not licensed or has no " +
+				"integration API enabled; nothing in this report describes it",
 		})
 	}
 

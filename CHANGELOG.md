@@ -13,9 +13,31 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Fixed
+
+- **The probe called two paths it depends on "undocumented".** The catalogue
+  marks which paths this build already uses, and Network's site and device
+  lists — polled on a timer by the Network source — were marked unknown, as
+  was Access's door list. A real run reported them as discoveries.
+
+  The other direction is worse and is why this is a defect rather than noise:
+  a path marked unknown can never be reported **missing**, so the firmware
+  that stops serving one of them would have produced a silent report. A test
+  now asserts the catalogue and the sources agree.
+
+- **A product that is not enabled now says so.** UniFi OS answers for an
+  application it does not have by serving its own web page, which is neither a
+  refusal nor an answer — so a console with Access not installed produced a
+  report that mentioned Access only as four unreadable responses. That is now
+  a finding: `product.unavailable`, once per product, and not for a product
+  that answered anywhere else or was refused outright.
+
+- **The detection vocabulary survives under every name it arrives under.** One
+  camera record carries the same terms as `smartDetectTypes`,
+  `smartDetectAudioTypes`, `objectTypes` and `audioTypes`; only the first was
+  published, so a report disagreed with itself — `person` kept under one name
+  and replaced with a counter under another. All four are now kept, and the
+  fields beside them are not.
 
 ## [0.3.5] — 2026-09-21
 

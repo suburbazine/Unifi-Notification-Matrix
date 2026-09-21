@@ -72,8 +72,18 @@ var vocabulary = map[string]bool{
 	"unit": true, "method": true, "version": true, "firmwareversion": true,
 	"firmware_version": true, "applicationversion": true,
 	"apiversion": true, "api_version": true, "releasechannel": true,
-	"schema":           true,
+	"schema": true,
+	// The detection vocabulary arrives under four names on one camera record:
+	// featureFlags.smartDetectTypes, featureFlags.smartDetectAudioTypes,
+	// smartDetectSettings.objectTypes and smartDetectSettings.audioTypes. They
+	// hold the same terms, and listing only the first made a report disagree
+	// with itself -- "person" published under one name and replaced with a
+	// counter under another. These terms are the enum the rule engine keys
+	// on, which is most of what a schema contribution is for.
 	"smartdetecttypes": true, "smart_detect_types": true,
+	"smartdetectaudiotypes": true, "smart_detect_audio_types": true,
+	"objecttypes": true, "object_types": true,
+	"audiotypes": true, "audio_types": true,
 
 	// Two-segment entries, matched against parent.child. `text` on its own is
 	// NOT here and must not be: Network's Alarm Manager spells its free-prose

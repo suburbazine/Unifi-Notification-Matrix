@@ -24,6 +24,12 @@ type Endpoint struct {
 	// summary. It is documentation, not a check.
 	Expect string
 
+	// Known marks a path this build already relies on. It must track what the
+	// sources in internal/source ACTUALLY request -- a path they poll and this
+	// field calls unknown is reported as a discovery on every run, and, worse,
+	// can never be reported as missing on the firmware that stops serving it.
+	// A test asserts the two agree.
+	//
 	// Known marks a path this build already relies on. An unknown path that
 	// answers is a discovery; a known path that stops answering is a
 	// regression. The report distinguishes them because the two findings mean
@@ -71,7 +77,7 @@ var Catalogue = []Endpoint{
 
 	// UniFi Access. The REST base says `integration` where the socket says
 	// `api`; that asymmetry is real and is not a typo on either side.
-	{Product: "access", Auth: AuthAccess, Path: "/proxy/access/integration/v1/developer/doors", Expect: "door list -- the Access equivalent of /cameras"},
+	{Product: "access", Auth: AuthAccess, Known: true, Path: "/proxy/access/integration/v1/developer/doors", Expect: "door list -- the Access equivalent of /cameras"},
 	{Product: "access", Auth: AuthAccess, Path: "/proxy/access/integration/v1/developer/devices", Expect: "hubs and readers"},
 	{Product: "access", Auth: AuthAccess, Path: "/proxy/access/integration/v1/developer/door_groups", Expect: "unknown to this build"},
 	{Product: "access", Auth: AuthAccess, Path: "/proxy/access/integration/v1/developer/system/info", Expect: "Access version, if this path exists"},
@@ -79,8 +85,8 @@ var Catalogue = []Endpoint{
 	// UniFi Network. Its Integration API arrived in Network 9.0 and covers no
 	// events at all; the probe asks anyway, because "the spec contains zero
 	// occurrences of event" is a fact about the spec, not about the console.
-	{Product: "network", Auth: AuthNetwork, Path: "/proxy/network/integration/v1/sites", Expect: "site list; ids feed the paths below"},
-	{Product: "network", Auth: AuthNetwork, Path: "/proxy/network/integration/v1/sites/{site}/devices", Expect: "device list for the first site"},
+	{Product: "network", Auth: AuthNetwork, Known: true, Path: "/proxy/network/integration/v1/sites", Expect: "site list; ids feed the paths below"},
+	{Product: "network", Auth: AuthNetwork, Known: true, Path: "/proxy/network/integration/v1/sites/{site}/devices", Expect: "device list for the first site"},
 	{Product: "network", Auth: AuthNetwork, Path: "/proxy/network/integration/v1/info", Expect: "controller version, if this path exists"},
 }
 
