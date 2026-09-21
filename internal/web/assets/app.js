@@ -884,11 +884,12 @@ function renderHealth(h) {
       "warn", "Nothing outside this machine is watching it"));
   }
 
-  // Channels, policies and rules are all built once, at start. Until this
-  // button existed, applying a saved change meant opening a terminal -- told
-  // to somebody whose reason for being on this page is that they would rather
-  // not. Worse, nothing said so, so a channel could read as enabled
-  // everywhere a human looks and still not be told anything at 3am.
+  // Channels, ladders, rules and consoles are applied as they are saved now,
+  // so this button is no longer how a setting takes effect -- it is for the
+  // listen addresses, which cannot be moved under a bound socket, and for the
+  // ordinary reasons anybody restarts anything. It stays here because the
+  // alternative was a terminal, told to somebody whose reason for being on
+  // this page is that they would rather not open one.
   if (state.authed && s.state && s.state !== "not installed") {
     var bar = el("div", "formbar");
     var msg = el("div", "msg");
