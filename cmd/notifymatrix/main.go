@@ -449,6 +449,38 @@ Channels: ntfy, email, pushover, webhook.
 // a daemon running the first half of one configuration and the second half of
 // another is the state that must not be reachable, and the caller says which
 // half is live.
+
+// reuseSources decides which sources a reload keeps.
+//
+// A source whose fingerprint is unchanged is handed back AS THE SAME VALUE,
+// which is what ingest.Supervisor.Replace reads as "leave this one alone" --
+// it cannot key on the name, because every source of an application shares
+// one, so a corrected API key would be indistinguishable from the broken
+// source it replaces and the broken one would be the one kept.
+//
+// Each running source is reused AT MOST ONCE. Two consoles configured
+// identically produce one fingerprint between them, and handing Replace the
+// same value twice is refused -- correctly, because one connection cannot be
+// two sources. The second gets the freshly built one.
+func reuseSources(live map[string]event.Source, keyed []config.KeyedSource) ([]event.Source, map[string]event.Source) {
+	spare := make(map[string]event.Source, len(live))
+	for k, v := range live {
+		spare[k] = v
+	}
+	want := make([]event.Source, 0, len(keyed))
+	next := make(map[string]event.Source, len(keyed))
+	for _, k := range keyed {
+		src := k.Source
+		if old, ok := spare[k.Key]; ok {
+			src = old
+			delete(spare, k.Key)
+		}
+		want = append(want, src)
+		next[k.Key] = src
+	}
+	return want, next
+}
+
 func applyLive(
 	ctx context.Context,
 	next *config.Config,
@@ -457,6 +489,7 @@ func applyLive(
 	sched *escalate.Scheduler,
 	engine *rule.Engine,
 	receiver *inbound.Receiver,
+	reloadSources func(*config.Config) error,
 ) error {
 	// APPLIED TO THE RUNNING DAEMON, not only to the file.
 	//
@@ -515,6 +548,25 @@ func applyLive(
 	// the operator is a URL that answers. It used to 404 until a
 	// restart, which is the same reply a wrong token gets.
 	receiver.SetHooks(config.BuildHooks(next))
+
+	// And the consoles themselves.
+	//
+	// A SOURCE NOBODY TOUCHED KEEPS ITS CONNECTION. Protect holds a WebSocket,
+	// a backoff ladder and the table that turns an update frame into a clear;
+	// rebuilding all three because an unrelated channel was saved would throw
+	// away every one of them and leave a gap in exactly the coverage this
+	// exists for. Which sources are unchanged is decided by what each one was
+	// BUILT FROM rather than by its name: every source of an application
+	// shares one name, so a corrected API key would otherwise be
+	// indistinguishable from the broken source it replaces -- and the broken
+	// one would be the one kept.
+	if reloadSources != nil {
+		if err := reloadSources(next); err != nil {
+			return fmt.Errorf("this configuration was accepted, but the consoles "+
+				"could not be reloaded and this daemon is still watching by the "+
+				"previous ones -- restart to close the gap: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -916,7 +968,18 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	// INGEST. Everything above this decides what to do with events; nothing
 	// above it produces any. A daemon that skipped this would start, serve the
 	// interface, run the escalation scheduler, and watch nothing at all.
-	sources, problems := config.BuildSources(cfg)
+	keyedSources, problems := config.BuildSourcesKeyed(cfg)
+	sources := make([]event.Source, 0, len(keyedSources))
+	// liveSources maps the fingerprint of what a source was built from to the
+	// source itself, so a later reload can hand back the SAME value for a
+	// console nobody touched. That is what ingest.Supervisor.Replace reads as
+	// "unchanged", and it is the difference between saving an unrelated
+	// setting and dropping every WebSocket on site.
+	liveSources := map[string]event.Source{}
+	for _, k := range keyedSources {
+		sources = append(sources, k.Source)
+		liveSources[k.Key] = k.Source
+	}
 	for _, p := range problems {
 		// Reported, not fatal. One misconfigured console must not take away
 		// coverage that works -- but it must never be silent either, because a
@@ -1154,6 +1217,48 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			return current
 		})
 
+		// Rebuilding the console set, reusing every source nobody changed.
+		//
+		// Serialised by the supervisor itself; what is guarded here is the map
+		// of what is currently running, which this is the only writer of.
+		reloadSources := func(next *config.Config) error {
+			sup := supervisorRef.Load()
+			if sup == nil {
+				return nil // nothing is watching yet; Run has not started
+			}
+			keyed, problems := config.BuildSourcesKeyed(next)
+			for _, pr := range problems {
+				// Same rule as at start: one misconfigured console must not
+				// take away coverage that works, and must never be silent.
+				fmt.Fprintln(os.Stderr, "WARNING:", pr)
+				_ = auditLog.Append(context.Background(), audit.Entry{
+					Kind: audit.KindService, Actor: "system",
+					Summary: "a source could not be built",
+					Fields:  map[string]string{"detail": pr.Error()},
+				})
+			}
+			want, nextLive := reuseSources(liveSources, keyed)
+			change, err := sup.Replace(want)
+			if err != nil {
+				return err
+			}
+			liveSources = nextLive
+			if len(change.Started) > 0 || len(change.Stopped) > 0 {
+				fmt.Fprintf(os.Stderr, "consoles reloaded: kept %d, started %v, stopped %v\n",
+					len(change.Kept), change.Started, change.Stopped)
+				_ = auditLog.Append(context.Background(), audit.Entry{
+					Kind: audit.KindService, Actor: "system",
+					Summary: "the console set was reloaded without a restart",
+					Fields: map[string]string{
+						"kept":    strings.Join(change.Kept, ", "),
+						"started": strings.Join(change.Started, ", "),
+						"stopped": strings.Join(change.Stopped, ", "),
+					},
+				})
+			}
+			return nil
+		}
+
 		// Changes made to the FILE rather than to the page.
 		//
 		// Declared before the interface's own save path so that path can tell
@@ -1165,7 +1270,7 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			cfgMu.Unlock()
 			return applyLive(context.Background(), next, swapDelivery,
 				func() []string { return deliveryRef.Load().Names() },
-				sched, engine, receiver)
+				sched, engine, receiver, reloadSources)
 		}
 		cfgWatch = newConfigWatcher(dataDir, applyFromFile, func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, format+"\n", args...)
@@ -1198,7 +1303,7 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 
 				if err := applyLive(context.Background(), next, swapDelivery,
 					func() []string { return deliveryRef.Load().Names() },
-					sched, engine, receiver); err != nil {
+					sched, engine, receiver, reloadSources); err != nil {
 					return err
 				}
 				fmt.Fprintln(os.Stderr, "settings saved and applied")

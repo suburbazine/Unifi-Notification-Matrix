@@ -12,6 +12,11 @@
 // would be reported if it did. So every source declares how long its silence
 // may last, and silence past that becomes an incident that escalates like any
 // other.
+//
+// The third job is Replace: the set of sources changes while the daemon runs,
+// because every other answer to "I changed the API key" is "restart the
+// service", and a restart is the one thing an operator should never have to
+// do to a product whose job is to be running.
 package ingest
 
 import (
@@ -76,16 +81,58 @@ const CheckEvery = 30 * time.Second
 // stopped would be a source that silently never comes back.
 const restartDelay = 30 * time.Second
 
+// ErrStopped is returned by Replace once Run has returned. Nothing can be
+// started under a context that is already done, and pretending otherwise
+// would report a source as running that never will.
+var ErrStopped = errors.New("ingest: the supervisor has stopped")
+
 // Supervisor runs sources and reports on them.
 type Supervisor struct {
-	deps    Deps
-	sources []event.Source
+	deps Deps
 
-	// entities is what has actually been seen, for the Rules editor.
+	// entities is what has actually been seen, for the Rules editor. It
+	// belongs to the SITE, not to any source: a Replace that swapped every
+	// source would still leave it exactly as it was.
 	entities map[entityKey]*EntitySeen
 
-	mu    sync.Mutex
-	state map[string]*sourceState
+	// replaceMu serialises Replace against itself. It is a separate lock from
+	// mu because a Replace waits for the sources it stopped to actually exit,
+	// and a source on its way out takes mu to record its last event; waiting
+	// under mu would deadlock the daemon on its own reconfiguration.
+	replaceMu sync.Mutex
+
+	mu sync.Mutex
+	// running is the current set, in the order the caller gave it. The
+	// deadman checks exactly this list and Statuses reports exactly this
+	// list, so the two can never disagree with what is actually running.
+	running []*runner
+	// live is every source goroutine that has not yet exited, whether or not
+	// it is still in running. Shutdown waits on it so a source removed
+	// moments before the daemon stopped is not left mid-teardown.
+	live map[*runner]struct{}
+	// ctx is Run's, nil until Run is called. stopped is set once it is done.
+	ctx     context.Context
+	stopped bool
+}
+
+// runner is one source and everything the supervisor knows about it.
+//
+// The state travels WITH the source rather than living in a map keyed by
+// Name, because Name is the application -- "protect" -- and two things can
+// carry it at once: a second console, or the same console after somebody
+// corrected its key. The record of what the first one reported must not be
+// inherited by the second, or the board says a source that has never
+// connected has been heard from.
+type runner struct {
+	src event.Source
+
+	// Guarded by Supervisor.mu.
+	state sourceState
+
+	// cancel stops this source alone; done is closed when its goroutine has
+	// actually returned. Both nil until the source is started.
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 type sourceState struct {
@@ -118,12 +165,21 @@ func New(sources []event.Source, deps Deps) (*Supervisor, error) {
 	if deps.RestartDelay <= 0 {
 		deps.RestartDelay = restartDelay
 	}
-	s := &Supervisor{deps: deps, sources: sources, state: map[string]*sourceState{}}
-	now := deps.Now()
+	s := &Supervisor{deps: deps, live: map[*runner]struct{}{}}
 	for _, src := range sources {
-		s.state[src.Name()] = &sourceState{name: src.Name(), lastEventAt: now, runningFor: now}
+		if src == nil {
+			return nil, errors.New("ingest: nil source")
+		}
+		s.running = append(s.running, s.newRunner(src))
 	}
 	return s, nil
+}
+
+// newRunner makes the record for a source that is about to be started, with
+// its liveness clock at now.
+func (s *Supervisor) newRunner(src event.Source) *runner {
+	now := s.deps.Now()
+	return &runner{src: src, state: sourceState{name: src.Name(), lastEventAt: now, runningFor: now}}
 }
 
 // Run starts every source and blocks until ctx is done.
@@ -133,51 +189,238 @@ func New(sources []event.Source, deps Deps) (*Supervisor, error) {
 // Protect cameras watched, and refusing to start anything would take away
 // working coverage to punish a typo.
 func (s *Supervisor) Run(ctx context.Context) error {
-	// BEFORE the sources start, and before the no-sources return below: an
+	// BEFORE the sources start, and before the no-sources case below: an
 	// installation whose console has been unplugged still has a record of what
 	// it used to watch, and that is exactly when somebody wants to read it.
 	s.loadKnownEntities(ctx)
 
-	if len(s.sources) == 0 {
+	s.mu.Lock()
+	if s.ctx != nil {
+		s.mu.Unlock()
+		return errors.New("ingest: Run called twice")
+	}
+	s.ctx = ctx
+	if len(s.running) == 0 {
 		// Not an error, but it IS the thing an operator most needs told. A
 		// daemon with no sources is a daemon that will never raise anything.
 		s.deps.Logf("ingest: no sources are configured, so nothing will be ingested")
-		<-ctx.Done()
-		return nil
 	}
-
-	var wg sync.WaitGroup
-	for _, src := range s.sources {
-		wg.Add(1)
-		go func(src event.Source) {
-			defer wg.Done()
-			s.runSource(ctx, src)
-		}(src)
+	for _, r := range s.running {
+		s.start(r)
 	}
+	s.mu.Unlock()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		s.runDeadman(ctx)
-	}()
+	// The deadman runs here, on the caller's goroutine, until ctx is done. It
+	// runs even with no sources, because Replace can add some.
+	s.runDeadman(ctx)
 
-	wg.Wait()
+	// ctx is done. Nothing may be started from here on, and everything that
+	// was started is waited for -- including sources a Replace had removed
+	// and was still waiting on, because those are in live too.
+	s.mu.Lock()
+	s.stopped = true
+	live := make([]*runner, 0, len(s.live))
+	for r := range s.live {
+		live = append(live, r)
+	}
+	s.mu.Unlock()
+	for _, r := range live {
+		<-r.done
+	}
 	return nil
 }
 
-func (s *Supervisor) runSource(ctx context.Context, src event.Source) {
-	name := src.Name()
+// start launches the goroutine for r. Called with mu held and s.ctx set.
+func (s *Supervisor) start(r *runner) {
+	parent := s.ctx
+	ctx, cancel := context.WithCancel(parent)
+	r.cancel = cancel
+	r.done = make(chan struct{})
+	s.live[r] = struct{}{}
+	go func() {
+		defer func() {
+			s.mu.Lock()
+			delete(s.live, r)
+			s.mu.Unlock()
+			close(r.done)
+		}()
+		s.runSource(ctx, parent, r)
+	}()
+}
+
+// Replace makes next the set of running sources.
+//
+// A source in next that is ALREADY running -- the same value, not merely the
+// same name -- is left exactly as it is: its connection, its backoff state and
+// its record of what it has reported all survive. A running source that is
+// not in next is stopped, and Replace does not return until its goroutine has
+// actually exited. Anything else in next is started fresh, with its full
+// liveness window ahead of it and no memory of whatever ran under that name
+// before.
+//
+// Identity is the value because the name is not enough. Name is the
+// application, "protect", and a Protect source built from a corrected API key
+// has the same name as the broken one it replaces; keeping the old one
+// because the name matched would leave the daemon watching nothing and
+// looking healthy. The caller built both, so the caller is the one that knows
+// whether they are the same thing -- it says so by passing the same value.
+//
+// Safe to call while events are arriving and from any goroutine; calls are
+// serialised. Before Run it simply sets what Run will start. After Run has
+// returned it refuses with ErrStopped.
+func (s *Supervisor) Replace(next []event.Source) (Change, error) {
+	s.replaceMu.Lock()
+	defer s.replaceMu.Unlock()
+
+	var change Change
+
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return change, ErrStopped
+	}
+	current := map[event.Source]*runner{}
+	for _, r := range s.running {
+		current[r.src] = r
+	}
+	var (
+		running = make([]*runner, 0, len(next))
+		kept    = map[*runner]bool{}
+		started []*runner
+		seen    = map[event.Source]bool{}
+	)
+	for _, src := range next {
+		if src == nil {
+			s.mu.Unlock()
+			return change, errors.New("ingest: nil source")
+		}
+		if seen[src] {
+			s.mu.Unlock()
+			return change, fmt.Errorf("ingest: the %s source is listed twice", src.Name())
+		}
+		seen[src] = true
+		if r := current[src]; r != nil {
+			running = append(running, r)
+			kept[r] = true
+			change.Kept = append(change.Kept, r.state.name)
+			continue
+		}
+		r := s.newRunner(src)
+		running = append(running, r)
+		started = append(started, r)
+		change.Started = append(change.Started, r.state.name)
+	}
+	var removed []*runner
+	for _, r := range s.running {
+		if kept[r] {
+			continue
+		}
+		removed = append(removed, r)
+		change.Stopped = append(change.Stopped, r.state.name)
+		if r.cancel != nil {
+			r.cancel()
+		}
+	}
+	s.running = running
+	if len(running) == 0 && s.ctx != nil {
+		s.deps.Logf("ingest: no sources are configured, so nothing will be ingested")
+	}
+	s.mu.Unlock()
+
+	// Wait for the removed sources to be GONE, not merely told to go. A
+	// caller that reads Statuses the instant this returns must not see a
+	// source it just removed still counting events.
+	for _, r := range removed {
+		if r.done != nil {
+			<-r.done
+		}
+	}
+
+	// A removed source's open incident is about a configuration that no
+	// longer exists. Left alone it would escalate for ever, because the only
+	// thing that could resolve it is the deadman seeing that source speak
+	// again, and that source will never run again. Resolved BEFORE the
+	// replacements start, so a replacement that fails at once and raises on
+	// the same name is not resolved by mistake a moment later.
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, r := range removed {
+		s.mu.Lock()
+		open := r.state.silent || r.state.fatal != ""
+		s.mu.Unlock()
+		s.deps.Logf("ingest: %s stopped: no longer configured", r.state.name)
+		if open && s.deps.Resolve != nil && !s.watchedAndFaulted(r.state.name) {
+			_ = s.deps.Resolve(ctx, sourceEntity(r.state.name), event.ConditionSourceSilent)
+		}
+	}
+
+	s.mu.Lock()
+	if s.ctx != nil && !s.stopped {
+		for _, r := range started {
+			s.start(r)
+		}
+	}
+	s.mu.Unlock()
+	return change, nil
+}
+
+// watchedAndFaulted reports whether a source still running under name has an
+// open deadman incident of its own. Two consoles both running Protect share
+// one incident entity (see sourceEntity), so removing one must not resolve
+// what the other is still reporting.
+func (s *Supervisor) watchedAndFaulted(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.running {
+		if r.state.name == name && (r.state.silent || r.state.fatal != "") {
+			return true
+		}
+	}
+	return false
+}
+
+// Change is what a Replace did, by source name, for the log and the audit
+// record. Names repeat when two consoles run the same application.
+type Change struct {
+	Kept    []string
+	Started []string
+	Stopped []string
+}
+
+// Sources is the current set, in order. What Replace would keep if handed
+// the same values back.
+func (s *Supervisor) Sources() []event.Source {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]event.Source, 0, len(s.running))
+	for _, r := range s.running {
+		out = append(out, r.src)
+	}
+	return out
+}
+
+// runSource runs one source until ctx -- this source's own -- is done.
+//
+// parent is the supervisor's context, and it is what events and incidents
+// are handled under: an event that arrived as its source was being removed
+// still happened, and dropping it because the source's context had just been
+// cancelled would lose the last thing a camera said before its console was
+// reconfigured.
+func (s *Supervisor) runSource(ctx, parent context.Context, r *runner) {
+	name := r.state.name
 	sink := event.SinkFunc(func(ev event.Event) {
-		s.note(name)
+		s.note(r)
 		s.noteEntity(name, ev.Entity)
-		if err := s.deps.Handle(ctx, ev); err != nil && ctx.Err() == nil {
+		if err := s.deps.Handle(parent, ev); err != nil && parent.Err() == nil {
 			// Reported, never returned. See Deps.Handle.
 			s.deps.Logf("ingest: %s: handling %s: %v", name, ev.Condition, err)
 		}
 	})
 
 	for ctx.Err() == nil {
-		err := src.Run(ctx, sink)
+		err := r.src.Run(ctx, sink)
 		if ctx.Err() != nil {
 			return
 		}
@@ -186,7 +429,7 @@ func (s *Supervisor) runSource(ctx context.Context, src event.Source) {
 			// fix -- a bad key, a certificate pin mismatch. It is recorded and
 			// raised, and the source is NOT restarted in a loop against a
 			// configuration that cannot work.
-			s.fail(ctx, name, err)
+			s.fail(parent, r, err)
 			return
 		}
 		// Returned nil without cancellation: unexpected, because sources
@@ -194,10 +437,8 @@ func (s *Supervisor) runSource(ctx context.Context, src event.Source) {
 		// UI can show a source that keeps coming back.
 		s.deps.Logf("ingest: %s stopped on its own; restarting in %s", name, s.deps.RestartDelay)
 		s.mu.Lock()
-		if st := s.state[name]; st != nil {
-			st.restarts++
-			st.runningFor = s.deps.Now()
-		}
+		r.state.restarts++
+		r.state.runningFor = s.deps.Now()
 		s.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -207,11 +448,10 @@ func (s *Supervisor) runSource(ctx context.Context, src event.Source) {
 	}
 }
 
-func (s *Supervisor) fail(ctx context.Context, name string, err error) {
+func (s *Supervisor) fail(ctx context.Context, r *runner, err error) {
+	name := r.state.name
 	s.mu.Lock()
-	if st := s.state[name]; st != nil {
-		st.fatal = err.Error()
-	}
+	r.state.fatal = err.Error()
 	s.mu.Unlock()
 
 	s.deps.Logf("ingest: %s cannot run: %v", name, err)
@@ -221,20 +461,14 @@ func (s *Supervisor) fail(ctx context.Context, name string, err error) {
 	ent := sourceEntity(name)
 	_ = s.deps.Raise(ctx, ent, event.ConditionSourceSilent, incident.SeverityHigh,
 		"The "+name+" source cannot run",
-		fmt.Sprintf("%v. Nothing from %s will be reported until this is fixed and "+
-			"the service is restarted.", err, name))
+		fmt.Sprintf("%v. Nothing from %s will be reported until this is fixed.", err, name))
 }
 
-func (s *Supervisor) note(name string) {
+func (s *Supervisor) note(r *runner) {
 	now := s.deps.Now()
 	s.mu.Lock()
-	st := s.state[name]
-	if st == nil {
-		st = &sourceState{name: name, runningFor: now}
-		s.state[name] = st
-	}
-	st.lastEventAt = now
-	st.events++
+	r.state.lastEventAt = now
+	r.state.events++
 	s.mu.Unlock()
 }
 
@@ -254,7 +488,12 @@ func (s *Supervisor) runDeadman(ctx context.Context) {
 
 func (s *Supervisor) checkLiveness(ctx context.Context) {
 	now := s.deps.Now()
-	for _, src := range s.sources {
+	s.mu.Lock()
+	running := append([]*runner(nil), s.running...)
+	s.mu.Unlock()
+
+	for _, r := range running {
+		src := r.src
 		window := src.Liveness()
 		if window <= 0 {
 			// The source has declared that silence means nothing for it. An
@@ -262,17 +501,16 @@ func (s *Supervisor) checkLiveness(ctx context.Context) {
 			// somebody made in that source's code.
 			continue
 		}
-		name := src.Name()
+		name := r.state.name
 
 		s.mu.Lock()
-		st := s.state[name]
-		if st == nil || st.fatal != "" {
+		if r.state.fatal != "" {
 			// Already reported as unable to run. A second incident saying it
 			// is also quiet adds nothing and splits the operator's attention.
 			s.mu.Unlock()
 			continue
 		}
-		last := st.lastEventAt
+		last := r.state.lastEventAt
 		s.mu.Unlock()
 
 		// CONTACT, not events, wherever the source can tell us.
@@ -298,9 +536,9 @@ func (s *Supervisor) checkLiveness(ctx context.Context) {
 		quiet := now.Sub(last)
 
 		s.mu.Lock()
-		wasSilent := st.silent
+		wasSilent := r.state.silent
 		nowSilent := quiet > window
-		st.silent = nowSilent
+		r.state.silent = nowSilent
 		s.mu.Unlock()
 
 		switch {
@@ -512,21 +750,18 @@ type Status struct {
 func (s *Supervisor) Statuses() []Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]Status, 0, len(s.sources))
-	for _, src := range s.sources {
-		st := s.state[src.Name()]
-		if st == nil {
-			continue
-		}
+	out := make([]Status, 0, len(s.running))
+	for _, r := range s.running {
+		st := r.state
 		status := Status{
 			Name: st.name, Events: st.events, LastEventAt: st.lastEventAt,
 			Silent: st.silent, Fatal: st.fatal, Restarts: st.restarts,
-			Since: st.runningFor, Expected: src.Liveness(),
+			Since: st.runningFor, Expected: r.src.Liveness(),
 		}
-		if c, ok := src.(event.Contactable); ok {
+		if c, ok := r.src.(event.Contactable); ok {
 			status.LastContactAt = c.LastContact()
 		}
-		if d, ok := src.(event.Diagnosable); ok {
+		if d, ok := r.src.(event.Diagnosable); ok {
 			status.LastError = d.LastError()
 		}
 		out = append(out, status)

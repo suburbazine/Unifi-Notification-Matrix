@@ -1,8 +1,11 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
@@ -29,9 +32,9 @@ func keyFor(c Console, product string) secret.Secret {
 	return k
 }
 
-func BuildSources(c *Config) ([]event.Source, []error) {
+func BuildSourcesKeyed(c *Config) ([]KeyedSource, []error) {
 	var (
-		out      []event.Source
+		out      []KeyedSource
 		problems []error
 	)
 	for _, con := range c.Consoles {
@@ -60,7 +63,7 @@ func BuildSources(c *Config) ([]event.Source, []error) {
 					problems = append(problems, fmt.Errorf("console %q: protect: %w", con.Name, err))
 					continue
 				}
-				out = append(out, s)
+				out = append(out, KeyedSource{Key: sourceKey(con, protect.SourceName), Source: s})
 
 			case access.SourceName:
 				s, err := access.New(access.Config{
@@ -70,7 +73,7 @@ func BuildSources(c *Config) ([]event.Source, []error) {
 					problems = append(problems, fmt.Errorf("console %q: access: %w", con.Name, err))
 					continue
 				}
-				out = append(out, s)
+				out = append(out, KeyedSource{Key: sourceKey(con, access.SourceName), Source: s})
 
 			case network.SourceName:
 				s, err := network.New(network.Config{
@@ -80,7 +83,7 @@ func BuildSources(c *Config) ([]event.Source, []error) {
 					problems = append(problems, fmt.Errorf("console %q: network: %w", con.Name, err))
 					continue
 				}
-				out = append(out, s)
+				out = append(out, KeyedSource{Key: sourceKey(con, network.SourceName), Source: s})
 
 			case "":
 				// A blank entry in the list. Ignored rather than reported:
@@ -93,6 +96,47 @@ func BuildSources(c *Config) ([]event.Source, []error) {
 			}
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Source.Name() < out[j].Source.Name() })
+	return out, problems
+}
+
+// KeyedSource is a built source alongside a fingerprint of everything that
+// went into building it.
+//
+// THE NAME IS NOT AN IDENTITY. Every source returns a per-application constant
+// -- "protect", "access", "network" -- so a Protect source built from a
+// corrected API key has the same name as the broken one it replaces. A daemon
+// reloading its configuration and matching by name would keep the broken one
+// running and report it as healthy, which is the precise failure this product
+// exists to refuse.
+//
+// The key covers the host, the application, the key that application is given,
+// the pinned fingerprint and whether verification is skipped: change any of
+// them and this is a different connection to make. It is a hash, so it can be
+// compared, logged and kept in a map without the credential going with it.
+type KeyedSource struct {
+	Key    string
+	Source event.Source
+}
+
+func sourceKey(con Console, app string) string {
+	k, _ := con.KeyFor(app)
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		strings.ToLower(strings.TrimSpace(con.Host)),
+		app,
+		k.Reveal(),
+		strings.ToLower(strings.TrimSpace(con.Fingerprint)),
+		strconv.FormatBool(con.InsecureSkipVerify),
+	}, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+// BuildSources is BuildSourcesKeyed for callers that only want the sources.
+func BuildSources(c *Config) ([]event.Source, []error) {
+	keyed, problems := BuildSourcesKeyed(c)
+	out := make([]event.Source, 0, len(keyed))
+	for _, k := range keyed {
+		out = append(out, k.Source)
+	}
 	return out, problems
 }

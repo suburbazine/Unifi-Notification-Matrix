@@ -21,9 +21,20 @@ type fakeSource struct {
 
 	mu    sync.Mutex
 	runs  int
+	exits int
 	emit  []event.Event
 	err   error
 	block bool
+
+	// chatty emits an event over and over until cancelled, the way a busy
+	// site does; it is what a Replace has to be safe against.
+	chatty bool
+
+	// teardown is how long Run takes to return once cancelled, the way a
+	// socket-backed source takes a moment to close what it holds. It is what
+	// tells a supervisor that WAITED for a source from one that only told it
+	// to go.
+	teardown time.Duration
 }
 
 func (f *fakeSource) Name() string            { return f.name }
@@ -32,14 +43,25 @@ func (f *fakeSource) Liveness() time.Duration { return f.liveness }
 func (f *fakeSource) Run(ctx context.Context, out event.Sink) error {
 	f.mu.Lock()
 	f.runs++
-	evs, err, block := f.emit, f.err, f.block
+	evs, err, block, chatty := f.emit, f.err, f.block, f.chatty
 	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.exits++
+		f.mu.Unlock()
+	}()
 
 	for _, e := range evs {
 		out.Emit(e)
 	}
-	if block {
+	for chatty && ctx.Err() == nil {
+		out.Emit(event.Event{Source: f.name, Condition: "motion",
+			Entity: event.Entity{ID: "cam-1", Name: "Front Gate"}})
+		time.Sleep(50 * time.Microsecond)
+	}
+	if block || chatty {
 		<-ctx.Done()
+		time.Sleep(f.teardown)
 		return nil
 	}
 	return err
@@ -49,6 +71,13 @@ func (f *fakeSource) runCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.runs
+}
+
+// exitCount is how many times Run has RETURNED.
+func (f *fakeSource) exitCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.exits
 }
 
 type raised struct {
@@ -212,7 +241,7 @@ func TestSilenceBeyondTheDeclaredWindowIsRaisedAndThenResolved(t *testing.T) {
 	// It speaks again, and the incident is resolved -- a deadman that can
 	// raise but never resolve teaches the operator to ignore the one message
 	// that means the product itself is broken.
-	s.note("protect")
+	heardFrom(s, "protect")
 	s.checkLiveness(context.Background())
 	if _, _, n := r.counts(); n != 1 {
 		t.Errorf("resolves = %d, want 1 after the source recovered", n)
@@ -313,6 +342,18 @@ func TestNoSourcesIsSaidOutLoud(t *testing.T) {
 	})
 	cancel()
 	<-done
+}
+
+// heardFrom is what the sink does when a source emits, without running one.
+func heardFrom(s *Supervisor, name string) {
+	s.mu.Lock()
+	running := append([]*runner(nil), s.running...)
+	s.mu.Unlock()
+	for _, r := range running {
+		if r.state.name == name {
+			s.note(r)
+		}
+	}
 }
 
 func waitFor(t *testing.T, cond func() bool) {
@@ -421,9 +462,7 @@ func TestASourceInContactIsNotSilentEvenWithNothingToReport(t *testing.T) {
 	}}
 	src.sawFrame(t0)
 	r := &recorder{}
-	s, _ := New([]event.Source{&src.fakeSource}, r.deps(func() time.Time { return now }))
-	// Register the contactable wrapper as the source the supervisor sees.
-	s.sources = []event.Source{src}
+	s, _ := New([]event.Source{src}, r.deps(func() time.Time { return now }))
 
 	// Four hours of a perfectly healthy, entirely uneventful night. The socket
 	// keeps receiving; nothing is worth emitting.
