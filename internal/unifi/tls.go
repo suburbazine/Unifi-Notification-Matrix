@@ -82,6 +82,23 @@ func (t TLS) Config() (*tls.Config, error) {
 		return cfg, nil
 	}
 
+	// A PIN REPLACES THE CHAIN; IT DOES NOT STAND BEHIND IT.
+	//
+	// A UniFi console's certificate is signed by nothing, so with the chain
+	// verifier switched on the handshake fails at "unknown authority" before
+	// VerifyPeerCertificate is ever consulted -- and the pin, the stronger
+	// control, never gets to decide. An operator who pinned a console and
+	// left the certificate check on therefore could not connect at all, and
+	// recovered the only way the screen offered: by turning the check off,
+	// which reads like being told to weaken something in order to work.
+	//
+	// So when a pin is set, the chain verifier is stood down here. Nothing is
+	// being skipped: an exact identity is being checked instead of a
+	// delegated one, and the check below refuses on mismatch rather than
+	// warning. The operator's flag is irrelevant once a pin exists, which is
+	// what the interface now says.
+	cfg.InsecureSkipVerify = true
+
 	cfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 		if len(rawCerts) == 0 {
 			return ErrNoCertificate

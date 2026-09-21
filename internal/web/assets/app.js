@@ -1471,12 +1471,30 @@ function renderConsolesSection(body, ctx) {
     card.appendChild(sr);
 
     var ir = el("div", "row");
+    // THE ADVICE USED TO BE IMPOSSIBLE TO FOLLOW. "Leave the check on and
+    // paste a fingerprint" cannot connect to a console whose certificate is
+    // signed by nothing: the chain verifier refuses before the pin is
+    // consulted. An operator who pinned a console found it would not connect
+    // and recovered by turning this on, which looks like being told to
+    // weaken something to make the product work.
+    //
+    // A pin now replaces the chain check, so with a fingerprint set this
+    // control decides nothing -- and says so rather than leaving somebody to
+    // wonder which of the two is in charge.
+    var pinned = !!(c.fingerprint || "").trim();
     ir.appendChild(labelled("Skip certificate check", check(c, "insecure_skip_verify"),
-      { text: "Leave the certificate check on. A UniFi console's certificate is " +
-        "self-signed, so the usual answer is to paste its SHA-256 fingerprint " +
-        "above -- that pins this one console. Skipping the check instead accepts " +
-        "ANY certificate, which is the state an attacker on your network needs.",
-        label: "why leave it on?", tone: "warn" }));
+      pinned
+        ? { text: "This console is pinned, so this setting changes nothing: the " +
+            "fingerprint above is checked after every handshake and a console " +
+            "that presents anything else is refused. That is a stricter check " +
+            "than the usual one, not a weaker one.",
+            label: "pinned — no effect", tone: "ok" }
+        : { text: "A UniFi console's certificate is self-signed, so the usual " +
+            "answer is to paste its SHA-256 fingerprint above: that pins this " +
+            "one console and replaces the ordinary check. With no fingerprint, " +
+            "turning this on accepts ANY certificate, which is the state an " +
+            "attacker on your network needs.",
+            label: "why not just skip?", tone: "warn" }));
     card.appendChild(ir);
 
     if (c.api_key_credential) {

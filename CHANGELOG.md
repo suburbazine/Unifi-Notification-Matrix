@@ -13,9 +13,22 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Fixed
+
+- **A pinned console could not connect unless certificate verification was
+  also switched off.** A UniFi console's certificate is signed by nothing, so
+  with the ordinary chain check on the handshake failed at "unknown authority"
+  before the pin was ever consulted — and the pin is the stronger control.
+
+  An operator who pinned a console found it would not connect, and the only
+  recovery the screen offered was to turn the certificate check off, which
+  reads like being told to weaken something to make the product work.
+
+  A pin now **replaces** chain verification rather than standing behind it: it
+  is checked after every handshake, and a console presenting any other
+  certificate is refused. The checkbox decides nothing once a fingerprint is
+  set, and the Consoles screen says so instead of advising a combination that
+  could not work. Nothing changes for a console with no pin.
 
 ## [0.3.7] — 2026-09-21
 

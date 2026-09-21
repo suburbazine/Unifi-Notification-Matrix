@@ -74,6 +74,12 @@ consoles:
 `insecure_skip_verify: true` is normal — UniFi consoles use self-signed
 certificates. You can pin the certificate later; the checklist will remind you.
 
+**Once you pin one, that flag stops mattering.** A fingerprint replaces the
+ordinary certificate check rather than standing behind it: it is checked after
+every handshake, and a console presenting anything else is refused outright.
+Leaving `insecure_skip_verify` on beside a pin is not a weakening, and turning
+it off beside a pin changes nothing.
+
 **`sources` is the setting people most often leave empty.** A console with no
 sources listed is polled for nothing, and everything still looks correct.
 
