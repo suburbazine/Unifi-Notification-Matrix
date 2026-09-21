@@ -285,6 +285,16 @@ type SourceHealth struct {
 
 	Silent bool   `json:"silent"`
 	Detail string `json:"detail,omitempty"`
+
+	// NeverConnected is a source that has not once reached its console since
+	// this daemon started.
+	//
+	// A THIRD STATE, because it is a different fact from silence and a much
+	// worse one. Silent means it was working and stopped; this means it has
+	// never worked, and on a misconfigured installation it is the state that
+	// matters -- the board showed three sources "reporting" on a console
+	// where two of the three applications were not installed at all.
+	NeverConnected bool `json:"never_connected,omitempty"`
 }
 
 // ChannelHealth mirrors channel.Stats plus whether the channel is switched on.

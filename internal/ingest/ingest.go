@@ -491,6 +491,13 @@ type Status struct {
 	// reader guess whether quiet is bad.
 	Expected time.Duration
 
+	// LastError is why the source's last read failed, "" when it did not.
+	//
+	// Reported beside LastContactAt because the pair is the whole diagnosis: a
+	// source with no contact and no error has not tried yet; one with no
+	// contact and an error is broken, and the error says how.
+	LastError string
+
 	// LastContactAt is the last time the source reached its console at all,
 	// where the source can tell the difference. Zero when it cannot.
 	//
@@ -518,6 +525,9 @@ func (s *Supervisor) Statuses() []Status {
 		}
 		if c, ok := src.(event.Contactable); ok {
 			status.LastContactAt = c.LastContact()
+		}
+		if d, ok := src.(event.Diagnosable); ok {
+			status.LastError = d.LastError()
 		}
 		out = append(out, status)
 	}

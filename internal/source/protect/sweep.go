@@ -119,7 +119,18 @@ func (s *Source) Reconcile(ctx context.Context, out event.Sink) error {
 	}
 
 	s.mu.Lock()
-	s.health.LastSweepAt = now
+	// CONTACT IS WHAT CAME BACK, NOT WHAT WAS ATTEMPTED. This used to stamp
+	// unconditionally, so a console with no Protect installed -- which answers
+	// these paths with the UniFi OS web page, failing every read -- reported
+	// "in contact; nothing to report yet" on the health board for as long as
+	// the daemon ran. A source that has never reached anything must not look
+	// like a quiet one.
+	//
+	// A PARTIAL read still counts: devices that arrived are devices the
+	// console sent, and the sweep applies them above for the same reason.
+	if err == nil || len(devices) > 0 {
+		s.health.LastSweepAt = now
+	}
 	s.health.SweepTransitions += int64(len(transitions))
 	if err != nil {
 		s.health.LastSweepErr = err.Error()

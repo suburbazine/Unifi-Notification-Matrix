@@ -365,13 +365,29 @@ func (s *Source) poll(ctx context.Context, out event.Sink) {
 func (s *Source) notePoll(now time.Time, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.health.LastPollAt = now
 	s.health.Polls++
 	if err != nil {
+		// NOT CONTACT. This stamped LastPollAt unconditionally, which made a
+		// source that had never once been allowed in -- a key for a different
+		// appliance, answered 401 every time -- read as "in contact; nothing
+		// to report yet" on the health board, permanently, because this
+		// source declares no deadman to eventually call it silent.
+		//
+		// The comment on LastContact has always said "the last poll that
+		// actually reached the console". Now it is true.
 		s.health.LastPollErr = err.Error()
 		return
 	}
+	s.health.LastPollAt = now
 	s.health.LastPollErr = ""
+}
+
+// LastError is the most recent reason a poll failed, or "" when the last one
+// worked. See event.Diagnosable.
+func (s *Source) LastError() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.health.LastPollErr
 }
 
 // noteState counts a state string this build had no rule for.

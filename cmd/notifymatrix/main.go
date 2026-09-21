@@ -976,41 +976,7 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 				}
 				_ = c
 				for _, st := range supervisor.Statuses() {
-					// "Last seen" is the last CONTACT where the source can
-					// tell the difference, because that is the question the
-					// column answers: are we still watching? Showing the last
-					// emitted event made a healthy source over a quiet night
-					// read as hours dead, next to a green badge.
-					lastSeen := st.LastEventAt
-					if !st.LastContactAt.IsZero() {
-						lastSeen = st.LastContactAt
-					}
-					sh := web.SourceHealth{
-						Name:           st.Name,
-						LastSeen:       lastSeen,
-						ExpectedWithin: st.Expected,
-						Silent:         st.Silent,
-					}
-					switch {
-					case st.Fatal != "":
-						// Distinct from silent on purpose: a source that
-						// cannot run will never recover on its own, and
-						// telling an operator it is merely "quiet" sends them
-						// looking at the console instead of at the config.
-						sh.Detail = "cannot run: " + st.Fatal
-						sh.Silent = true
-					case st.Restarts > 0:
-						sh.Detail = fmt.Sprintf("%d event(s); restarted %d time(s)",
-							st.Events, st.Restarts)
-					default:
-						sh.Detail = fmt.Sprintf("%d event(s)", st.Events)
-					}
-					// A source in contact with nothing to say is the normal
-					// state of a quiet site, and saying so stops "0 event(s)"
-					// reading as a fault.
-					if !st.Silent && st.Events == 0 && !st.LastContactAt.IsZero() {
-						sh.Detail = "in contact; nothing to report yet"
-					}
+					sh := sourceHealthFrom(st)
 					h.Sources = append(h.Sources, sh)
 				}
 				if st, err := service.New().Status(); err == nil {
@@ -1877,6 +1843,86 @@ func listIncidents(dataDir string, links bool) int {
 		}
 	}
 	return 0
+}
+
+// sourceHealthFrom turns one supervisor status into what the board shows.
+//
+// EXTRACTED BECAUSE IT KEPT BEING WRONG. As a closure inside the daemon it was
+// unreachable from any test, and it produced two lies in a row: a source that
+// had never once reached its console badged as reporting, and then, once that
+// was fixed, "last seen 17 seconds ago" beside a badge saying no contact --
+// because the supervisor starts lastEventAt at launch so the deadman has a
+// grace window, and this read that as a sighting.
+func sourceHealthFrom(st ingest.Status) web.SourceHealth {
+	// "Last seen" is the last CONTACT where the source can tell the
+	// difference, because that is the question the column answers: are we
+	// still watching? Showing the last emitted event made a healthy source
+	// over a quiet night read as hours dead, next to a green badge.
+	lastSeen := st.LastEventAt
+	if !st.LastContactAt.IsZero() {
+		lastSeen = st.LastContactAt
+	}
+	sh := web.SourceHealth{
+		Name:           st.Name,
+		LastSeen:       lastSeen,
+		ExpectedWithin: st.Expected,
+		Silent:         st.Silent,
+	}
+	switch {
+	case st.Fatal != "":
+		// Distinct from silent on purpose: a source that cannot run will
+		// never recover on its own, and telling an operator it is merely
+		// "quiet" sends them looking at the console instead of at the config.
+		sh.Detail = "cannot run: " + st.Fatal
+		sh.Silent = true
+	case st.Restarts > 0:
+		sh.Detail = fmt.Sprintf("%d event(s); restarted %d time(s)",
+			st.Events, st.Restarts)
+	default:
+		sh.Detail = fmt.Sprintf("%d event(s)", st.Events)
+	}
+	// A source in contact with nothing to say is the normal state of a quiet
+	// site, and saying so stops "0 event(s)" reading as a fault.
+	if !st.Silent && st.Events == 0 && !st.LastContactAt.IsZero() {
+		sh.Detail = "in contact; nothing to report yet"
+	}
+	// NEVER ONCE. The board said "in contact; nothing to report yet" for two
+	// applications that were not installed on the console at all, and a third
+	// whose key belonged to a different appliance.
+	//
+	// Checked last so it wins: this is the fact an operator most needs, and
+	// every branch above would paper over it.
+	if st.LastContactAt.IsZero() && st.Events == 0 && st.Fatal == "" {
+		sh.NeverConnected = true
+		sh.Silent = true
+		// Zeroed so the column says "never". The supervisor's lastEventAt
+		// starts at launch, so leaving it put a fresh timestamp beside a
+		// badge saying there has been no contact -- the two halves of one row
+		// contradicting each other.
+		sh.LastSeen = time.Time{}
+		sh.Detail = "no contact with the console yet"
+		if why := firstLine(st.LastError, 160); why != "" {
+			sh.Detail += " — " + why
+		}
+	}
+	return sh
+}
+
+// firstLine trims a source's error down to something a table cell can hold.
+//
+// A failing sweep reports every endpoint it could not read, so the raw string
+// is three dial errors carrying full URLs -- accurate, and a wall of text in
+// the one column an operator is scanning. The first line carries the
+// diagnosis; the rest repeats it per path.
+func firstLine(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	if len(s) > max {
+		s = strings.TrimSpace(s[:max]) + "…"
+	}
+	return s
 }
 
 func selfcheck(dataDir string) int {

@@ -175,7 +175,17 @@ type webView struct {
 	Listen     string `json:"listen"`
 	AckBaseURL string `json:"ack_base_url,omitempty"`
 	AckListen  string `json:"ack_listen,omitempty"`
-	AckKeySet  bool   `json:"ack_key_set"`
+
+	// LinkListen is the peer link's own listener.
+	//
+	// Absent from this shape until it was noticed that the Peer link section
+	// tells the operator to set it "in Web below" -- and Web had no such
+	// field, so the instruction sent people to the ACK link address, which is
+	// the only thing on that screen with "link address" in its label. They
+	// set it, restarted, and nothing changed, because nothing had.
+	LinkListen string `json:"link_listen,omitempty"`
+
+	AckKeySet bool `json:"ack_key_set"`
 }
 
 // ---- inbound ----
@@ -327,6 +337,12 @@ type webUpdate struct {
 	// plain string would let any client that omits the field silently re-widen
 	// an exposure the operator deliberately narrowed.
 	AckListen *string `json:"ack_listen"`
+
+	// A pointer for a sharper version of the same reason: every paired peer
+	// holds this address, so a partial save that blanked it would cut them
+	// off -- silently, since a peer that cannot reach the listener looks
+	// exactly like a peer with nothing to say.
+	LinkListen *string `json:"link_listen"`
 }
 
 // webhookViewName is the endpoint's name, defaulting to what the original
@@ -351,6 +367,7 @@ func viewSettings(c *config.Config) settingsView {
 			Listen:     c.Web.Listen,
 			AckBaseURL: c.Web.AckBaseURL,
 			AckListen:  c.Web.AckListen,
+			LinkListen: c.Web.LinkListen,
 			AckKeySet:  !c.Web.AckKey.IsZero(),
 		},
 	}
@@ -781,6 +798,9 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 	}
 	if upd.Web.AckListen != nil {
 		next.Web.AckListen = strings.TrimSpace(*upd.Web.AckListen)
+	}
+	if upd.Web.LinkListen != nil {
+		next.Web.LinkListen = strings.TrimSpace(*upd.Web.LinkListen)
 	}
 	next.Web.AckKey = cur.Web.AckKey
 	next.Web.PasswordHash = cur.Web.PasswordHash

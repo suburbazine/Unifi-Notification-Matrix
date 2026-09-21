@@ -137,3 +137,19 @@ type Source interface {
 type Contactable interface {
 	LastContact() time.Time
 }
+
+// Diagnosable is an optional interface a Source may implement to report why
+// its last read failed.
+//
+// THE DAEMON ALREADY KNOWS. A source that has never once reached its console
+// shows on the board as quiet, or -- before the sources stopped counting an
+// attempt as contact -- as reporting; either way the operator is sent to
+// investigate something the process could have told them. On the console that
+// prompted this, the answer was "Protect is not installed on this machine",
+// which the source had in hand on its first read and never said.
+//
+// The string is shown to an operator, so it says what went wrong, not where in
+// the code it went wrong.
+type Diagnosable interface {
+	LastError() string
+}

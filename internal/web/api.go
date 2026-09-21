@@ -144,7 +144,12 @@ type sourceHealthView struct {
 	AgeSeconds            int64      `json:"age_seconds,omitempty"`
 	ExpectedWithinSeconds int64      `json:"expected_within_seconds,omitempty"`
 	Silent                bool       `json:"silent"`
-	Detail                string     `json:"detail,omitempty"`
+
+	// NeverConnected is a source that has not once reached its console. A
+	// state of its own, because "silent" means it used to work.
+	NeverConnected bool `json:"never_connected,omitempty"`
+
+	Detail string `json:"detail,omitempty"`
 }
 
 func (s *Server) healthView(h Health) healthView {
@@ -167,6 +172,7 @@ func (s *Server) healthView(h Health) healthView {
 			Name:                  src.Name,
 			ExpectedWithinSeconds: int64(src.ExpectedWithin / time.Second),
 			Silent:                src.Silent,
+			NeverConnected:        src.NeverConnected,
 			Detail:                src.Detail,
 		}
 		if !src.LastSeen.IsZero() {

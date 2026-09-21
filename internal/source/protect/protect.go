@@ -420,6 +420,20 @@ func (s *Source) Liveness() time.Duration { return s.cfg.LivenessWindow }
 // called that a dead source after thirty minutes and paged about it every half
 // hour thereafter. The sockets are chatty at idle even when nothing is
 // happening, which is exactly what makes them worth watching instead.
+// LastError is the most recent reason a read failed, or "" when the last one
+// worked. See event.Diagnosable.
+//
+// The interface needs this to say something true about a source that has
+// never once succeeded: without it, "no contact" is a state an operator has
+// to go and investigate, when the daemon already knows the answer -- and on
+// the console that prompted this, the answer was that Protect is not
+// installed on it at all.
+func (s *Source) LastError() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.health.LastSweepErr
+}
+
 func (s *Source) LastContact() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()

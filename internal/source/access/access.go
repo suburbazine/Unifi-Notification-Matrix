@@ -239,6 +239,12 @@ type Health struct {
 	// has never been enumerated from hardware, so this is how it gets found.
 	UnknownLogKeys map[string]int64
 
+	// LastSocketErr is why the notifications socket last failed, kept so the
+	// interface can say what is wrong rather than only that nothing arrived.
+	// On a console with no Access installed the handshake fails against the
+	// UniFi OS web page, and that sentence is the whole diagnosis.
+	LastSocketErr string
+
 	StreamMuteReported bool
 
 	DoorsKnown int
@@ -385,6 +391,23 @@ func (s *Source) LastContact() time.Time {
 	s.mu.Unlock()
 	if _, lastRun, lastErr, _ := s.poll.stats(); lastErr == "" && lastRun.After(last) {
 		last = lastRun
+	}
+	return last
+}
+
+// LastError is the most recent reason a read failed, or "" when the last one
+// worked. See event.Diagnosable.
+//
+// Access already declined to count a failed poll as contact, which is why its
+// row went quiet rather than green on a console with no Access installed. It
+// still could not say what was wrong, so "silent" was as much as the board
+// could offer for "this application is not on this machine".
+func (s *Source) LastError() string {
+	s.mu.Lock()
+	last := s.health.LastSocketErr
+	s.mu.Unlock()
+	if _, _, lastErr, _ := s.poll.stats(); lastErr != "" {
+		return lastErr
 	}
 	return last
 }
@@ -743,6 +766,9 @@ func (s *Source) readSocket(ctx context.Context, out event.Sink) (time.Duration,
 	started := s.cfg.Now()
 	conn, resp, err := s.dial().DialContext(ctx, wsURL, hdr)
 	if err != nil {
+		s.mu.Lock()
+		s.health.LastSocketErr = err.Error()
+		s.mu.Unlock()
 		if resp != nil {
 			code := resp.StatusCode
 			_ = resp.Body.Close()
@@ -759,6 +785,7 @@ func (s *Source) readSocket(ctx context.Context, out event.Sink) (time.Duration,
 	s.mu.Lock()
 	s.health.Connected = true
 	s.health.Connects++
+	s.health.LastSocketErr = ""
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()

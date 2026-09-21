@@ -631,7 +631,12 @@ function renderHealth(h) {
   var sources = (h && h.sources) || [];
   var channels = (h && h.channels) || [];
   var reporting = sources.filter(function (x) { return !x.silent; }).length;
-  var silent = sources.length - reporting;
+  // NEVER CONNECTED IS NOT SILENCE. Silent is a source that was working and
+  // stopped; this one has never reached its console since the daemon started,
+  // which on a misconfigured installation is every source it has -- and the
+  // board used to render that as green.
+  var never = sources.filter(function (x) { return x.never_connected; }).length;
+  var silent = sources.length - reporting - never;
   var failing = channels.filter(function (c) { return channelState(c).tone === "err"; }).length;
   var held = channels.filter(function (c) { return channelState(c).held; }).length;
 
@@ -641,13 +646,14 @@ function renderHealth(h) {
   fig.appendChild(badge(reporting + (reporting === 1 ? " source" : " sources") + " reporting",
     reporting ? "is-ok" : "is-muted"));
   if (silent) fig.appendChild(badge(silent + " silent", "is-warn"));
+  if (never) fig.appendChild(badge(never + " never connected", "is-err"));
   if (failing) fig.appendChild(badge(failing + (failing === 1 ? " channel" : " channels") + " failing", "is-err"));
   if (held) fig.appendChild(badge(held + " held back", "is-warn"));
   if (!failing && !held && channels.length) {
     fig.appendChild(el("span", "", "· " + channels.length + (channels.length === 1 ? " channel" : " channels") + " ready"));
   }
   setLede("health", "activity", "Is the machinery working.", fig,
-    failing || (!sources.length) ? "err" : (silent || held ? "warn" : "ok"));
+    failing || never || (!sources.length) ? "err" : (silent || held ? "warn" : "ok"));
 
   var srcs = byId("health-sources"); clear(srcs);
   if (!sources.length) {
@@ -669,7 +675,9 @@ function renderHealth(h) {
       row.insertCell().textContent = s.expected_within_seconds
         ? age(s.expected_within_seconds) : "\u2014";
       var c = row.insertCell();
-      c.appendChild(badge(s.silent ? "silent" : "reporting", s.silent ? "is-warn" : "is-ok"));
+      c.appendChild(s.never_connected
+        ? badge("no contact", "is-err")
+        : badge(s.silent ? "silent" : "reporting", s.silent ? "is-warn" : "is-ok"));
       if (s.detail) c.appendChild(el("div", "muted small", s.detail));
     });
     srcs.appendChild(wrap(t));
@@ -1401,7 +1409,8 @@ var SECTION_SAVES = {
   web: {
     payload: function (ctx) {
       var w = ctx.draft.web || {};
-      return { web: { listen: w.listen || "", ack_base_url: w.ack_base_url || "", ack_listen: w.ack_listen || "" } };
+      return { web: { listen: w.listen || "", ack_base_url: w.ack_base_url || "",
+        ack_listen: w.ack_listen || "", link_listen: w.link_listen || "" } };
     },
     apply: function (ctx, fresh) { ctx.draft.web = clone(fresh.web || {}); },
     restart: "A listen address change"
@@ -1743,6 +1752,22 @@ function renderWebSection(body, ctx) {
       "forward cannot pick a path, so forwarding the main listen address " +
       "publishes the whole status page along with it.",
       label: "public name?", tone: "warn" }, "web.ack_listen"));
+
+  // THE FIELD THE PEER LINK SECTION SENDS PEOPLE TO. It has to sit here, and
+  // it has to be named the same way in both places: the only other thing on
+  // this screen with "link address" in its label is the ACK one, which is
+  // what an operator following that instruction set instead -- and then
+  // restarted, and found the Peer link section unchanged, because nothing
+  // had changed.
+  var linkListen = bind(w, "link_listen");
+  linkListen.placeholder = "blank = none · auto · 0.0.0.0:PORT";
+  wf.appendChild(labelled("Peer link address", linkListen,
+    { text: "Where THIS MACHINE listens for a paired product: \"auto\", or " +
+      "0.0.0.0 and a port. A third listener starts that serves ONLY /link/, " +
+      "over TLS with its own certificate. Blank means no peer can pair, and " +
+      "clearing it cuts off any that already have -- they hold this address. " +
+      "It takes a restart, and the Peer link section stays empty until then.",
+      label: "paired already?", tone: "warn" }, "web.link_listen"));
   wc.appendChild(wf);
   var wr = el("div", "row");
   wr.appendChild(badge(w.ack_key_set ? "ack signing key set" : "ack signing key not set",
@@ -1819,8 +1844,9 @@ function renderLinkSection(body, ctx) {
   if (!st.available) {
     body.appendChild(callout(
       "No peer link listener is running, so there is nowhere for another " +
-      "product to pair. Set a link address in Web below and restart, then " +
-      "come back here.", "info", "Nothing is listening"));
+      "product to pair. Set the peer link address in Web — the field is " +
+      "called \"Peer link address\", not the ack one above it — then " +
+      "restart and come back here.", "info", "Nothing is listening"));
     body.appendChild(el("div", "note",
       "A peer link lets another Xtremission product -- Sentry, for door " +
       "events -- raise incidents here instead of running its own alerting. " +
