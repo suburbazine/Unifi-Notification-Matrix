@@ -13,9 +13,27 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Added
+
+- **A security policy, and a private channel to use it on.**
+  [`SECURITY.md`](SECURITY.md) names where a report goes — GitHub's private
+  advisories, which are enabled on this repository — what is in scope, and
+  what happens after you send it.
+
+  It also lists what is **already known and written down**: the acknowledgement
+  token travelling in cleartext, the random acknowledgement port not being a
+  security measure, and an appliance install running as root. Those are
+  documented trades, not oversights, and somebody should not spend a weekend
+  rediscovering one.
+
+  And it says what a report must not contain. A real site's camera names are
+  room names, its console address is a home address, and its acknowledgement
+  tokens are live until their incidents close — `notifymatrix demo` reproduces
+  the whole interface with none of that attached to anybody.
+
+- **A description on the repository itself**, which had none. A security tool
+  that does not say what it is on the page where people find it is asking a
+  lot.
 
 ## [0.3.4] — 2026-09-19
 

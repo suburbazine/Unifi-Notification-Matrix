@@ -354,6 +354,18 @@ without one.
 
 ---
 
+## Reporting a security problem
+
+Use GitHub's private reporting —
+**[Report a vulnerability](https://github.com/suburbazine/Unifi-Notification-Matrix/security/advisories/new)**.
+Not a public issue, please, for anything that would tell somebody how to reach
+a stranger's installation before there is a fix to point at.
+
+[SECURITY.md](SECURITY.md) says what is in scope, what is already known and
+written down rather than overlooked, and what happens after you send it.
+
+---
+
 ## Yes, it runs on the UniFi gateway itself
 
 <p align="center">
