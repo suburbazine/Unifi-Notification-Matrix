@@ -1,0 +1,90 @@
+name: Bug report
+description: Something behaves differently from what the documentation says it does.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Not for security problems.** If this would help somebody reach an
+        installation that is not theirs, close this and use
+        [the security policy](https://github.com/suburbazine/Unifi-Notification-Matrix/security/policy)
+        instead.
+
+
+        **Redact before you paste.** Camera and door names are room names, a
+        console address is an address, and an acknowledgement token is live
+        until its incident closes. `notifymatrix demo` reproduces the whole
+        interface over fabricated data if you need a screenshot.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `notifymatrix version`.
+      placeholder: v0.3.4
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: How is it running?
+      options:
+        - Windows service
+        - Linux, systemd unit
+        - UniFi gateway or appliance (docs/GATEWAY.md)
+        - From a terminal, in the foreground
+        - In a container
+        - Something else — described below
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: >-
+        What you did, what it did, and what you expected instead. The third
+        part is the one that is usually missing and usually the point.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Anything it said about it
+      description: >-
+        Log lines, the Health tab, a delivery error, `journalctl -u
+        notifymatrix` or the Windows event log. Redacted.
+      render: text
+
+  - type: dropdown
+    id: sources
+    attributes:
+      label: Which part is involved?
+      multiple: true
+      options:
+        - Protect
+        - Access
+        - Network
+        - Inbound webhook
+        - Incidents and escalation
+        - A notification channel (ntfy, Pushover, email, webhook, voice)
+        - Acknowledgement
+        - The web interface
+        - Install, service or updater
+        - Not sure
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before filing
+      options:
+        - label: >-
+            Nothing above identifies a real site — no camera or door names, no
+            addresses, no tokens, no keys.
+          required: true
+        - label: >-
+            This is not a security vulnerability. (If unsure, treat it as one
+            and use the private channel.)
+          required: true

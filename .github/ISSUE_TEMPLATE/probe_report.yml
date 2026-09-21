@@ -1,0 +1,79 @@
+name: Probe report (schema contribution)
+description: Attach a probe report so this build learns what your firmware actually sends.
+labels: ["probe report"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Thank you — this is the contribution that is hardest to get and worth
+        the most. UniFi's event surfaces are version-gated and undocumented,
+        and the only thing that fixes that is seeing what real consoles send.
+
+
+        **What you attach becomes public, permanently.** An issue attachment
+        is on the internet and stays there even if the issue is deleted. So
+        read the file first — `notifymatrix probe submit` prints the whole
+        thing for exactly that reason.
+
+
+        **If anything in it identifies your site, do not attach it.** That is a
+        bug in the redaction, and reporting *that* matters more than the
+        contribution does. Say so here with no file, or use the security
+        channel if you would rather.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version that produced the report
+      placeholder: v0.3.4
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Console model and firmware
+      description: >-
+        The model and the UniFi OS / application versions. This is the field
+        that makes the report useful later — it is what a `NEW` or `GONE` line
+        gets attributed to.
+      placeholder: UCG-Fiber, UniFi OS 6.0.7, Protect 7.x
+    validations:
+      required: true
+
+  - type: textarea
+    id: notable
+    attributes:
+      label: Anything notable in it
+      description: >-
+        `NEW` lines this build does not handle, `GONE` lines it expected and
+        your firmware does not have, or anything the probe itself got wrong.
+        Optional — the file is the contribution.
+
+  - type: textarea
+    id: attachment
+    attributes:
+      label: The report
+      description: >-
+        Drag the `probe-*.jsonl` file into this box, or paste it if it is
+        small.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before filing
+      options:
+        - label: >-
+            I read the file in full — `notifymatrix probe submit` — rather than
+            trusting that it was redacted.
+          required: true
+        - label: >-
+            It contains no camera or door names, no MAC or IP addresses, no
+            tokens and no site identifiers.
+          required: true
+        - label: >-
+            I understand this attachment is published and cannot be reliably
+            unpublished.
+          required: true

@@ -35,6 +35,26 @@ view against the release before them.
   that does not say what it is on the page where people find it is asking a
   lot.
 
+- **Contributing guidelines, and issue forms to go with them.**
+  [`CONTRIBUTING.md`](CONTRIBUTING.md) says what is worth sending — probe
+  reports first, since firmware revisions nobody here has are the thing that
+  cannot be tested — and what is likely to be declined.
+
+  It also states what happens to contributed code. This project is
+  noncommercial-licensed and commercial licences are sold separately, so a
+  patch offered under the repository licence alone could not be included in
+  them; a contributor grants the broader right, or describes the bug and lets
+  it be reimplemented. That question is cheaper to answer before the first
+  pull request than after it.
+
+  The issue forms ask for the version and platform up front, and the probe
+  form says plainly that an attachment is published permanently and asks the
+  contributor to confirm they read the file rather than trusting the redaction.
+
+  **No code of conduct**, deliberately. It governs a community, and one
+  maintainer promising an enforcement process nobody staffs is worse than no
+  document at all.
+
 ## [0.3.4] — 2026-09-19
 
 **Gateway installs on 0.3.1 through 0.3.3 cannot start.** The daemon looked for

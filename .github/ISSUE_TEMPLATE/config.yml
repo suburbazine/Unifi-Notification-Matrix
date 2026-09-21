@@ -1,0 +1,23 @@
+# Blank issues stay enabled. Something that fits none of the forms is still
+# worth filing, and a form that turns people away is worse than a tidy tracker.
+blank_issues_enabled: true
+
+contact_links:
+  - name: Security vulnerability — do not open an issue
+    url: https://github.com/suburbazine/Unifi-Notification-Matrix/security/policy
+    about: >-
+      Anything that would tell somebody how to reach a stranger's installation
+      goes to a private channel first. Mail licensing@xtremission.com with
+      "security" in the subject, or use GitHub's private advisories.
+
+  - name: Commercial licensing
+    url: https://github.com/suburbazine/Unifi-Notification-Matrix/blob/main/LICENSE.md
+    about: >-
+      Noncommercial use is granted by the licence. Commercial use needs a
+      separate one — mail licensing@xtremission.com.
+
+  - name: Setting it up
+    url: https://github.com/suburbazine/Unifi-Notification-Matrix/blob/main/docs/SETUP.md
+    about: >-
+      Configuration, channels, acknowledgement links and the setup token are
+      covered step by step here. Worth a look before filing.

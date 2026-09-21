@@ -1,0 +1,60 @@
+name: Change or feature proposal
+description: Suggest something this should do differently — before writing the code.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Ask before you build. This is a source-available project with one
+        maintainer: the honest answer may be "that belongs in the commercial
+        product", "that was tried and here is what broke", or "yes please" —
+        and all three are cheaper to hear before the work than after.
+
+
+        If you are about to reverse something in
+        [docs/DESIGN-RULES.md](https://github.com/suburbazine/Unifi-Notification-Matrix/blob/main/docs/DESIGN-RULES.md),
+        argue with the **reason** written beside the rule. Most of them look
+        like over-engineering until the failure they prevent happens, so
+        "this could be simpler" on its own will not move it.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What goes wrong today
+      description: >-
+        The situation, not the solution. What did you want to know, and what
+        did the product do instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you think should happen
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: >-
+        A rule, a webhook, a second channel, something outside this product.
+        If a workaround exists and is merely inconvenient, say so — that is
+        useful information and not a reason to close it.
+
+  - type: dropdown
+    id: offer
+    attributes:
+      label: Would you want to implement it?
+      description: >-
+        No is a perfectly good answer. If yes, read
+        [CONTRIBUTING.md](https://github.com/suburbazine/Unifi-Notification-Matrix/blob/main/CONTRIBUTING.md)
+        first — contributions carry a licensing grant, because commercial
+        licences to this product are sold separately.
+      options:
+        - "No — filing it so somebody knows"
+        - "Maybe, if the approach is agreed first"
+        - "Yes, and I have read CONTRIBUTING.md"
+    validations:
+      required: true

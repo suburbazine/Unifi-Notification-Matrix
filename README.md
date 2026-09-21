@@ -277,6 +277,10 @@ notifymatrix probe submit
 If anything in that output identifies your site, that is a bug in this tool and
 reporting it matters more than the contribution does.
 
+[CONTRIBUTING.md](CONTRIBUTING.md) covers what else is worth sending, what is
+likely to be declined, and what happens to code you contribute — which matters
+here, because commercial licences to this product are sold separately.
+
 
 ---
 
