@@ -606,7 +606,7 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 		db.FlagBucket,
 	)
 
-	delivery, err := config.BuildDelivery(cfg, func(r channel.Result) {
+	onDeliveryResult := func(r channel.Result) {
 		kind, summary := audit.KindAlertSent, "delivered via "+r.Channel
 		fields := map[string]string{"channel": r.Channel}
 		if r.Err != nil {
@@ -621,40 +621,85 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			fmt.Fprintf(os.Stderr, "delivery failed on %s for incident %s: %v\n",
 				r.Channel, r.IncidentID, r.Err)
 		}
-	})
+	}
+
+	delivery, err := config.BuildDelivery(cfg, onDeliveryResult)
 	if err != nil {
 		return err
 	}
-	defer delivery.Close()
 
 	// The one place an Alert is built asks how busy the site is. Appended to
 	// the body; it cannot reach the severity or the ladder.
 	delivery.SurgeNote = activity.note
 
-	// A CHANNEL THAT IS CONFIGURED AND COULD NOT BE BUILT MUST SAY SO.
+	// THE CHANNEL SET IS REPLACEABLE WHILE THE DAEMON RUNS.
 	//
-	// Delivery.Broken() records these so that one malformed field cannot stop
-	// the daemon -- which is right, and which had exactly one flaw: nothing
-	// ever read it. The configuration said enabled, the setup checklist said
-	// enabled, and the channel was simply absent, so it would have delivered
-	// nothing at 3am while reading as healthy everywhere an operator looks.
-	// That is the state this product exists to refuse, and it was being
-	// produced by the mechanism added to make failures survivable.
+	// It was built once and never rebuilt, and that produced the worst
+	// disagreement in this program: the configuration said a channel was
+	// enabled, the interface said so, the setup checklist said so -- and the
+	// process delivering the alarms had never heard of it. An operator who
+	// enabled ntfy, saved, and pressed Test was told "ntfy is not enabled",
+	// contradicting the screen in front of them, and at 3am nothing would have
+	// reached that channel either.
 	//
-	// Reported at start rather than raised as an incident: the escalation
-	// ladder delivers THROUGH channels, so an incident about a broken channel
-	// may have no way to reach anybody. The audit record and the log are what
-	// can be relied on here.
-	for name, berr := range delivery.Broken() {
-		fmt.Fprintf(os.Stderr, "channel %s is enabled in the configuration but "+
-			"could not be started, so it will deliver nothing: %v\n", name, berr)
-		_ = auditLog.Append(ctx, audit.Entry{
-			Kind: audit.KindAlertFailed, Actor: "system",
-			Summary: "channel " + name + " is configured but could not be started, " +
-				"so it will deliver nothing until this is fixed and the service restarted",
-			Fields: map[string]string{"channel": name, "error": berr.Error()},
-		})
+	// Read through the pointer at every call rather than captured, because
+	// every one of these questions -- what can we deliver through, what is its
+	// queue doing, is this channel real -- is a question about now.
+	var deliveryRef atomic.Pointer[config.Delivery]
+	deliveryRef.Store(delivery)
+	defer func() {
+		if d := deliveryRef.Load(); d != nil {
+			d.Close()
+		}
+	}()
+
+	// reportBrokenChannels says which enabled channels could not be built.
+	//
+	// Delivery.Broken() records them so one malformed field cannot stop the
+	// daemon -- which is right, and which had exactly one flaw: nothing ever
+	// read it. The configuration said enabled, the checklist said enabled, and
+	// the channel was simply absent, so it would have delivered nothing at 3am
+	// while reading as healthy everywhere an operator looks.
+	//
+	// Reported to the log and the audit record rather than raised as an
+	// incident: the escalation ladder delivers THROUGH channels, so an
+	// incident about a broken channel may have no way to reach anybody.
+	reportBrokenChannels := func(ctx context.Context, d *config.Delivery) {
+		for name, berr := range d.Broken() {
+			fmt.Fprintf(os.Stderr, "channel %s is enabled in the configuration but "+
+				"could not be started, so it will deliver nothing: %v\n", name, berr)
+			_ = auditLog.Append(ctx, audit.Entry{
+				Kind: audit.KindAlertFailed, Actor: "system",
+				Summary: "channel " + name + " is configured but could not be started, " +
+					"so it will deliver nothing until this is fixed",
+				Fields: map[string]string{"channel": name, "error": berr.Error()},
+			})
+		}
 	}
+
+	// swapDelivery rebuilds the channel set from a saved configuration.
+	//
+	// The new set is built BEFORE the old one is closed, and the old one is
+	// closed only once the new one is in place: a window in which neither
+	// exists is a window in which an alert is dropped, and the whole product
+	// is the promise that one is not. A build that fails leaves the running
+	// set exactly as it was and says so -- half-applied channels are how an
+	// operator ends up believing they are covered.
+	swapDelivery := func(ctx context.Context, next *config.Config) error {
+		fresh, err := config.BuildDelivery(next, onDeliveryResult)
+		if err != nil {
+			return err
+		}
+		fresh.SurgeNote = activity.note
+		old := deliveryRef.Swap(fresh)
+		if old != nil {
+			old.Close()
+		}
+		reportBrokenChannels(ctx, fresh)
+		return nil
+	}
+
+	reportBrokenChannels(ctx, delivery)
 
 	built, err := cfg.BuildPolicies(delivery.Names())
 	if err != nil {
@@ -665,14 +710,25 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 		policies[incident.Severity(name)] = p
 	}
 
-	deliver := delivery.Deliver
-	if len(delivery.Names()) == 0 {
-		// Nothing enabled yet. Refuse rather than pretend: a scheduler whose
-		// delivery silently succeeds marks incidents as alerted that nobody
-		// was ever told about.
-		deliver = func(_ context.Context, inc *incident.Incident, _ int, chans []string) error {
+	// Delivery goes through the pointer, and the "nothing is configured" case
+	// is decided PER ALERT rather than once at start.
+	//
+	// It used to be a branch taken at startup: if no channel was enabled then,
+	// every delivery for the life of the process returned "no channels
+	// configured" -- including after the operator enabled one. Now that the
+	// set can change under it, asking at the moment of delivery is both
+	// simpler and the only version that can be right.
+	//
+	// The refusal itself stays. A scheduler whose delivery silently succeeds
+	// marks incidents as alerted that nobody was ever told about.
+	deliver := func(ctx context.Context, inc *incident.Incident, stage int, chans []string) error {
+		d := deliveryRef.Load()
+		if d == nil || len(d.Names()) == 0 {
 			return fmt.Errorf("no channels configured (incident %s wanted %v)", inc.ID, chans)
 		}
+		return d.Deliver(ctx, inc, stage, chans)
+	}
+	if len(delivery.Names()) == 0 {
 		fmt.Fprintln(os.Stderr, "note: no channels are enabled, so nothing can be delivered yet")
 		fmt.Fprintf(os.Stderr, "      edit %s\n", config.Path(dataDir))
 	}
@@ -1033,12 +1089,66 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 				cfgMu.Lock()
 				current = next
 				cfgMu.Unlock()
-				// TODO(reload): channels, policies and rules are built at
-				// start, so a saved change reaches the FILE and the UI but not
-				// the running engine until a restart. Said plainly here rather
-				// than left for an operator to discover by saving a channel
-				// and watching nothing use it.
-				fmt.Fprintln(os.Stderr, "settings saved; restart to apply them to the running daemon")
+
+				// APPLIED TO THE RUNNING DAEMON, not only to the file.
+				//
+				// Everything below this comment used to be a restart. The
+				// channel set, the escalation ladders, the rules and the quiet
+				// window were built once at start and never rebuilt, so every
+				// save updated the file, updated the interface, and left the
+				// process delivering alarms by the old configuration -- with
+				// nothing on any screen saying the two had parted company.
+				//
+				// Applied AFTER the write, deliberately: the file is the
+				// persisted truth, and a live change that failed to persist
+				// would vanish at the next start with no record of why.
+				//
+				// Order matters once. Channels first, because the escalation
+				// ladders are validated against the channel names that exist,
+				// and a ladder naming a channel that has not been built yet is
+				// a ladder that refuses.
+				if err := swapDelivery(context.Background(), next); err != nil {
+					return fmt.Errorf("the settings were saved, but the channels "+
+						"could not be rebuilt, so this daemon is still delivering "+
+						"through the previous set -- restart it to close the gap: %w", err)
+				}
+
+				built, err := next.BuildPolicies(deliveryRef.Load().Names())
+				if err != nil {
+					return fmt.Errorf("the settings were saved, but the escalation "+
+						"ladders could not be rebuilt and the previous ones are still "+
+						"in force -- restart to close the gap: %w", err)
+				}
+				pol := map[incident.Severity]escalate.Policy{}
+				for name, p := range built {
+					pol[incident.Severity(name)] = p
+				}
+				if err := sched.SetPolicies(pol); err != nil {
+					return fmt.Errorf("the settings were saved, but the escalation "+
+						"ladders were refused and the previous ones are still in "+
+						"force -- restart to close the gap: %w", err)
+				}
+				if err := sched.SetQuietHours(next.QuietHours); err != nil {
+					return fmt.Errorf("the settings were saved, but the quiet hours "+
+						"window was refused and the previous one is still in force -- "+
+						"restart to close the gap: %w", err)
+				}
+				// rule.Engine.SetRules exists, takes the engine's write lock,
+				// and was called by nothing -- so a saved rule reached the file
+				// and the interface and not the thing that decides. Silencing
+				// an alarm from its own card is only true if the next event is
+				// actually dropped, and that needs this line.
+				if err := engine.SetRules(next.Rules); err != nil {
+					return fmt.Errorf("the settings were saved, but the running "+
+						"daemon would not take the new rules and is still using the "+
+						"previous ones -- restart it to close the gap: %w", err)
+				}
+				// And the inbound hooks, so a URL the interface has just shown
+				// the operator is a URL that answers. It used to 404 until a
+				// restart, which is the same reply a wrong token gets.
+				receiver.SetHooks(config.BuildHooks(next))
+
+				fmt.Fprintln(os.Stderr, "settings saved and applied")
 				return nil
 			},
 			Health: func() web.Health {
@@ -1049,7 +1159,7 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 				// StartedAt was never set, so uptime_seconds was permanently
 				// 0 and the computation in the web layer was dead code.
 				h := web.Health{StartedAt: started}
-				for _, st := range delivery.Stats() {
+				for _, st := range deliveryRef.Load().Stats() {
 					h.Channels = append(h.Channels, web.ChannelHealth{
 						Name: st.Channel, Enabled: true, Depth: st.Depth,
 						Pending: st.Pending, Dropped: st.Dropped,
@@ -1193,28 +1303,35 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 				return true, nil
 			},
 			TestChannel: func(ctx context.Context, name string) (string, error) {
-				summary, err := delivery.Test(ctx, name)
+				live := deliveryRef.Load()
+				summary, err := live.Test(ctx, name)
 				if err == nil {
 					return summary, nil
 				}
 				// "channel ntfy is not enabled" is a lie when the operator has
-				// just enabled it, saved, and pressed Test -- which is exactly
-				// the sequence that produces it. The channel set is built once
-				// at start and never rebuilt, so the config on disk says
-				// enabled while this process still knows nothing about it, and
-				// the message contradicts the screen they are looking at.
+				// just enabled it, saved, and pressed Test. That used to be
+				// the ordinary case -- the channel set was built once at start
+				// and never rebuilt, so the file said enabled while this
+				// process had never heard of it -- and a save now rebuilds the
+				// set, so the sequence no longer produces it.
 				//
-				// Worse than the wording: the SAME stale set delivers real
-				// alarms, so this state is a channel that reads as configured
-				// and would not be told anything at 3am.
+				// The check stays, because the two can still disagree for a
+				// second reason: a channel whose configuration could not be
+				// built is recorded in Broken() and is absent from the live
+				// set. Same symptom, different cause, and the same thing at
+				// stake -- a channel that reads as configured everywhere an
+				// operator looks and would be told nothing at 3am.
 				cfgMu.RLock()
 				c := current
 				cfgMu.RUnlock()
-				if channelPendingRestart(c, delivery.Names(), name) {
+				if channelPendingRestart(c, live.Names(), name) {
+					why := ""
+					if berr, ok := live.Broken()[name]; ok && berr != nil {
+						why = ": " + berr.Error()
+					}
 					return "", fmt.Errorf("%s is enabled in the configuration, but this "+
-						"daemon started before that change and is still running without "+
-						"it -- real alarms would not reach it either. Restart to apply: %s",
-						name, typedCommand("stop")+" && "+typedCommand("start"))
+						"daemon could not build it, so it is not running and real alarms "+
+						"would not reach it either%s", name, why)
 				}
 				return "", err
 			},

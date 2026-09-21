@@ -171,6 +171,62 @@ func New(hooks []Hook, opts Options) *Receiver {
 	return r
 }
 
+// SetHooks replaces the configured hooks on a running receiver.
+//
+// Hooks were built once when the daemon started, so adding one -- or fixing a
+// token on one that was typed wrong -- meant a restart before the URL in the
+// operator's Alarm Manager rule existed at all. Posting to it until then
+// returned the same 404 as a wrong token, which is the least useful possible
+// answer to "why is my alarm not arriving".
+//
+// WHAT AN ARRIVAL RECEIPT SURVIVES, and what it does not:
+//
+// A hook that is still here under the same name and the same token keeps its
+// receipt. "Something has arrived at this hook" is what the setup checklist
+// reads, and losing it because the operator edited an unrelated channel would
+// tell them a verified hook had never been heard from.
+//
+// A hook whose TOKEN changed does not. The receipt is evidence about a URL,
+// that URL no longer exists, and the console still posting to the old one will
+// now be refused -- so the checklist must go back to asking for proof rather
+// than showing a delivery that can no longer happen.
+//
+// A hook that is gone loses both its receipt and any test mode it was in.
+func (r *Receiver) SetHooks(hooks []Hook) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// The outgoing set, captured before it is replaced: deciding what survives
+	// needs both, and reading the token off the list that has already been
+	// swapped in compares every hook with itself.
+	prev := make(map[string]Hook, len(r.hooks))
+	for _, h := range r.hooks {
+		prev[h.Name] = h
+	}
+
+	next := make([]Hook, len(hooks))
+	copy(next, hooks)
+	r.hooks = next
+
+	receipts := make(map[string]*Receipt, len(next))
+	for _, h := range next {
+		rec := r.receipts[h.Name]
+		was, had := prev[h.Name]
+		if rec != nil && had && was.Token.Reveal() == h.Token.Reveal() {
+			receipts[h.Name] = rec
+			continue
+		}
+		receipts[h.Name] = &Receipt{Name: h.Name, Product: h.Product}
+	}
+	r.receipts = receipts
+
+	for name := range r.testUntil {
+		if _, ok := receipts[name]; !ok {
+			delete(r.testUntil, name)
+		}
+	}
+}
+
 // ServeHTTP accepts an alarm.
 //
 // GET is accepted as well as POST, which is the opposite of the
@@ -398,6 +454,12 @@ func (r *Receiver) FireTest(name string) (event.Event, error) {
 
 // match finds the hook for a token in constant time with respect to the token.
 func (r *Receiver) match(token string) (Hook, bool) {
+	// Under the lock because SetHooks can replace this slice while an alarm is
+	// arriving. Taken here rather than by the caller: ServeHTTP takes it again
+	// a few lines later for the receipt, and a lock held across the emit would
+	// put every hook behind whichever one is slowest to rule on.
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var (
 		found Hook
 		ok    bool

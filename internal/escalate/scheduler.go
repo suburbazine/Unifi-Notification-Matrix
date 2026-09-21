@@ -41,14 +41,22 @@ type DeliverFunc func(ctx context.Context, inc *incident.Incident, stage int, ch
 // for a product whose job is nagging until acknowledged is the difference
 // between working and not.
 type Scheduler struct {
-	store    incident.Store
+	store   incident.Store
+	deliver DeliverFunc
+
+	// liveMu guards the two things a running scheduler can be told to change.
+	//
+	// Separate from mu, which counts: a pass holds this for as long as it
+	// takes to read one map entry, and mu for as long as it takes to add one
+	// to a counter, and braiding them would put a delivery's bookkeeping
+	// behind a configuration read.
+	liveMu   sync.RWMutex
 	policies map[incident.Severity]Policy
-	deliver  DeliverFunc
+	quiet    QuietHours
 
 	now      func() time.Time
 	interval time.Duration
 	onError  func(error)
-	quiet    QuietHours
 
 	// momentary decides which conditions are owed a delivery even after they
 	// have cleared. Injected so a test can describe a vocabulary rather than
@@ -129,7 +137,7 @@ func NewScheduler(store incident.Store, policies map[incident.Severity]Policy, d
 	}
 	s := &Scheduler{
 		store:    store,
-		policies: policies,
+		policies: copyPolicies(policies),
 		deliver:  deliver,
 		now:      time.Now,
 		interval: DefaultTickInterval,
@@ -148,6 +156,72 @@ func NewScheduler(store incident.Store, policies map[incident.Severity]Policy, d
 		return nil, fmt.Errorf("escalate: %w", err)
 	}
 	return s, nil
+}
+
+// SetPolicies replaces the escalation ladders on a scheduler that is running.
+//
+// THE ALTERNATIVE WAS A RESTART, and a restart is not a neutral act here: it
+// drops every source's connection, re-polls every console, and re-reads every
+// open incident from the store. An operator who has to do that to change one
+// ladder does it rarely, which means the ladders stay wrong.
+//
+// Validated before anything is swapped, and swapped whole: a scheduler must
+// never be left holding half of one configuration and half of another, and a
+// ladder that cannot express itself has to be refused while somebody is
+// looking rather than at 3am when it decides not to page.
+func (s *Scheduler) SetPolicies(policies map[incident.Severity]Policy) error {
+	if len(policies) == 0 {
+		return errors.New("escalate: a scheduler needs at least one policy")
+	}
+	for sev, p := range policies {
+		if err := p.Validate(sev); err != nil {
+			return fmt.Errorf("escalate: policy for %s: %w", sev, err)
+		}
+	}
+	next := copyPolicies(policies)
+	s.liveMu.Lock()
+	s.policies = next
+	s.liveMu.Unlock()
+	return nil
+}
+
+// SetQuietHours replaces the window on a running scheduler.
+//
+// Refused rather than accepted when malformed, for the same reason
+// NewScheduler refuses one: the failure mode of a bad window is alerts going
+// silent at hours nobody chose, and nothing on any screen says so.
+func (s *Scheduler) SetQuietHours(q QuietHours) error {
+	if err := q.Validate(); err != nil {
+		return fmt.Errorf("escalate: %w", err)
+	}
+	s.liveMu.Lock()
+	s.quiet = q
+	s.liveMu.Unlock()
+	return nil
+}
+
+func (s *Scheduler) policyFor(sev incident.Severity) (Policy, bool) {
+	s.liveMu.RLock()
+	defer s.liveMu.RUnlock()
+	p, ok := s.policies[sev]
+	return p, ok
+}
+
+func (s *Scheduler) quietHours() QuietHours {
+	s.liveMu.RLock()
+	defer s.liveMu.RUnlock()
+	return s.quiet
+}
+
+// copyPolicies takes the caller's map out of play. The daemon rebuilds this
+// map on every save, and a scheduler reading a map somebody else still holds
+// is a data race that would only ever show up under load.
+func copyPolicies(in map[incident.Severity]Policy) map[incident.Severity]Policy {
+	out := make(map[incident.Severity]Policy, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // Run drives the scheduler until ctx is cancelled.
@@ -225,7 +299,7 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 
 // process evaluates and, where due, alerts on one incident.
 func (s *Scheduler) process(ctx context.Context, inc *incident.Incident, now time.Time) error {
-	pol, ok := s.policies[inc.Severity]
+	pol, ok := s.policyFor(inc.Severity)
 	if !ok {
 		// An incident with no policy can never alert. Surfaced as a fault on
 		// every pass rather than skipped, because a silently unschedulable
@@ -289,7 +363,7 @@ func (s *Scheduler) process(ctx context.Context, inc *incident.Incident, now tim
 	// policy with RespectQuietHours set, and NewScheduler validates every
 	// policy at construction. The guard is still written as a policy check
 	// rather than a severity check, so the rule lives in one place.
-	if pol.RespectQuietHours && s.quiet.Contains(now) {
+	if pol.RespectQuietHours && s.quietHours().Contains(now) {
 		s.count(func(st *Stats) { st.Held++ })
 		return nil
 	}

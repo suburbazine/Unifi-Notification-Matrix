@@ -13,6 +13,30 @@ view against the release before them.
 
 ## [Unreleased]
 
+### Changed
+
+- **Saved settings take effect immediately.** Channels, escalation ladders,
+  rules, quiet hours and inbound hooks were all built once when the daemon
+  started and never rebuilt, so every save updated the file, updated the
+  screen, and left the running process deciding by the old configuration —
+  with nothing anywhere saying the two had parted company. A restart was the
+  only way to close the gap, and a restart is not a neutral act: it drops every
+  console connection and re-polls everything.
+
+  The worst of it was invisible. A channel enabled and saved was a channel this
+  daemon had never heard of: "ntfy is not enabled" when you pressed Test,
+  contradicting the screen you were looking at — and the same stale set
+  delivered the real alarms, so it would have been told nothing at 3am. A new
+  inbound hook's URL returned the same 404 as a mistyped token until you
+  restarted.
+
+  A change that cannot be applied is refused rather than half-applied, and says
+  which subsystem kept its old configuration and that a restart will close the
+  gap.
+
+  **The listen addresses still need a restart** — a socket already bound cannot
+  be moved under the connections using it.
+
 ### Fixed
 
 - **Every Network offline incident claimed the device had been down for three
