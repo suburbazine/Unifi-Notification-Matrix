@@ -390,8 +390,10 @@ heartbeat at it, and the problem goes away.
 
 [docs/GATEWAY.md](docs/GATEWAY.md) is the supported way to do an unrecommended
 thing, which is a different promise from a recommendation and a smaller one.
-It is also honest about what was never tested on real hardware, because there
-is none here to test it on.
+The daemon has since run on a real gateway — a UCG-Fiber on UniFi OS 6 —
+which turned up four bugs no test written for them could reach. What is still
+untested is a firmware upgrade, and the page says so rather than reasoning its
+way to an answer it has not seen.
 
 ---
 
