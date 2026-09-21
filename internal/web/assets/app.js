@@ -2249,6 +2249,7 @@ var LINK_CAUSES = {
   "no-peer-for-link": "It authenticated against a credential with no product behind it. That should not be possible; tell somebody.",
   "malformed-envelope": "It authenticated and then sent something that is not an event.",
   "invalid-envelope": "It sent something outside the manifest you approved — a severity, a state or a field that does not match what it declared.",
+  "dedup-key-disagreement": "Its idempotency key disagrees with the one this end computes, so the two products would file this alarm as two incidents that never merge. NOTHING IS WRONG WITH YOUR MANIFEST and there is nothing to approve: the peer is building the key from something other than the entity it sent. Both keys are in the line below — send them to whoever maintains that product. If it simply stops sending a key, this end computes one and the event goes through.",
   "undeclared-condition": "It sent a condition its approved manifest does not contain, and the event was refused. Usually its next release doing something new. There is nothing to fix at the other end: the proposal is above, with what it means and what it wants to raise, and approving it is what lets the next one through.",
   "envelope-version": "It speaks a different version of the link protocol. Nothing is wrong with your setup; one of the two products needs upgrading.",
   "over-the-rate-limit": "It sent far more in a minute than any working peer does. Nothing is lost — it will retry — but something on that end is looping, or somebody has a credential they should not.",

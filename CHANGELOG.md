@@ -15,6 +15,18 @@ view against the release before them.
 
 ### Fixed
 
+- **A disagreeing dedup key was labelled a manifest violation.** The first
+  live pairing refused every event with "it sent something outside the
+  manifest you approved", which sends an operator to a manifest where nothing
+  is wrong. A key disagreement is not a manifest problem: both ends believe
+  they are right, and the consequence is that one alarm would be filed as two
+  incidents that never merge.
+
+  It now has its own label and its own sentence, which says what to do — the
+  two keys are already on the page, and they belong to whoever maintains the
+  sending product. That is the third refusal split out of `invalid-envelope`
+  for the same reason: the operator does a different thing about it.
+
 - **The stream catalogue had the bug the endpoint catalogue was fixed for.**
   Access's notifications socket — the one this build subscribes to — was
   marked as a path this build does not use, so a firmware that stops serving

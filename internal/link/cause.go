@@ -60,8 +60,20 @@ const (
 	// nobody has been asked about yet, and the answer is a button. See
 	// propose.go.
 	CauseUndeclaredCondition Cause = "undeclared-condition"
-	CauseStore               Cause = "store-failed"
-	CauseIngest              Cause = "ingest-failed"
+
+	// CauseDedupKey is split out for the third time this pattern has been
+	// needed, and for the same reason: the operator does a different thing
+	// about it.
+	//
+	// The invalid-envelope sentence sends somebody to the manifest they
+	// approved. A disagreeing dedup key has nothing to do with the manifest:
+	// both ends believe they are right, and the consequence is that the same
+	// alarm would be filed twice and never merge. Found on the first live
+	// pairing with Sentry, where every event was refused with a label that
+	// pointed at the wrong thing to go and read.
+	CauseDedupKey Cause = "dedup-key-disagreement"
+	CauseStore    Cause = "store-failed"
+	CauseIngest   Cause = "ingest-failed"
 
 	// Pairing, which is the one route a stranger can reach.
 	CausePairUnavailable Cause = "pairing-unavailable"

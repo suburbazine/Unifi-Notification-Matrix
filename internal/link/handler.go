@@ -285,10 +285,7 @@ func (rc *Receiver) events(w http.ResponseWriter, r *http.Request, cred Credenti
 		// A version mismatch is somebody's upgrade; everything else here is a
 		// peer claiming something it did not declare. Labelled apart because
 		// the operator does a different thing about each.
-		cause := CauseInvalidEnvelope
-		if errors.Is(err, ErrVersion) {
-			cause = CauseEnvelopeVersion
-		}
+		cause := causeFor(err)
 		// AN UNDECLARED CONDITION IS THE ONE REFUSAL WITH AN ANSWER.
 		//
 		// Every other envelope failure is a bug to fix at the sender. This one
@@ -299,8 +296,7 @@ func (rc *Receiver) events(w http.ResponseWriter, r *http.Request, cred Credenti
 		//
 		// Labelled apart from the rest of CauseInvalidEnvelope so the page can
 		// tell "approve this?" from "your peer is broken".
-		if errors.Is(err, ErrCondition) {
-			cause = CauseUndeclaredCondition
+		if cause == CauseUndeclaredCondition {
 			rc.propose(peer.Slug, env.Condition,
 				incident.Severity(env.Severity), env.Title, now)
 		}
@@ -475,4 +471,19 @@ func (rc *Receiver) pair(w http.ResponseWriter, r *http.Request, now time.Time,
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+// causeFor labels an envelope failure with what the operator should do about
+// it, which is the only reason these are separate causes at all.
+func causeFor(err error) Cause {
+	switch {
+	case errors.Is(err, ErrVersion):
+		return CauseEnvelopeVersion
+	case errors.Is(err, ErrCondition):
+		return CauseUndeclaredCondition
+	case errors.Is(err, ErrDedupKey):
+		return CauseDedupKey
+	default:
+		return CauseInvalidEnvelope
+	}
 }
