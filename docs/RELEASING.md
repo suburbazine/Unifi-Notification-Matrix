@@ -413,6 +413,17 @@ something with a publicly-trusted code-signing certificate in the name of a
 real legal entity. The tag says *what* to build; the approval says *yes,
 really, sign it*.
 
+> **An agent may click it on the maintainer's behalf, and only when asked to
+> do something that requires it** — "publish it", "cut a release". The rule is
+> in `CLAUDE.md`, and it is stated here too so this section does not overclaim:
+> a deployment record showing an approval does **not**, by itself, prove a
+> human looked. "Push it" does not carry that permission, and neither does a
+> release nobody asked for.
+>
+> What the gate still buys, under that rule, is that the instruction and the
+> signature are separate events with a named decision between them — and that
+> a run started by anything other than a person asking for one stays parked.
+
 Two settings on that environment are load-bearing and easy to get wrong:
 
 - **`prevent_self_review` must stay off.** With one maintainer, turning it on
