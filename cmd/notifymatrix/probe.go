@@ -127,6 +127,21 @@ func probeCommand(defaultDataDir string, args []string) int {
 	}
 
 	fmt.Printf("\nreport written to %s\n", path)
+
+	// AN UNAUTHENTICATED RUN IS NOT A RESULT. The file is kept -- it records
+	// what the console refused -- but it is not offered for contribution, and
+	// the exit status says so, because a survey that never got in reads
+	// exactly like a survey that found nothing.
+	if !report.Authenticated() {
+		fmt.Println("Nothing has been sent anywhere, and there is nothing here worth")
+		fmt.Println("contributing: no key was accepted, so this records what this build")
+		fmt.Println("asked for rather than what your console has.")
+		fmt.Println()
+		fmt.Println("Issue an API key per product in the console, configure it, and run")
+		fmt.Println("this again.")
+		return 1
+	}
+
 	fmt.Println("Nothing has been sent anywhere. To contribute it:")
 	fmt.Printf("  notifymatrix probe submit %s\n", path)
 	return 0
@@ -249,6 +264,28 @@ func probeSubmit(dir, path string) int {
 		return 1
 	}
 	defer f.Close()
+
+	// Judged on the file, not on the run that wrote it -- which may have been
+	// days ago and is not here to be asked. A report nothing authenticated
+	// carries no contribution, and printing it in full would invite one.
+	authed, err := probe.ScanAuthenticated(f)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	if !authed {
+		fmt.Fprintf(os.Stderr, "%s came from a run that was never authenticated.\n", path)
+		fmt.Fprintln(os.Stderr, "Every request was refused, so it records what this build asked for and")
+		fmt.Fprintln(os.Stderr, "nothing about your console. There is no contribution in it.")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Issue an API key per product, configure it, and run `notifymatrix probe`")
+		fmt.Fprintln(os.Stderr, "again.")
+		return 1
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
 
 	fmt.Printf("---- %s ----\n", path)
 	if _, err := io.Copy(os.Stdout, f); err != nil {

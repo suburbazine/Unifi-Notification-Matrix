@@ -1,12 +1,14 @@
 package probe
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -90,6 +92,75 @@ func (r *Report) Write(w io.Writer) error {
 	return nil
 }
 
+// answeredJSON says this endpoint answered as an API, rather than a web
+// server answering on its behalf.
+//
+// A 200 IS NOT AN ANSWER. A console with no key issued serves its login page
+// on the same paths, with the same 200, and only the body tells them apart --
+// which is how four copies of a 1513-byte HTML page were once written up as
+// four undocumented endpoints. The status line is the part an unauthenticated
+// probe can least afford to believe.
+func answeredJSON(e EndpointResult) bool {
+	if e.Error != "" || e.Refused != "" || e.Status != 200 {
+		return false
+	}
+	return strings.Contains(strings.ToLower(e.ContentType), "json")
+}
+
+// Authenticated reports whether anything in this run got past the front door.
+//
+// Everything else in a report is a claim about a console. From a run that was
+// refused, every one of those claims is really a statement about this build's
+// own catalogue, which the reader already has. So this is the question that
+// decides whether the file is worth anything at all.
+func (r *Report) Authenticated() bool {
+	for _, e := range r.Endpoints {
+		if answeredJSON(e) {
+			return true
+		}
+	}
+	return len(r.Meta.Versions) > 0
+}
+
+// ScanAuthenticated answers the same question from a written report.
+//
+// Read back from the file rather than carried out of the run that produced
+// it: submit may be looking at something captured days ago, and the file is
+// what would actually be published.
+//
+// Unparseable lines are skipped rather than fatal. A truncated submission
+// should still be judged on the records that survived -- the same reason the
+// format is JSONL.
+func ScanAuthenticated(rd io.Reader) (bool, error) {
+	sc := bufio.NewScanner(rd)
+	sc.Buffer(make([]byte, 0, 64<<10), 8<<20)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var head struct {
+			Record string `json:"record"`
+		}
+		if json.Unmarshal([]byte(line), &head) != nil {
+			continue
+		}
+		switch head.Record {
+		case "endpoint":
+			var e EndpointResult
+			if json.Unmarshal([]byte(line), &e) == nil && answeredJSON(e) {
+				return true, nil
+			}
+		case "meta":
+			var m Meta
+			if json.Unmarshal([]byte(line), &m) == nil && len(m.Versions) > 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, sc.Err()
+}
+
 // Save writes the report to path, creating parent directories.
 //
 // 0600, and the reason is not the file's content -- which is redacted -- but
@@ -122,6 +193,17 @@ func DefaultPath(dir string) string {
 // actual bytes before contributing anything, and a summary that looked
 // complete enough to trust would quietly replace that step.
 func (r *Report) Summarise(w io.Writer) {
+	// FIRST, because it changes the meaning of every line under it. Without
+	// it an operator reads a page of paths and statuses as a survey of their
+	// firmware, when it is a list of what this build went looking for.
+	if !r.Authenticated() {
+		fmt.Fprintln(w, "THIS RUN WAS NOT AUTHENTICATED -- nothing below describes your console.")
+		fmt.Fprintln(w, "Every request was refused. What follows is what this build went looking")
+		fmt.Fprintln(w, "for, not what your firmware has. Issue an API key for each product you")
+		fmt.Fprintln(w, "want surveyed, configure the console, and run it again.")
+		fmt.Fprintln(w)
+	}
+
 	fmt.Fprintf(w, "console versions: ")
 	if len(r.Meta.Versions) == 0 {
 		fmt.Fprintln(w, "none identified")
@@ -149,7 +231,7 @@ func (r *Report) Summarise(w io.Writer) {
 			fmt.Fprintf(w, "  err   %-58s %s\n", e.Path, e.Error)
 		default:
 			mark := "     "
-			if e.Status == 200 && !e.Known {
+			if answeredJSON(e) && !e.Known {
 				// The discovery: a path this build does not use, answering.
 				mark = "  NEW"
 			}

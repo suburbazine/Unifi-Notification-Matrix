@@ -55,6 +55,31 @@ view against the release before them.
   maintainer promising an enforcement process nobody staffs is worse than no
   document at all.
 
+### Fixed
+
+- **The probe could not tell "I was not let in" from "this firmware does not
+  have it".** Run against a console with no API key issued, it reported four
+  undocumented Access endpoints. All four were the UniFi OS login page —
+  1513 bytes of HTML, four times — counted as discoveries because the check
+  asked only for HTTP 200.
+
+  A 200 is not an answer. A console with no key serves its login page on the
+  same paths with the same status, and only the body tells them apart. A
+  discovery now requires a JSON body that actually parsed.
+
+  Findings like those are worse than no findings: contributed, they would put
+  endpoints into the permanent record that do not exist.
+
+- **A run that was refused now says so, first.** Being refused is a finding —
+  `auth.refused`, per product — and the summary leads with a plain statement
+  that nothing below describes your console. Every line under it is otherwise
+  read as a survey of the firmware when it is a list of what this build went
+  looking for.
+
+  `probe` exits non-zero and does not offer to contribute such a report, and
+  `probe submit` refuses one outright, judging the file rather than trusting
+  the run that wrote it.
+
 ## [0.3.4] — 2026-09-19
 
 **Gateway installs on 0.3.1 through 0.3.3 cannot start.** The daemon looked for

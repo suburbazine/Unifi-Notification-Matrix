@@ -168,9 +168,41 @@ func readVersion(into map[string]string, e Endpoint, res EndpointResult) {
 func diff(r *Report) []Finding {
 	var out []Finding
 
+	// BEING REFUSED IS A FINDING, and it belongs first because it explains
+	// every line under it. A product that answered nothing tells you about
+	// this build's catalogue, not about the console -- and an operator who
+	// has not issued an API key gets a report that looks like a survey of
+	// their firmware and is nothing of the kind.
+	refused, answered := map[string]bool{}, map[string]bool{}
 	for _, e := range r.Endpoints {
 		switch {
-		case e.Status == 200 && !e.Known:
+		case answeredJSON(e):
+			answered[e.Product] = true
+		case e.Status == 401 || e.Status == 403:
+			refused[e.Product] = true
+		}
+	}
+	products := make([]string, 0, len(refused))
+	for p := range refused {
+		// A key that works for one path and not another is a different
+		// situation, and calling it refused would hide the half that worked.
+		if !answered[p] {
+			products = append(products, p)
+		}
+	}
+	sort.Strings(products)
+	for _, p := range products {
+		out = append(out, Finding{
+			Record: "finding", Kind: "auth.refused", Product: p,
+			Detail: "every request was refused",
+			Note: "no key was accepted for " + p + ", so nothing in this report " +
+				"describes what this firmware has",
+		})
+	}
+
+	for _, e := range r.Endpoints {
+		switch {
+		case answeredJSON(e) && !e.Known:
 			out = append(out, Finding{
 				Record: "finding", Kind: "endpoint.undocumented", Product: e.Product,
 				Detail: e.Path,
