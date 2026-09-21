@@ -55,9 +55,24 @@ var Streams = []Stream{
 	{Product: "protect", Name: "devices", Known: true, Auth: AuthProtect,
 		Path:   "/proxy/protect/integration/v1/subscribe/devices",
 		Expect: "state flips; camera disconnect lives here, not in events"},
-	{Product: "access", Name: "notifications", Auth: AuthAccess,
+	{Product: "access", Name: "notifications", Known: true, Auth: AuthAccess,
 		Path:   "/proxy/access/api/v1/developer/devices/notifications",
 		Expect: "only two message shapes have ever been captured; see SOURCES.md"},
+
+	// THE SAME SOCKET, WHERE IT MIGHT HAVE MOVED TO.
+	//
+	// The REST base says `integration` and the socket says `api`, which is
+	// real and documented in internal/source/access. On an ENVR running
+	// Access 1.x the `api` path answered 404 to a key that the `integration`
+	// REST paths accepted -- so either the socket moved to the REST base or
+	// it is gone from that firmware, and those are very different facts.
+	//
+	// Asking both is how a report answers that. Not Known: this build does
+	// not subscribe here, and if it ever does, the entry above changes rather
+	// than this one.
+	{Product: "access", Name: "notifications-integration", Auth: AuthAccess,
+		Path:   "/proxy/access/integration/v1/developer/devices/notifications",
+		Expect: "whether the notifications socket lives under the REST base on this firmware"},
 }
 
 // StreamResult is one capture, with nothing identifying in it.

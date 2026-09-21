@@ -85,6 +85,19 @@ var vocabulary = map[string]bool{
 	"objecttypes": true, "object_types": true,
 	"audiotypes": true, "audio_types": true,
 
+	// UniFi Access speaks in whole-word field names rather than nested ones,
+	// so the two enums its door logic turns on are single tokens and were
+	// being replaced with counters: a report of 28 doors carried neither the
+	// position vocabulary nor the lock vocabulary, which is most of what a
+	// door schema is for.
+	"door_position_status": true, "door_lock_relay_status": true,
+	"position_status": true, "lock_relay_status": true,
+
+	// And what a reader or hub says it can do. One site's report carried 89
+	// distinct capability strings, every one of them a counter -- the single
+	// richest piece of vocabulary any probe has produced, thrown away.
+	"capabilities": true,
+
 	// Two-segment entries, matched against parent.child. `text` on its own is
 	// NOT here and must not be: Network's Alarm Manager spells its free-prose
 	// message field `text` on some firmware, and that prose names doors and

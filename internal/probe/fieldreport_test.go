@@ -162,3 +162,71 @@ func TestTheDetectionFieldsDoNotOpenUpTheirNeighbours(t *testing.T) {
 		t.Errorf("a room name beside the vocabulary was published:\n%s", got)
 	}
 }
+
+// The catalogue fix covered endpoints and missed STREAMS. Access's
+// notifications socket is the one this build subscribes to, and it was marked
+// unknown -- so on the firmware where it answers 404, the report says "a path
+// this build does not use is absent" rather than "the socket this product
+// depends on is gone".
+func TestTheStreamCatalogueKnowsWhatThisBuildSubscribesTo(t *testing.T) {
+	used := map[string]string{
+		"/proxy/protect/integration/v1/subscribe/events":       "internal/source/protect",
+		"/proxy/protect/integration/v1/subscribe/devices":      "internal/source/protect",
+		"/proxy/access/api/v1/developer/devices/notifications": "internal/source/access",
+	}
+	known := map[string]bool{}
+	for _, s := range Streams {
+		known[s.Path] = s.Known
+	}
+	for path, where := range used {
+		if k, listed := known[path]; !listed || !k {
+			t.Errorf("%s is subscribed to by %s; listed=%v known=%v -- its "+
+				"disappearance is a regression this report could never report",
+				path, where, listed, k)
+		}
+	}
+}
+
+// And the question this build cannot answer from here: the REST base says
+// `integration` while the socket says `api`, and on one firmware the `api`
+// path 404s with a working key. Asking both is how the probe answers that
+// rather than somebody guessing.
+func TestTheProbeAsksWhetherTheSocketMoved(t *testing.T) {
+	var asked bool
+	for _, s := range Streams {
+		if s.Product == "access" && strings.Contains(s.Path, "/integration/v1/developer/devices/notifications") {
+			asked = true
+			if s.Known {
+				t.Error("a candidate path this build does not use is marked known")
+			}
+		}
+	}
+	if !asked {
+		t.Error("the probe does not ask about the integration-base notifications socket")
+	}
+}
+
+// A door's two status fields and a device's capability list are the Access
+// vocabulary. One site's report carried 28 doors and 89 distinct capability
+// strings, every one of them replaced with a counter.
+func TestTheAccessVocabularySurvives(t *testing.T) {
+	p := NewPseudonymiser()
+	got := render(t, p.JSON("", map[string]any{
+		"data": []any{map[string]any{
+			"door_position_status":   "closed",
+			"door_lock_relay_status": "unlocked",
+			"full_name":              "Building A / Server Room",
+			"capabilities":           []any{"door_bell", "nfc", "touch_pass"},
+		}},
+	}))
+
+	for _, want := range []string{"closed", "unlocked", "door_bell", "nfc", "touch_pass"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q was replaced; it is the vocabulary an Access report exists to carry:\n%s", want, got)
+		}
+	}
+	// And the door's name is still a room name.
+	if strings.Contains(got, "Server Room") {
+		t.Errorf("a door name was published:\n%s", got)
+	}
+}

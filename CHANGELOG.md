@@ -13,9 +13,28 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Fixed
+
+- **The stream catalogue had the bug the endpoint catalogue was fixed for.**
+  Access's notifications socket — the one this build subscribes to — was
+  marked as a path this build does not use, so a firmware that stops serving
+  it would produce a report saying nothing was missing. The test that keeps
+  the catalogue honest now covers streams as well as endpoints.
+
+- **The Access vocabulary was being thrown away.** `door_position_status` and
+  `door_lock_relay_status` are the two enums a door's state turns on, and
+  `capabilities` is what a reader says it can do — one site's report carried
+  28 doors and **89 distinct capability strings**, every one replaced with a
+  counter. UniFi Access names fields as single words rather than nesting them,
+  so none of them matched a vocabulary rule written against nested names.
+
+### Added
+
+- **The probe asks whether the Access socket moved.** On an ENVR running
+  Access, `/proxy/access/api/v1/developer/devices/notifications` answered 404
+  to a key the REST paths accepted. Either it moved under the REST base or it
+  is gone from that firmware, and those are different facts; the probe now
+  asks both paths so a report answers it instead of somebody guessing.
 
 ## [0.3.8] — 2026-09-21
 
