@@ -13,6 +13,24 @@ view against the release before them.
 
 ## [Unreleased]
 
+### Added
+
+- **Silence an alarm from the alarm.** A card for something you have decided
+  you do not want to hear about — a camera on a failing PoE port, a door sensor
+  being worked on — now carries **Silence…**, which writes the ignore rule for
+  you and closes the incident.
+
+  The rule is built from the incident, not from anything the page sends, and it
+  matches exactly that alarm: that condition, from that device, on that source.
+  Nothing wider. It is an ordinary rule: it appears in Settings › Rules and is
+  removed there, and the audit record names it, so "why was I not told about
+  that camera" has an answer months later.
+
+  **A critical alarm cannot be silenced this way**, and the refusal is in the
+  API rather than only in the page. Quiet hours never apply to critical either.
+  If a critical alarm really should be silenced, the rule can be written in
+  Settings, deliberately, with the whole rule list in front of you.
+
 ### Changed
 
 - **Saved settings take effect immediately.** Channels, escalation ladders,
@@ -34,8 +52,15 @@ view against the release before them.
   which subsystem kept its old configuration and that a restart will close the
   gap.
 
+  **A `config.yaml` edited by hand is applied too**, a few seconds after you
+  finish editing it — the setup guide tells you to edit that file, so the
+  documented path was the one that silently did nothing. The log says when a
+  change was applied, and says why if the file will not load.
+
   **The listen addresses still need a restart** — a socket already bound cannot
-  be moved under the connections using it.
+  be moved under the connections using it. That is now the only thing that
+  does, and the Web section offers the restart itself, only when one of those
+  addresses actually changed. Everywhere else, a save says it is in effect.
 
 ### Fixed
 

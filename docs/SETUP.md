@@ -464,15 +464,30 @@ exists for. Testing it from inside the building proves nothing about it.
 
 ---
 
-## 6. Restart, and check
+## 6. Check
 
 ```bash
-notifymatrix stop && notifymatrix start
 notifymatrix setup
 ```
 
 The checklist reads your real configuration **and** the running daemon, so it
 can tell "configured" from "working".
+
+**You do not need to restart anything.** Settings saved from the interface are
+applied to the running daemon as they are saved, and `config.yaml` edited by
+hand is picked up within a few seconds of you finishing the edit — the log says
+so when it happens, and says why if the file will not load.
+
+The exception is the **listen addresses** (`web.listen`, `web.ack_listen`,
+`web.link_listen`). A socket that is already bound cannot be moved under the
+connections using it, so those take a restart:
+
+```bash
+notifymatrix stop && notifymatrix start
+```
+
+The Web section of the settings page offers that restart for you, and only when
+one of those addresses actually changed.
 
 ---
 
