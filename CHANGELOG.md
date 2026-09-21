@@ -13,9 +13,27 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Fixed
+
+- **A configuration without an acknowledgement key started a daemon with no
+  interface, and said nothing about it.**
+
+  The key is normally generated the first time notifymatrix writes its own
+  configuration file, so an installation that went through setup has always had
+  one. A `config.yaml` written by hand — or restored from a backup taken before
+  the key existed — did not, and the entire web surface was conditional on it:
+  no settings page, no status board, no acknowledgement endpoint, no peer link.
+
+  The daemon started anyway. It reported itself running, watched the site, and
+  sent alerts carrying acknowledgement links that pointed at a port nothing was
+  listening on. The only symptom was a browser that could not connect to a
+  service the service manager said was up.
+
+  The key is now generated when the configuration is opened rather than only
+  when it is written, and it is kept, so links already sent keep working across
+  a restart. If one still cannot be generated — a data directory that is not
+  writable — the daemon now refuses to start and says so, instead of running
+  headless and looking healthy.
 
 ## [0.4.0] — 2026-09-21
 

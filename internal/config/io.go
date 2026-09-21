@@ -239,14 +239,27 @@ func (c *Config) ApplyDefaults() {
 	}
 }
 
-// needsHookTokens reports whether any hook is missing its token.
-func needsHookTokens(cfg *Config) bool {
+// needsMinting reports what this config is missing that only a write can
+// supply, in the words of what the operator loses by going without it -- or ""
+// when it is complete.
+//
+// A REASON RATHER THAN A BOOL because both of these are silent failures, and
+// the sentence is the only thing that will ever be said about them: a hook with
+// no token has no URL to give anybody, and a daemon with no acknowledgement key
+// brings up no interface at all.
+func needsMinting(cfg *Config) string {
+	// The ack key first: it is the one whose absence takes the whole interface
+	// with it, so it is the one worth naming if both are missing.
+	if cfg.Web.AckKey.IsZero() {
+		return "there is no acknowledgement key, so no alert could be acknowledged " +
+			"and the interface would not start"
+	}
 	for _, h := range cfg.Hooks {
 		if h.Token.IsZero() || h.Bearer.IsZero() {
-			return true
+			return "a hook has no token, so that hook will not receive anything"
 		}
 	}
-	return false
+	return ""
 }
 
 // Save writes the config atomically.
@@ -391,16 +404,23 @@ func LoadOrCreate(dataDir string) (*Config, error) {
 	// could ever fail on.
 	cfg, err := Load(dataDir)
 	if err == nil {
-		// A hook added by hand has no token, and a hook with no token has no
-		// URL -- so it is silently skipped, the endpoint never exists, and the
-		// operator has a configuration that looks complete and does nothing.
-		// Minting one needs a write, so it happens HERE rather than in Load:
+		// A secret that only Save mints is a secret a hand-written config never
+		// gets. A hook added by hand has no token, and a hook with no token has
+		// no URL -- so it is silently skipped, the endpoint never exists, and
+		// the operator has a configuration that looks complete and does
+		// nothing. The ACK KEY was the same bug with a far bigger blast radius:
+		// the daemon's entire web surface -- the interface, the acknowledgement
+		// endpoint, the peer link -- hangs off `if !cfg.Web.AckKey.IsZero()`,
+		// so a config.yaml written by hand or by an older installer started a
+		// daemon with no interface at all and said nothing about why.
+		//
+		// Minting needs a write, so it happens HERE rather than in Load:
 		// reading a config must never have a side effect, but "open it the way
-		// a program that is about to use it would" may.
-		if needsHookTokens(cfg) {
+		// a program that is about to use it would" may. Save mints both.
+		if why := needsMinting(cfg); why != "" {
 			if err := Save(dataDir, cfg); err != nil {
-				return cfg, fmt.Errorf("config: a hook has no token and one could "+
-					"not be generated -- that hook will not receive anything: %w", err)
+				return cfg, fmt.Errorf("config: %s, and the secret it needs could "+
+					"not be generated: %w", why, err)
 			}
 		}
 		return cfg, nil

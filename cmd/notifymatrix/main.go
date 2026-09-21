@@ -906,7 +906,21 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	// it: until this is listening, every alert carries a link that goes
 	// nowhere, and "escalates until a human acknowledges" is a promise the
 	// product cannot keep.
-	if !cfg.Web.AckKey.IsZero() {
+	// NO KEY IS NOW A REFUSAL, BECAUSE IT USED TO BE A SHRUG. Everything below
+	// -- the interface, the acknowledgement endpoint, the peer link -- hung off
+	// `if !cfg.Web.AckKey.IsZero()`, and the key was minted only by Save. A
+	// config.yaml written by hand therefore started a daemon that watched the
+	// site, sent alerts carrying links to nothing, served no page on any port,
+	// and printed not one word about any of it. config.LoadOrCreate now mints
+	// the key on the way in, so reaching here without one means that failed:
+	// say so and stop, rather than run headless and look healthy.
+	if cfg.Web.AckKey.IsZero() {
+		return errors.New("there is no acknowledgement key in the configuration, so " +
+			"nothing could sign an acknowledgement link and no interface would be " +
+			"served. One is normally generated on first use; if this configuration " +
+			"was written by hand, check that " + dataDir + " is writable and start again")
+	}
+	{
 		signer, err := ack.NewSigner(cfg.Web.AckKey)
 		if err != nil {
 			return err
