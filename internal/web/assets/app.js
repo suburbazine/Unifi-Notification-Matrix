@@ -1144,6 +1144,7 @@ var SETTINGS_SECTIONS = [
   { key: "escalation", title: "Escalation",  icon: "activity" },
   { key: "rules",      title: "Rules",       icon: "list" },
   { key: "quiet",      title: "Quiet hours", icon: "clock" },
+  { key: "probe",      title: "Probe",       icon: "network" },
   { key: "web",        title: "Web",         icon: "gear" },
   { key: "password",   title: "Password",    icon: "key" }
 ];
@@ -1413,6 +1414,7 @@ var SECTION_SAVES = {
 // sent alongside the settings.
 var SECTION_RENDERERS = {
   consoles: renderConsolesSection,
+  probe: renderProbeSection,
   channels: renderChannelsSection,
   webhooks: renderWebhooksSection,
   escalation: function (body, ctx) {
@@ -4552,6 +4554,369 @@ function renderSelfWatchBanner(sw) {
   } else {
     document.body.insertBefore(b, document.body.firstChild);
   }
+}
+
+// ---------- the capability probe ----------
+//
+// TWO THINGS THIS DOES THAT THE COMMAND CANNOT.
+//
+// It refuses BEFORE the window. A console with no API key answers every
+// request with its login page, and a run against one spends its capture
+// window -- the minute somebody spends deliberately walking past their own
+// cameras -- learning nothing. The daemon knows which consoles have keys, so
+// the page can say so instead of letting somebody find out afterwards.
+//
+// And it holds the instruction up while it is true. "Trigger it NOW" is a
+// line scrolled past in a terminal and a live panel here.
+//
+// WHAT IT DELIBERATELY DOES NOT DO IS SUBMIT ANYTHING. Download hands over a
+// file. Contributing it is a separate, manual act, after somebody has read
+// the bytes -- which is the same order the command enforces by printing the
+// whole file before it will talk about contributing.
+
+var probeUI = { data: null, poll: null, reading: null, text: {}, msg: "" };
+
+function loadProbe() {
+  return api("GET", "api/probe").then(function (res) {
+    probeUI.data = res.ok ? res.data : {
+      available: false, consoles: [], reports: [],
+      detail: (res.data && res.data.error) || "the probe could not be read"
+    };
+    if (settingsCtx) settingsCtx.redraw("probe");
+    probePoll();
+  });
+}
+
+// Polled only while a run is listening, and only while somebody is looking at
+// the tab. A daemon that is otherwise sitting still should not acquire a
+// permanent timer because a page was left open on another tab.
+function probePoll() {
+  if (probeUI.poll) { clearTimeout(probeUI.poll); probeUI.poll = null; }
+  var st = probeUI.data;
+  if (!st || !st.running || state.tab !== "settings") return;
+  probeUI.poll = setTimeout(loadProbe, 1500);
+}
+
+function renderProbeSection(body, ctx) {
+  if (!probeUI.data) {
+    body.appendChild(stateBlock("loading", { text: "Asking what this console can be probed for…" }));
+    loadProbe();
+    return;
+  }
+  var st = probeUI.data;
+
+  body.appendChild(el("p", "note",
+    "The probe asks your console which endpoints answer and listens on each " +
+    "push socket, then writes a file saying what this build does not handle " +
+    "and what it expects that your firmware does not have. It talks to local " +
+    "addresses only, and every name, address and identifier is replaced " +
+    "before anything is written."));
+
+  if (!st.available) {
+    body.appendChild(callout(st.detail || "This build cannot run a probe.", "warn",
+      "Not available here"));
+    return;
+  }
+
+  body.appendChild(probeReadinessCard(st));
+  body.appendChild(probeRunCard(st));
+  body.appendChild(probeReportsCard(st));
+  if (probeUI.reading) body.appendChild(probeReaderCard(st));
+}
+
+// What has to be true before the button does anything. Rendered even when
+// everything is fine, because "which console am I about to survey" is the
+// other question somebody has at this moment.
+function probeReadinessCard(st) {
+  var card = el("div", "card");
+  card.appendChild(el("div", "card-title", "Before it runs"));
+
+  var consoles = st.consoles || [];
+  if (!consoles.length) {
+    card.appendChild(stateBlock("empty", {
+      icon: "camera", tone: "warn", compact: true,
+      title: "No console is configured",
+      text: "The probe asks a console what it can do, so there has to be one to ask.",
+      action: { label: "Add a console", href: "#settings/consoles" }
+    }));
+    return card;
+  }
+
+  var list = el("div", "stack");
+  consoles.forEach(function (c) {
+    var row = el("div", "row");
+    row.appendChild(icon(c.has_key ? "check" : "warning", c.has_key ? "ok" : "warn"));
+    var text = el("div", "grow");
+    text.appendChild(el("div", "title", c.name || c.host));
+    text.appendChild(el("div", "muted small",
+      c.host + " · " + (c.has_key
+        ? "API key saved"
+        : "no API key — it would only reach the login page")));
+    row.appendChild(text);
+    list.appendChild(row);
+  });
+  card.appendChild(list);
+
+  if (st.blocked) {
+    var box = callout(st.blocked, "warn", "It cannot run yet");
+    card.appendChild(box);
+    var go = el("a", "act small", "Open Consoles");
+    go.href = "#settings/consoles";
+    card.appendChild(go);
+  }
+  return card;
+}
+
+// The run itself, and the instruction that only matters for the ninety
+// seconds it is on screen.
+function probeRunCard(st) {
+  var card = el("div", "card");
+  card.appendChild(el("div", "card-title", "Run one"));
+
+  if (st.running) {
+    // A RUN HAS TWO HALVES AND ONLY ONE OF THEM WANTS YOU TO DO ANYTHING.
+    // It walks the endpoints first, which takes no participation, and only
+    // then opens the sockets. Told to go and trigger something during the
+    // sweep, somebody is back at their desk by the moment it would have
+    // counted.
+    var lines = st.lines || [];
+    var last = "", socket = "";
+    for (var i = lines.length - 1; i >= 0; i--) {
+      if (lines[i] && lines[i].trim()) { last = lines[i]; break; }
+    }
+    for (i = lines.length - 1; i >= 0; i--) {
+      if (lines[i] && lines[i].indexOf("listening on ") === 0) {
+        socket = lines[i].slice("listening on ".length);
+        break;
+      }
+    }
+    var capturing = last.indexOf("TRIGGER") === 0;
+
+    if (capturing) {
+      card.appendChild(callout(
+        "Trigger what you want captured NOW — walk past a camera, open " +
+        "a door, press a doorbell. Several event classes do not exist unless " +
+        "somebody does something, and this window is the only chance this " +
+        "run has to see one.",
+        "warn", socket ? "Listening on " + socket : "It is listening"));
+    } else {
+      card.appendChild(callout(
+        "It is asking the console which endpoints answer. Nothing to do yet " +
+        "— this panel will say when to go and trigger something.",
+        "info", "Surveying"));
+    }
+
+    // The instruction is the callout above; repeating it in the log buries
+    // the line that says which socket is open under a paragraph of it.
+    var shown = [];
+    lines.forEach(function (l) { if (l.indexOf("TRIGGER") !== 0) shown.push(l); });
+    card.appendChild(el("pre", "probe-log", shown.slice(-14).join("\n")));
+
+
+    var stopBar = el("div", "formbar");
+    var stop = el("button", "act", "Stop");
+    stop.addEventListener("click", function () {
+      stop.disabled = true;
+      api("POST", "api/probe/stop").then(loadProbe);
+    });
+    stopBar.appendChild(stop);
+    card.appendChild(stopBar);
+    return card;
+  }
+
+  var bar = el("div", "formbar");
+
+  var withKeys = (st.consoles || []).filter(function (c) { return c.has_key; });
+  var pick = el("select");
+  withKeys.forEach(function (c) {
+    var o = el("option", null, c.name || c.host);
+    o.value = c.name || "";
+    pick.appendChild(o);
+  });
+  if (withKeys.length > 1) bar.appendChild(labelled("Console", pick));
+
+  var window_ = el("select");
+  [[30, "30 seconds"], [60, "1 minute"], [90, "90 seconds"], [180, "3 minutes"]]
+    .forEach(function (pair) {
+      var o = el("option", null, pair[1]);
+      o.value = String(pair[0]);
+      window_.appendChild(o);
+    });
+  window_.value = "30";
+  bar.appendChild(labelled("Listen for", window_,
+    "Several event classes only exist while somebody is triggering them, so " +
+    "this is how long you have to go and do that."));
+
+  var run = el("button", "act primary", "Run the probe");
+  run.disabled = !st.ready;
+  run.addEventListener("click", function () {
+    run.disabled = true;
+    probeUI.msg = "";
+    api("POST", "api/probe/run", {
+      console: withKeys.length ? (pick.value || (withKeys[0].name || "")) : "",
+      seconds: parseInt(window_.value, 10)
+    }).then(function (res) {
+      if (!res.ok) {
+        // Shown verbatim. Everything this refuses is something the operator
+        // chose, and a generic failure would leave a button that does
+        // nothing for a reason nobody can see.
+        probeUI.msg = (res.data && res.data.error) || "the probe could not start";
+        if (settingsCtx) settingsCtx.redraw("probe");
+        return;
+      }
+      loadProbe();
+    });
+  });
+  bar.appendChild(run);
+  card.appendChild(bar);
+
+  if (probeUI.msg) card.appendChild(el("div", "msg err", probeUI.msg));
+
+  // The verdict on the last run, which is the thing worth knowing about it.
+  if (st.error) {
+    card.appendChild(callout(st.error, "err", "The last run could not happen"));
+  } else if (st.last_report && !st.last_authenticated) {
+    card.appendChild(callout(
+      "Nothing came back as an API answer — the requests were refused, or " +
+      "the console never answered at all — so that report describes what " +
+      "this build went looking for and nothing about your console. It is " +
+      "kept, but there is nothing in it worth contributing.",
+      "warn", "The last run never got in"));
+  } else if (st.last_report) {
+    card.appendChild(callout(
+      "The last run reached the console. Its report is below.", "ok", "Done"));
+  }
+  return card;
+}
+
+function probeReportsCard(st) {
+  var card = el("div", "card");
+  card.appendChild(el("div", "card-title", "Reports"));
+
+  var reports = st.reports || [];
+  if (!reports.length) {
+    card.appendChild(stateBlock("empty", {
+      icon: "list", compact: true,
+      title: "No reports yet",
+      text: "A run writes one file per go, and they stay on this machine."
+    }));
+    return card;
+  }
+
+  var list = el("div", "stack");
+  reports.forEach(function (r) {
+    var row = el("div", "row");
+    row.appendChild(icon(r.authenticated ? "check" : "warning",
+      r.authenticated ? "ok" : "warn"));
+
+    var text = el("div", "grow");
+    text.appendChild(el("div", "title mono", r.name));
+    var detail = stamp(r.at) + " · " + probeSize(r.size) + " · " +
+      r.findings + (r.findings === 1 ? " finding" : " findings");
+    if (r.unreadable) {
+      detail += " · " + r.unreadable;
+    } else if (!r.authenticated) {
+      detail += " · nothing was authenticated";
+    }
+    text.appendChild(el("div", "muted small", detail));
+    row.appendChild(text);
+
+    var read = el("button", "act small", "Read it");
+    read.addEventListener("click", function () { probeRead(r.name); });
+    row.appendChild(read);
+
+    list.appendChild(row);
+  });
+  card.appendChild(list);
+  return card;
+}
+
+function probeSize(n) {
+  if (!n) return "0 bytes";
+  if (n < 1024) return n + " bytes";
+  if (n < 1024 * 1024) return Math.round(n / 1024) + " KB";
+  return (n / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function probeRead(name) {
+  probeUI.reading = name;
+  if (probeUI.text[name] !== undefined) {
+    if (settingsCtx) settingsCtx.redraw("probe");
+    return;
+  }
+  fetch("api/probe/reports/" + encodeURIComponent(name), { credentials: "same-origin" })
+    .then(function (r) { return r.ok ? r.text() : null; })
+    .then(function (t) {
+      probeUI.text[name] = t === null ? "" : t;
+      if (settingsCtx) settingsCtx.redraw("probe");
+    });
+}
+
+// READING COMES BEFORE CONTRIBUTING, and the order is the point.
+//
+// The command prints the entire file before it will so much as tell you where
+// to send it. A page that offered a Contribute button would undo that, so
+// there is no such button: there is the file, on screen, and a download.
+// What happens after the download is the operator's, done by hand, knowing
+// what is in it.
+function probeReaderCard(st) {
+  var name = probeUI.reading;
+  var card = el("div", "card");
+  card.appendChild(el("div", "card-title", name));
+
+  var meta = null;
+  (st.reports || []).forEach(function (r) { if (r.name === name) meta = r; });
+
+  if (meta && !meta.authenticated) {
+    card.appendChild(callout(
+      "Nothing in this run came back as an API answer, so what follows is a " +
+      "list of what this build asked for rather than anything about your " +
+      "console. There is no contribution in it.",
+      "warn", "This one got nowhere"));
+  }
+
+  card.appendChild(el("p", "note",
+    "This is the whole file, exactly as it would be published. Read it before " +
+    "you decide to contribute it. It should contain no camera names, no door " +
+    "names, no MAC addresses and no IP addresses — only field names, types, " +
+    "UniFi's own vocabulary and your console's firmware version. If anything " +
+    "in it identifies your site, that is a bug in this tool and reporting it " +
+    "matters more than the contribution does."));
+
+  var text = probeUI.text[name];
+  if (text === undefined) {
+    card.appendChild(stateBlock("loading", { text: "Reading it…", compact: true }));
+    return card;
+  }
+  card.appendChild(el("pre", "probe-file", text || "(empty)"));
+
+  card.appendChild(el("p", "note",
+    "Nothing is uploaded from this page. Download saves the .jsonl file to " +
+    "this browser; contributing it means opening an issue and attaching that " +
+    "file yourself, which is deliberately a separate act."));
+
+  var bar = el("div", "formbar");
+  var dl = el("a", "act primary", "Download the .jsonl");
+  dl.href = "api/probe/reports/" + encodeURIComponent(name) + "/download";
+  dl.setAttribute("download", name);
+  bar.appendChild(dl);
+
+  if (!meta || meta.authenticated) {
+    var issue = el("a", "act", "Open an issue to attach it to");
+    issue.href = "https://github.com/suburbazine/Unifi-Notification-Matrix/issues/new";
+    issue.target = "_blank";
+    issue.rel = "noopener noreferrer";
+    bar.appendChild(issue);
+  }
+
+  var close = el("button", "act", "Close");
+  close.addEventListener("click", function () {
+    probeUI.reading = null;
+    if (settingsCtx) settingsCtx.redraw("probe");
+  });
+  bar.appendChild(close);
+  card.appendChild(bar);
+  return card;
 }
 
 // ---------- outbound webhooks ----------

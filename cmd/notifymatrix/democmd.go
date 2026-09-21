@@ -90,6 +90,18 @@ func demoCmd(dataDir string, explicitDir bool) int {
 		TestChannel: func(context.Context, string) (string, error) {
 			return "", fmt.Errorf("nothing is sent in demo mode")
 		},
+		// Present, and switched off, rather than absent: "this build cannot
+		// run a probe" would be a lie about the build. Demo mode contacts
+		// nothing, and the probe is the one screen whose entire purpose is to
+		// contact something.
+		ProbeStatus: func() web.ProbeStatus {
+			return web.ProbeStatus{
+				Detail: "The probe asks a real console what it can do, and demo " +
+					"mode contacts nothing at all. Run it against your own " +
+					"console from Settings on a real installation, or from a " +
+					"terminal with `notifymatrix probe`.",
+			}
+		},
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)

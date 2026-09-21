@@ -918,9 +918,22 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			auditLog: auditLog,
 		}
 
+		// The probe, wired to the interface. It holds the configuration so it
+		// can refuse a run against a console with no key BEFORE the capture
+		// window rather than after it.
+		prb := newProbeDeps(dataDir, version, func() *config.Config {
+			cfgMu.RLock()
+			defer cfgMu.RUnlock()
+			return current
+		})
+
 		ui, err := web.New(web.Deps{
-			Store: db,
-			Audit: auditLog,
+			Store:       db,
+			Audit:       auditLog,
+			ProbeStatus: prb.status,
+			ProbeStart:  prb.start,
+			ProbeStop:   prb.stop,
+			ProbeRead:   prb.read,
 			Config: func() *config.Config {
 				cfgMu.RLock()
 				defer cfgMu.RUnlock()

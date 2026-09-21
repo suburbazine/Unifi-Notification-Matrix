@@ -251,6 +251,14 @@ then writes a JSONL report saying what this build does not handle (`NEW`) and
 what it expects that your firmware does not have (`GONE`). It is useful on its
 own, and you may choose to contribute it.
 
+**It is also in the interface**, under Settings → Probe, which can do two
+things a terminal cannot. It knows which consoles have an API key **before** a
+run starts, so it refuses instead of spending the capture window against a
+console that would only ever answer with its login page. And it holds up the
+instruction to go and trigger something for the seconds during which that is
+actually true, rather than printing it once into a scrollback nobody is
+watching from the far end of the building.
+
 **Three things about it are worth knowing before you run it.**
 
 **It only talks to local networks.** RFC 1918, loopback, link-local, IPv6 ULA

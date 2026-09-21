@@ -134,11 +134,11 @@ func probeCommand(defaultDataDir string, args []string) int {
 	// exactly like a survey that found nothing.
 	if !report.Authenticated() {
 		fmt.Println("Nothing has been sent anywhere, and there is nothing here worth")
-		fmt.Println("contributing: no key was accepted, so this records what this build")
-		fmt.Println("asked for rather than what your console has.")
+		fmt.Println("contributing: nothing came back as an API answer, so this records what")
+		fmt.Println("this build asked for rather than what your console has.")
 		fmt.Println()
-		fmt.Println("Issue an API key per product in the console, configure it, and run")
-		fmt.Println("this again.")
+		fmt.Println("Either the requests were refused or the console never answered. Check")
+		fmt.Println("the host, issue an API key per product, and run this again.")
 		return 1
 	}
 
@@ -275,11 +275,11 @@ func probeSubmit(dir, path string) int {
 	}
 	if !authed {
 		fmt.Fprintf(os.Stderr, "%s came from a run that was never authenticated.\n", path)
-		fmt.Fprintln(os.Stderr, "Every request was refused, so it records what this build asked for and")
-		fmt.Fprintln(os.Stderr, "nothing about your console. There is no contribution in it.")
+		fmt.Fprintln(os.Stderr, "Nothing came back as an API answer, so it records what this build asked")
+		fmt.Fprintln(os.Stderr, "for and nothing about your console. There is no contribution in it.")
 		fmt.Fprintln(os.Stderr)
-		fmt.Fprintln(os.Stderr, "Issue an API key per product, configure it, and run `notifymatrix probe`")
-		fmt.Fprintln(os.Stderr, "again.")
+		fmt.Fprintln(os.Stderr, "Either the requests were refused or the console never answered. Check the")
+		fmt.Fprintln(os.Stderr, "host, issue an API key per product, and run `notifymatrix probe` again.")
 		return 1
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {

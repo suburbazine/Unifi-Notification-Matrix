@@ -205,6 +205,14 @@ type harness struct {
 	hookArmed []string
 	hookFired []string
 
+	// The probe, as the interface sees it: what status reports, what a run
+	// was asked for, and the bytes a report would hand back.
+	probeStatus   ProbeStatus
+	probeStarts   []string
+	probeStartErr error
+	probeStops    int
+	probeBodies   map[string][]byte
+
 	// entities stands in for what the running daemon has seen.
 	entities []EntitySeen
 
@@ -346,6 +354,31 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 			defer h.mu.Unlock()
 			h.hookFired = append(h.hookFired, name)
 			return "TEST — Wan down — Head office", nil
+		},
+		ProbeStatus: func() ProbeStatus {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			return h.probeStatus
+		},
+		ProbeStart: func(console string, listen time.Duration, products []string) error {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.probeStarts = append(h.probeStarts,
+				fmt.Sprintf("%s:%s:%v", console, listen, products))
+			return h.probeStartErr
+		},
+		ProbeStop: func() {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.probeStops++
+		},
+		ProbeRead: func(name string) ([]byte, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if b, ok := h.probeBodies[name]; ok {
+				return b, nil
+			}
+			return nil, errors.New("no such report")
 		},
 		Checklist: func() setup.Input {
 			return setup.Input{

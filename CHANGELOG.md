@@ -55,6 +55,25 @@ view against the release before them.
   maintainer promising an enforcement process nobody staffs is worse than no
   document at all.
 
+- **The capability probe is in the interface**, under Settings → Probe.
+
+  It does two things there that a terminal cannot. It knows which consoles
+  have an API key **before** a run starts, so it says so and refuses rather
+  than spending the capture window against a console that would only answer
+  with its login page — which is the failure that prompted this. And it holds
+  the instruction to go and trigger something on screen for the seconds during
+  which it is true, instead of printing it once into a scrollback nobody is
+  watching from the far end of the building.
+
+  Reports are listed with the one verdict that matters — whether anything in
+  them got past the console — and shown in full before anything else is
+  offered. **Nothing is uploaded.** Download hands over the `.jsonl` file;
+  attaching it to an issue stays a separate, manual act, in that order,
+  because reading the bytes first is the whole point of the redaction.
+
+  One run at a time, a capture window bounded at both ends, and every route
+  behind a session.
+
 ### Fixed
 
 - **The probe could not tell "I was not let in" from "this firmware does not

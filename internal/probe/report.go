@@ -122,16 +122,28 @@ func (r *Report) Authenticated() bool {
 	return len(r.Meta.Versions) > 0
 }
 
-// ScanAuthenticated answers the same question from a written report.
+// FileSummary is what a written report can say about itself without being
+// loaded in full.
+type FileSummary struct {
+	// Authenticated is the question that decides whether the file is worth
+	// anything: did anything in the run get past the front door.
+	Authenticated bool
+
+	Findings int
+	Versions map[string]string
+}
+
+// ScanFile reads a written report and summarises it.
 //
 // Read back from the file rather than carried out of the run that produced
-// it: submit may be looking at something captured days ago, and the file is
+// it: a report on disk outlives the process that wrote it, and the file is
 // what would actually be published.
 //
 // Unparseable lines are skipped rather than fatal. A truncated submission
 // should still be judged on the records that survived -- the same reason the
 // format is JSONL.
-func ScanAuthenticated(rd io.Reader) (bool, error) {
+func ScanFile(rd io.Reader) (FileSummary, error) {
+	var out FileSummary
 	sc := bufio.NewScanner(rd)
 	sc.Buffer(make([]byte, 0, 64<<10), 8<<20)
 	for sc.Scan() {
@@ -149,16 +161,25 @@ func ScanAuthenticated(rd io.Reader) (bool, error) {
 		case "endpoint":
 			var e EndpointResult
 			if json.Unmarshal([]byte(line), &e) == nil && answeredJSON(e) {
-				return true, nil
+				out.Authenticated = true
 			}
+		case "finding":
+			out.Findings++
 		case "meta":
 			var m Meta
 			if json.Unmarshal([]byte(line), &m) == nil && len(m.Versions) > 0 {
-				return true, nil
+				out.Versions = m.Versions
+				out.Authenticated = true
 			}
 		}
 	}
-	return false, sc.Err()
+	return out, sc.Err()
+}
+
+// ScanAuthenticated answers the one question submit asks.
+func ScanAuthenticated(rd io.Reader) (bool, error) {
+	sum, err := ScanFile(rd)
+	return sum.Authenticated, err
 }
 
 // Save writes the report to path, creating parent directories.
@@ -198,9 +219,10 @@ func (r *Report) Summarise(w io.Writer) {
 	// firmware, when it is a list of what this build went looking for.
 	if !r.Authenticated() {
 		fmt.Fprintln(w, "THIS RUN WAS NOT AUTHENTICATED -- nothing below describes your console.")
-		fmt.Fprintln(w, "Every request was refused. What follows is what this build went looking")
-		fmt.Fprintln(w, "for, not what your firmware has. Issue an API key for each product you")
-		fmt.Fprintln(w, "want surveyed, configure the console, and run it again.")
+		fmt.Fprintln(w, "Nothing came back as an API answer: requests were refused, or the")
+		fmt.Fprintln(w, "console did not answer at all. What follows is what this build went")
+		fmt.Fprintln(w, "looking for, not what your firmware has. Check the host, issue an API")
+		fmt.Fprintln(w, "key for each product you want surveyed, and run it again.")
 		fmt.Fprintln(w)
 	}
 

@@ -862,3 +862,21 @@ table.audit tr.is-err > td{background:color-mix(in srgb,var(--err) 7%,transparen
 .audit-fields .pair-k{color:var(--muted);text-transform:lowercase}
 .audit-fields .pair-v{color:var(--fg-2);overflow-wrap:anywhere}
 a.pair .pair-v{color:var(--accent)}
+
+/* ---------- the capability probe ------------------------------------------- */
+
+/* The live log during a run, and the file itself before it is downloaded.
+   Both are monospaced because both ARE the bytes -- the whole reason the file
+   is shown rather than summarised is that somebody is meant to read what would
+   actually be published. */
+.probe-log,.probe-file{
+  margin:var(--sp-2) 0 0;padding:var(--sp-2) var(--sp-3);
+  background:var(--card-2);border:1px solid var(--line);border-radius:8px;
+  font-family:var(--mono);font-size:var(--fs-sm);line-height:1.5;
+  color:var(--fg-2);overflow:auto;white-space:pre;
+}
+/* Capped rather than endless: the log is a tail, and the file is long enough
+   that an uncapped block would push the download button off the screen it is
+   meant to be read before. */
+.probe-log{max-height:16rem}
+.probe-file{max-height:26rem;white-space:pre-wrap;overflow-wrap:anywhere}

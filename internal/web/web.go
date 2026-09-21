@@ -110,6 +110,19 @@ type Deps struct {
 	LinkApproveCondition func(slug string, c ApprovedCondition) error
 	LinkDismissCondition func(slug, condition string)
 
+	// The capability probe, run from the interface. All four are optional
+	// together: a build that supplies none simply has no Probe section, which
+	// is a different thing from a probe that cannot run and says why.
+	//
+	// ProbeStart takes the console by NAME rather than by host. The host is
+	// the operator's to type in a terminal; from a page the console is one
+	// they already configured, and resolving it here means the key that goes
+	// with it cannot be mismatched to it.
+	ProbeStatus func() ProbeStatus
+	ProbeStart  func(console string, listen time.Duration, products []string) error
+	ProbeStop   func()
+	ProbeRead   func(name string) ([]byte, error)
+
 	// TestChannel sends one channel's proof-of-configuration message and
 	// reports what happened. Optional: a build that does not supply it simply
 	// has no test button.
@@ -442,6 +455,16 @@ func (s *Server) Handler() http.Handler {
 		s.requireAuth(http.HandlerFunc(s.handleLinkApproveCondition)))
 	mux.Handle("DELETE /api/link/peers/{slug}/conditions/{condition}",
 		s.requireAuth(http.HandlerFunc(s.handleLinkDismissCondition)))
+	// The probe reads the console's whole surface and writes a file about it,
+	// so every route is behind a session: running one is an action against
+	// the console, and a report is configuration detail about the site even
+	// after redaction.
+	mux.Handle("GET /api/probe", s.requireAuth(http.HandlerFunc(s.handleProbeStatus)))
+	mux.Handle("POST /api/probe/run", s.requireAuth(http.HandlerFunc(s.handleProbeRun)))
+	mux.Handle("POST /api/probe/stop", s.requireAuth(http.HandlerFunc(s.handleProbeStop)))
+	mux.Handle("GET /api/probe/reports/{name}", s.requireAuth(http.HandlerFunc(s.handleProbeReport)))
+	mux.Handle("GET /api/probe/reports/{name}/download",
+		s.requireAuth(http.HandlerFunc(s.handleProbeDownload)))
 	mux.Handle("GET /api/update", s.requireAuth(http.HandlerFunc(s.handleUpdateState)))
 	mux.Handle("POST /api/update/check", s.requireAuth(http.HandlerFunc(s.handleUpdateCheck)))
 	mux.Handle("POST /api/update/apply", s.requireAuth(http.HandlerFunc(s.handleUpdateApply)))
