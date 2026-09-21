@@ -83,6 +83,12 @@ type incidentView struct {
 	Title    string `json:"title"`
 	Detail   string `json:"detail,omitempty"`
 
+	// Entity and Condition are the dedup key's parts, sent separately so the
+	// page can say what a silence rule generated from this incident would
+	// match without re-deriving the key's format in JavaScript.
+	Entity    string `json:"entity,omitempty"`
+	Condition string `json:"condition,omitempty"`
+
 	State        string `json:"state"`
 	Acknowledged bool   `json:"acknowledged"`
 	Resolved     bool   `json:"resolved"`
@@ -111,6 +117,8 @@ func (s *Server) viewOf(inc *incident.Incident) incidentView {
 		Source:            inc.Source,
 		Title:             inc.Title,
 		Detail:            inc.Detail,
+		Entity:            inc.Entity(),
+		Condition:         inc.Condition(),
 		State:             string(inc.State()),
 		Acknowledged:      inc.Acknowledged(),
 		Resolved:          inc.Resolved(),

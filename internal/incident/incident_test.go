@@ -213,3 +213,25 @@ func TestConditionRoundTripsThroughTheDedupKey(t *testing.T) {
 		t.Errorf("Condition() on a malformed key = %q, want empty", got)
 	}
 }
+
+// Entity() reads the middle segment back, in the CLEANED form Key wrote:
+// lower-cased, "/" replaced, "unknown" for an empty id. Pinned as the cleaned
+// form on purpose -- a rule generated from it has to match the way Key
+// normalised, not the way the source spelled it.
+func TestEntityRoundTripsThroughTheDedupKey(t *testing.T) {
+	for _, tc := range []struct{ source, entity, condition, want string }{
+		{"access", "door-1", "door-forced-open", "door-1"},
+		{"protect", "Front Door Cam", "motion", "front door cam"},
+		{"protect", "Front Door/Camera", "motion", "front door_camera"},
+		{"network", "", "offline", "unknown"},
+	} {
+		inc := &Incident{DedupKey: Key(tc.source, tc.entity, tc.condition)}
+		if got := inc.Entity(); got != tc.want {
+			t.Errorf("Key(%q,%q,%q): Entity() = %q, want %q",
+				tc.source, tc.entity, tc.condition, got, tc.want)
+		}
+	}
+	if got := (&Incident{DedupKey: "nonsense"}).Entity(); got != "" {
+		t.Errorf("Entity() on a malformed key = %q, want empty", got)
+	}
+}

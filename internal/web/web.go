@@ -512,6 +512,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/hooks/{name}/fire", s.requireAuth(http.HandlerFunc(s.handleFireHookTest)))
 	mux.Handle("POST /api/incidents/{id}/ack", s.requireAuth(http.HandlerFunc(s.handleAck)))
 	mux.Handle("POST /api/incidents/{id}/close", s.requireAuth(http.HandlerFunc(s.handleClose)))
+	// Writes a rule, so it is gated like the settings form that would
+	// otherwise write it. See internal/web/silence.go.
+	mux.Handle("POST /api/incidents/{id}/silence", s.requireAuth(http.HandlerFunc(s.handleSilenceIncident)))
 	mux.Handle("POST /api/service", s.requireAuth(http.HandlerFunc(s.handleServiceAction)))
 	// Pairing a peer hands it the ability to raise alarms here and to take
 	// over a capability, so both routes are behind a session like every other

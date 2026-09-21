@@ -264,6 +264,8 @@ section[hidden]{display:none}
 .card.err{background:var(--err-tint);color:var(--err)}
 /* A closed incident is history: still legible, clearly not live. */
 .card.done{opacity:.62}
+/* The silence confirmation opens inside the incident card, under its buttons. */
+.card.silence{margin:var(--sp-3) 0 0}
 .card.done:hover{opacity:.85}
 .card>.title,.card>.row>.title{font-size:var(--fs-base)}
 .card-title{display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-lg);font-weight:600;margin:0 0 var(--sp-2)}

@@ -14,7 +14,8 @@ var REFRESH_MS = 5000;
 // hash named (#settings/channels), if any.
 var state = {
   authed: false, setupRequired: false, minPassword: 12, tab: "incidents",
-  section: "", ready: true, todo: 0, serviceState: "", setupKnown: false
+  section: "", ready: true, todo: 0, serviceState: "", setupKnown: false,
+  silencing: null // { id, err } while a card's silence panel is open; see silencePanel
 };
 
 function el(tag, cls, text) {
@@ -503,6 +504,9 @@ function incidentCard(inc, showActions) {
   }
   if (inc.resolved) meta.push("condition cleared " + stamp(inc.resolved_at));
   if (inc.predecessor_id) meta.push("recurrence of " + inc.predecessor_id);
+  // The reason is the only trace on a closed card of WHY it closed -- and for
+  // a card closed by silencing it, the only place that names the rule.
+  if (inc.state === "closed" && inc.close_reason) meta.push(inc.close_reason);
   card.appendChild(el("div", "muted small", meta.join("  ·  ")));
 
   if (inc.acknowledged && !inc.resolved && inc.state !== "closed") {
@@ -532,9 +536,133 @@ function incidentCard(inc, showActions) {
         { reason: "closed from the web UI" });
     });
     bar.appendChild(closeBtn);
+    // Silence: write the ignore rule this card describes. NOT offered on a
+    // critical card -- quiet hours never apply to critical, and neither does
+    // this. That is a courtesy, not the enforcement: the API refuses it
+    // whatever the page shows (internal/web/silence.go says why).
+    var silBtn = null;
+    if (silenceable(inc)) {
+      silBtn = el("button", "act", "Silence…");
+      silBtn.type = "button";
+      silBtn.addEventListener("click", function () { silencePanel(card, inc, silBtn); });
+      bar.appendChild(silBtn);
+    }
     card.appendChild(bar);
+    // The board redraws every few seconds and a redraw replaces this card,
+    // so an open panel is re-opened from state rather than kept: the board
+    // stays live and the panel stays put. After the bar, where it opened.
+    if (silBtn && state.silencing && state.silencing.id === inc.id) silencePanel(card, inc, silBtn);
   }
   return card;
+}
+
+// silenceable mirrors the API's refusals so the page does not offer a click
+// that will be refused: critical, and an alarm whose key names no device.
+function silenceable(inc) {
+  return inc.severity !== "critical" &&
+    !!inc.entity && !!inc.condition &&
+    inc.entity !== "unknown" && inc.condition !== "unknown";
+}
+
+// silencePanel opens the confirmation INSIDE the card, saying exactly what the
+// rule will match before anything is written. Inline rather than a
+// window.confirm, because the blast radius has to be readable: three facts,
+// and a sentence about what is NOT covered.
+function silencePanel(card, inc, button) {
+  var old = card.querySelector(".silence");
+  if (old) {
+    card.removeChild(old); button.disabled = false; state.silencing = null;
+    return;
+  }
+  button.disabled = true;
+  // fresh is a click; not fresh is the board redrawing under an open panel.
+  var fresh = !state.silencing || state.silencing.id !== inc.id;
+  if (fresh) state.silencing = { id: inc.id, err: "" };
+
+  var p = el("div", "card is-warn silence");
+  p.appendChild(el("div", "title", "Silence this alarm for good?"));
+
+  var what = el("div", "facts");
+  [["source", inc.source, "server"], ["condition", inc.condition, "warning"],
+   ["device", inc.entity, "camera"]].forEach(function (f) {
+    var chip = el("span", "fact");
+    chip.appendChild(icon(f[2], "sm"));
+    chip.appendChild(el("span", "", f[0] + ": " + f[1]));
+    what.appendChild(chip);
+  });
+  p.appendChild(what);
+
+  p.appendChild(el("div", "detail",
+    "Adds a rule that ignores \"" + inc.condition + "\" from " + inc.entity +
+    " on " + inc.source + " from now on, and closes this incident so it stops " +
+    "alerting now. Nothing wider: other devices, and anything else this one " +
+    "reports, still alert."));
+  p.appendChild(el("div", "note",
+    "The rule goes under Settings › Rules, named after this alarm. Remove " +
+    "it there to hear this again. It is recorded in Activity."));
+
+  var bar = el("div", "formbar");
+  var go = el("button", "act danger", "Silence it");
+  go.type = "button";
+  var cancel = el("button", "act", "Cancel");
+  cancel.type = "button";
+  var msg = el("div", "msg" + (state.silencing.err ? " err" : ""), state.silencing.err);
+  cancel.addEventListener("click", function () {
+    card.removeChild(p);
+    button.disabled = false;
+    state.silencing = null;
+  });
+  go.addEventListener("click", function () {
+    go.disabled = true; cancel.disabled = true;
+    api("POST", "api/incidents/" + encodeURIComponent(inc.id) + "/silence", {}).then(function (res) {
+      if (!res.ok) {
+        go.disabled = false; cancel.disabled = false;
+        msg.className = "msg err";
+        msg.textContent = (res.data && res.data.error) || "that was refused";
+        if (state.silencing && state.silencing.id === inc.id) state.silencing.err = msg.textContent;
+        return;
+      }
+      state.silencing = null;
+      silenceNotice(inc, res.data || {});
+      refreshIncidents();
+    });
+  });
+  bar.appendChild(go); bar.appendChild(cancel);
+  p.appendChild(bar);
+  p.appendChild(msg);
+  card.appendChild(p);
+  // Only on the click. Focusing on every redraw would drag the keyboard to
+  // this button every few seconds for as long as the panel is open.
+  if (fresh) go.focus();
+}
+
+// silenceNotice says where the silence went. It sits ABOVE the list rather
+// than on the card, because the card is closed by the same click and the
+// board redraws every few seconds: a message on it would be gone before it
+// was read. This one stays until dismissed.
+function silenceNotice(inc, data) {
+  var body = el("span");
+  body.appendChild(document.createTextNode(
+    "\"" + (inc.title || inc.dedup_key) + "\" will not alert again. " +
+    (data.already ? "The rule was already in place: " : "Rule added: ") +
+    "“" + (data.rule || "") + "”, under "));
+  var a = el("a", "", "Settings › Rules");
+  a.href = "#settings/rules";
+  body.appendChild(a);
+  body.appendChild(document.createTextNode(
+    " — remove it there to hear this again." +
+    (data.closed === false && data.detail ? " " + data.detail : "")));
+  var box = callout(body, data.closed === false ? "warn" : "ok", "Silenced");
+
+  var dismiss = el("button", "act small ghost", "Dismiss");
+  dismiss.type = "button";
+  dismiss.addEventListener("click", function () { box.parentNode.removeChild(box); });
+  var bar = el("div", "formbar");
+  bar.appendChild(dismiss);
+  box.lastChild.appendChild(bar);
+
+  var host = byId("open-incidents");
+  host.parentNode.insertBefore(box, host);
 }
 
 // incidentAge says how long an incident has been what it is. "3m old" on
@@ -826,6 +954,37 @@ function serviceAction(action, button, msg) {
     msg.textContent = "asked. This page will go quiet for a few seconds while it restarts.";
     setTimeout(refreshAll, 6000);
   });
+}
+
+// saveNotice is what a Save appends: what happened, and what is left to do.
+//
+// ALMOST NOTHING IS LEFT TO DO NOW. Channels, escalation, rules, quiet hours,
+// hooks and consoles are rebuilt on the running daemon as they are saved, so
+// the old sentence -- "takes effect when the service restarts", after every
+// save without exception -- is now untrue for all but one section, and an
+// instruction that is usually unnecessary is one an operator stops reading.
+//
+// The listen addresses are the exception, and they are a real one: a socket
+// that is already bound cannot be moved under the connections using it. That
+// section says so, and only when one of those fields actually changed --
+// ack_base_url sits beside them and needs nothing.
+function saveNotice(save, before, fresh) {
+  if (save.restart && (!save.restartIf || save.restartIf(before, fresh))) {
+    return restartOffer(save.restart);
+  }
+  return appliedNotice();
+}
+
+// appliedNotice is the other half of the sentence restartOffer used to carry.
+function appliedNotice(detail) {
+  var box = el("div", "restart-offer callout is-ok");
+  box.appendChild(icon("check"));
+  var inner = el("div", "grow");
+  inner.appendChild(el("span", "callout-title", "Saved, and in effect now."));
+  inner.appendChild(el("div", "callout-body", detail ||
+    "The running daemon has taken this change; there is nothing to restart."));
+  box.appendChild(inner);
+  return box;
 }
 
 // restartOffer is what a Save appends when the change it just made only
@@ -1325,6 +1484,7 @@ function saveBar(ctx, sec, save) {
     msg.className = "msg"; msg.textContent = "";
     clear(notice);
     btn.disabled = true;
+    var before = ctx.saved;
     api("POST", "api/settings", save.payload(ctx)).then(function (res) {
       btn.disabled = false;
       if (!res.ok) {
@@ -1337,7 +1497,7 @@ function saveBar(ctx, sec, save) {
         if (fresh) { ctx.saved = fresh; save.apply(ctx, fresh); settingsLede(fresh); }
         ctx.redraw(sec.key);
         (save.also || []).forEach(function (k) { ctx.redraw(k); });
-        notice.appendChild(restartOffer(save.restart));
+        notice.appendChild(saveNotice(save, before, fresh));
         refreshStatus();
       };
       if (save.refetchCreds) {
@@ -1360,8 +1520,7 @@ function saveBar(ctx, sec, save) {
 var SECTION_SAVES = {
   consoles: {
     payload: function (ctx) { return { consoles: ctx.draft.consoles || [] }; },
-    apply: function (ctx, fresh) { ctx.draft.consoles = clone(fresh.consoles || []); },
-    restart: "A console change"
+    apply: function (ctx, fresh) { ctx.draft.consoles = clone(fresh.consoles || []); }
   },
   channels: {
     payload: function (ctx) {
@@ -1373,8 +1532,7 @@ var SECTION_SAVES = {
       var fc = fresh.channels || {};
       ["ntfy", "email", "pushover", "voice"].forEach(function (k) { ch[k] = clone(fc[k] || { enabled: false }); });
     },
-    also: ["escalation"],
-    restart: "A channel change"
+    also: ["escalation"]
   },
   webhooks: {
     payload: function (ctx) {
@@ -1390,23 +1548,19 @@ var SECTION_SAVES = {
       ch.webhooks = clone((fresh.channels && fresh.channels.webhooks) || []);
     },
     also: ["escalation"],
-    refetchCreds: true,
-    restart: "A webhook change"
+    refetchCreds: true
   },
   escalation: {
     payload: function (ctx) { return { policies: ctx.draft.policies || {} }; },
-    apply: function (ctx, fresh) { ctx.draft.policies = clone(fresh.policies || {}); },
-    restart: "An escalation change"
+    apply: function (ctx, fresh) { ctx.draft.policies = clone(fresh.policies || {}); }
   },
   rules: {
     payload: function (ctx) { return { rules: ctx.draft.rules || [] }; },
-    apply: function (ctx, fresh) { ctx.draft.rules = clone(fresh.rules || []); },
-    restart: "A rule change"
+    apply: function (ctx, fresh) { ctx.draft.rules = clone(fresh.rules || []); }
   },
   quiet: {
     payload: function (ctx) { return { quiet_hours: ctx.draft.quiet_hours || {} }; },
-    apply: function (ctx, fresh) { ctx.draft.quiet_hours = clone(fresh.quiet_hours || {}); },
-    restart: "A quiet hours change"
+    apply: function (ctx, fresh) { ctx.draft.quiet_hours = clone(fresh.quiet_hours || {}); }
   },
   web: {
     payload: function (ctx) {
@@ -1415,7 +1569,14 @@ var SECTION_SAVES = {
         ack_listen: w.ack_listen || "", link_listen: w.link_listen || "" } };
     },
     apply: function (ctx, fresh) { ctx.draft.web = clone(fresh.web || {}); },
-    restart: "A listen address change"
+    restart: "A listen address change",
+    // Only the addresses. ack_base_url is in this section too and is read
+    // when an alert is composed, so it needs nothing.
+    restartIf: function (before, after) {
+      var a = (before && before.web) || {}, b = (after && after.web) || {};
+      return a.listen !== b.listen || a.ack_listen !== b.ack_listen ||
+        a.link_listen !== b.link_listen;
+    }
   }
 };
 
@@ -2688,7 +2849,8 @@ var AUDIT_KINDS = {
 var FIELD_LABELS = {
   channel: "channel", client: "from", hook: "hook", entity: "about",
   changed: "sections", action: "action", reason: "reason", until: "until",
-  version: "version", detail: "detail", event: "event", error: "error"
+  version: "version", detail: "detail", event: "event", error: "error",
+  rule: "rule", source: "source", condition: "condition", incident: "incident"
 };
 
 function auditKind(kind) {
@@ -4019,8 +4181,10 @@ function afterRepoint(newID) {
       var sec = ctx.sections.rules;
       if (sec && sec.foot) {
         clear(sec.foot);
-        sec.foot.appendChild(restartOffer("The rule now points at " + newID +
-          ", and that"));
+        // Rules are rebuilt on the running daemon as they are saved, so this
+        // is done rather than pending.
+        sec.foot.appendChild(appliedNotice("The rule now points at " + newID +
+          ", and the running daemon is already using it."));
         if (SECTION_SAVES.rules) {
           sec.foot.appendChild(saveBar(ctx, { key: "rules", title: "Rules" },
             SECTION_SAVES.rules));

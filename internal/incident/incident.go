@@ -126,6 +126,23 @@ func (i *Incident) Condition() string {
 	return parts[2]
 }
 
+// Entity is the entity this incident is about, read back out of the dedup
+// key -- the middle segment, safe to parse for the same reason Condition is.
+//
+// What comes back is the key's CLEANED form: lower-cased, with any "/" the id
+// held turned into "_", and "unknown" where the source supplied no id at all.
+// That is the right thing for a rule to match on -- rule matching is
+// case-insensitive -- but a caller that needs to know whether there was an
+// entity at all must treat "unknown" as "none", because a rule written for the
+// literal word "unknown" matches nothing.
+func (i *Incident) Entity() string {
+	parts := strings.Split(i.DedupKey, "/")
+	if len(parts) != 3 {
+		return ""
+	}
+	return parts[1]
+}
+
 // State computes the lifecycle position from the timestamps.
 //
 // This is a function rather than a field on purpose. The product's central
