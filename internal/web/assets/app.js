@@ -4340,9 +4340,22 @@ function ruleCard(r, idx, rules, advanced, redraw, vocab, seen) {
     h.appendChild(labelled("Conditions (comma separated, * allowed)", bindList(r, "conditions")));
     h.appendChild(labelled("Entities (comma separated, * allowed)", bindList(r, "entities", seen)));
     c.appendChild(h);
+    // WHICH WAY A LIST READS IS NOT OBVIOUS, and reading it the other way
+    // produces a rule that can never match. Somebody asked for "fire when
+    // both X and Y are true" and this is the field they would have typed it
+    // into.
     c.appendChild(el("div", "note",
-      "An empty list matches anything. A trailing * matches by prefix, so " +
-      "\"doorbell*\" covers every condition starting with it."));
+      "An empty list matches anything. Within a field a list means ANY of " +
+      "these, never all — and the three fields are combined, so this reads " +
+      "as \"a protect event, about one of these cameras, whose condition is " +
+      "one of these\". A trailing * matches by prefix, so \"doorbell*\" covers " +
+      "every condition starting with it."));
+    c.appendChild(el("div", "note",
+      "There is no way to say \"both X and Y\" here, and that is not an " +
+      "oversight: a rule looks at ONE event, and an event carries one " +
+      "condition, so such a rule would match nothing and raise nothing while " +
+      "looking correct. Two things being true at once is a question about two " +
+      "events and a span of time, which is a different thing from a rule."));
     c.appendChild(conditionReference(vocab));
   }
 
