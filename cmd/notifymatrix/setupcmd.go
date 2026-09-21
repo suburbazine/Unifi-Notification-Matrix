@@ -125,12 +125,29 @@ func hookBase(in setup.Input) string {
 	return "http://<this machine's LAN address>:" + port
 }
 
+// consoleCanAuthenticate reports whether this console has a key that would be
+// sent anywhere: its own, or one for an application it watches.
+func consoleCanAuthenticate(c config.Console) bool {
+	if k, _ := c.ResolveAPIKey(); !k.IsZero() {
+		return true
+	}
+	for _, name := range c.Sources {
+		if k, _ := c.KeyFor(strings.ToLower(strings.TrimSpace(name))); !k.IsZero() {
+			return true
+		}
+	}
+	return false
+}
+
 func fromConfig(in setup.Input, cfg *config.Config) setup.Input {
 	in.Consoles = len(cfg.Consoles)
 	seen := map[string]bool{}
 	in.HasConsoleKey = len(cfg.Consoles) > 0
 	for _, con := range cfg.Consoles {
-		if key, _ := con.ResolveAPIKey(); key.IsZero() {
+		// A key for any application it watches counts: UniFi issues them per
+		// application, so a console with only a Protect key is configured,
+		// not unconfigured.
+		if !consoleCanAuthenticate(con) {
 			in.HasConsoleKey = false
 		}
 		for _, s := range con.Sources {

@@ -212,9 +212,27 @@ func (c Config) validateConsoles() Problems {
 		if strings.TrimSpace(con.Host) == "" {
 			p = append(p, where+": needs a host")
 		}
+		// PER APPLICATION, because that is how UniFi issues keys. A console
+		// with a Protect key and no console key is perfectly workable for
+		// Protect, and refusing it would reject a configuration that runs.
 		key, _ := con.ResolveAPIKey()
-		if key.IsZero() {
+		if key.IsZero() && !anyApplicationKey(con) {
 			p = append(p, where+": has no API key (set one, or point api_key_credential at a service credential)")
+		}
+		for _, name := range con.Sources {
+			product := strings.ToLower(strings.TrimSpace(name))
+			switch product {
+			case "protect", "access", "network":
+			default:
+				continue
+			}
+			// The state that cost a site an evening: a source switched on,
+			// with a key that belongs to a different application, answered
+			// 401 by this one -- which reads on the board as the application
+			// being down rather than as a key in the wrong box.
+			if k, _ := con.KeyFor(product); k.IsZero() {
+				p = append(p, where+": watches "+product+" and has no key for it")
+			}
 		}
 		if len(con.Sources) == 0 {
 			p = append(p, where+": enables no sources; it would be polled for nothing")
@@ -707,4 +725,10 @@ func (c Config) validatePolicies() Problems {
 		}
 	}
 	return p
+}
+
+// anyApplicationKey reports whether this console carries a key for any one
+// application, which makes it usable even with no console-wide key.
+func anyApplicationKey(c Console) bool {
+	return !c.ProtectKey.IsZero() || !c.AccessKey.IsZero() || !c.NetworkKey.IsZero()
 }

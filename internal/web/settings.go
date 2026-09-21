@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -77,6 +78,16 @@ type consoleView struct {
 
 	// APIKeySet is the whole of what this interface will say about the key.
 	APIKeySet bool `json:"api_key_set"`
+
+	// Whether a key has been stored for one application on its own.
+	//
+	// UniFi mints a key PER APPLICATION, so a console serving Protect and
+	// Access needs two, and a site found out the hard way: the Protect key
+	// worked and Access answered 401, which reads on the board as Access
+	// being broken. Like the console key, only whether it exists is ever sent.
+	ProtectKeySet bool `json:"protect_key_set"`
+	AccessKeySet  bool `json:"access_key_set"`
+	NetworkKeySet bool `json:"network_key_set"`
 
 	APIKeyCredential   string   `json:"api_key_credential,omitempty"`
 	Fingerprint        string   `json:"fingerprint,omitempty"`
@@ -240,6 +251,16 @@ type consoleUpdate struct {
 	// the form cannot echo the current value back, so "unchanged" has to be
 	// expressible as "sent nothing".
 	APIKeyNew string `json:"api_key_new"`
+
+	// Per-application replacements, same rule: empty keeps what is stored.
+	//
+	// Clearing one is therefore a separate act -- ClearKeys names the
+	// applications whose override should be removed, because "send nothing"
+	// already means "leave it alone" and one string cannot carry both.
+	ProtectKeyNew string   `json:"protect_key_new"`
+	AccessKeyNew  string   `json:"access_key_new"`
+	NetworkKeyNew string   `json:"network_key_new"`
+	ClearKeys     []string `json:"clear_keys"`
 }
 
 type channelsUpdate struct {
@@ -395,6 +416,9 @@ func viewSettings(c *config.Config) settingsView {
 			Name:               con.Name,
 			Host:               con.Host,
 			APIKeySet:          !con.APIKey.IsZero(),
+			ProtectKeySet:      !con.ProtectKey.IsZero(),
+			AccessKeySet:       !con.AccessKey.IsZero(),
+			NetworkKeySet:      !con.NetworkKey.IsZero(),
 			APIKeyCredential:   con.APIKeyCredential,
 			Fingerprint:        con.Fingerprint,
 			InsecureSkipVerify: con.InsecureSkipVerify,
@@ -586,6 +610,9 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 			Name:               strings.TrimSpace(in.Name),
 			Host:               strings.TrimSpace(in.Host),
 			APIKey:             prev.APIKey,
+			ProtectKey:         prev.ProtectKey,
+			AccessKey:          prev.AccessKey,
+			NetworkKey:         prev.NetworkKey,
 			APIKeyCredential:   strings.TrimSpace(in.APIKeyCredential),
 			Fingerprint:        strings.TrimSpace(in.Fingerprint),
 			InsecureSkipVerify: in.InsecureSkipVerify,
@@ -594,6 +621,29 @@ func applyUpdate(cur *config.Config, upd settingsUpdate) (*config.Config, []stri
 		if in.APIKeyNew != "" {
 			con.APIKey = secret.Secret(in.APIKeyNew)
 			touched = append(touched, "console "+con.Name+" api key")
+		}
+		for _, k := range []struct {
+			product string
+			sent    string
+			into    *secret.Secret
+		}{
+			{"protect", in.ProtectKeyNew, &con.ProtectKey},
+			{"access", in.AccessKeyNew, &con.AccessKey},
+			{"network", in.NetworkKeyNew, &con.NetworkKey},
+		} {
+			if k.sent != "" {
+				*k.into = secret.Secret(k.sent)
+				touched = append(touched, "console "+con.Name+" "+k.product+" key")
+				continue
+			}
+			// Removing one falls back to the console key, which is the whole
+			// point of the override being optional.
+			if slices.ContainsFunc(in.ClearKeys, func(s string) bool {
+				return strings.EqualFold(strings.TrimSpace(s), k.product)
+			}) {
+				*k.into = secret.Secret("")
+				touched = append(touched, "console "+con.Name+" "+k.product+" key removed")
+			}
 		}
 		next.Consoles = append(next.Consoles, con)
 	}

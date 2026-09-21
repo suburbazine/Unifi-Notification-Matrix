@@ -13,9 +13,45 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Added
+
+- **A key per application.** UniFi mints an API key for Protect, for Access
+  and for Network separately, and a key from one is answered 401 by the
+  others. A console here held exactly one, so a site running two applications
+  could satisfy at most one of them — the Protect key worked, Access refused
+  it, and the board could only report that Access was not talking.
+
+  Each console now takes an optional key per application, shown only for the
+  applications it watches, falling back to the console key where none is set.
+  A site with one key that covers everything is unaffected. Validation names
+  an application that is switched on with no key of its own, which is the
+  state that cost an evening.
+
+  The note on that screen has said "Protect, Access and Network each issue
+  their OWN key" for as long as the screen has existed. It now has somewhere
+  to put the second one.
+
+- **The peer link address is a field.** The Peer link section said to set one
+  "in Web below"; Web had no such field, and the only thing on that screen
+  with "link address" in its label is the acknowledgement one. Following the
+  instruction set the wrong value, and restarting changed nothing.
+
+### Fixed
+
+- **The health board said three sources were reporting on a console that had
+  one.** Protect counted a sweep that read nothing as contact, and Network
+  counted a poll that was refused — so on a UDM with neither Protect nor
+  Access installed, and a Network key from another appliance, every source
+  showed REPORTING and "in contact; nothing to report yet".
+
+  That is the state this product exists to refuse, rendered by the product,
+  and it cost a real diagnosis: the operator believed the console was fine.
+
+  Contact is now what came back, not what was attempted; a partial read still
+  counts. **Never connected is a third state**, badged NO CONTACT and counted
+  apart from silence, because "silent" means it worked and stopped. Sources
+  can say why they are failing, and the board shows it — the daemon had that
+  sentence on its first read and never said it.
 
 ## [0.3.6] — 2026-09-21
 

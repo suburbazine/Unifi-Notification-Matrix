@@ -29,6 +29,10 @@ import (
 var secretFields = []string{
 	"api_key", "token", "password", "link_tls_key", "link_key",
 	"ack_key", "bearer", "secret", "user", "account_sid",
+	// The per-application console keys. UniFi mints one key per application,
+	// so a site that needs all three has three credentials in this file
+	// rather than one.
+	"protect_key", "access_key", "network_key",
 }
 
 // knownPrefixes are the markers a protected value carries.

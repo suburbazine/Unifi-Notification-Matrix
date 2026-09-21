@@ -52,10 +52,12 @@ func (p *probeDeps) status() web.ProbeStatus {
 	cfg := p.cfg()
 	if cfg != nil {
 		for _, c := range cfg.Consoles {
-			key, _ := c.ResolveAPIKey()
+			// Any key that would be sent to any application counts: a
+			// console carrying only a Protect key can still be probed, and
+			// saying otherwise would block the run that would have worked.
 			st.Consoles = append(st.Consoles, web.ProbeConsole{
 				Name: c.Name, Host: c.Host,
-				HasKey: !key.IsZero(), Sources: c.Sources,
+				HasKey: consoleHasAnyKey(c), Sources: c.Sources,
 			})
 		}
 	}
@@ -98,6 +100,17 @@ func (p *probeDeps) status() web.ProbeStatus {
 		})
 	}
 	return st
+}
+
+// consoleHasAnyKey reports whether this console could authenticate anywhere:
+// its own key, or a key for any one application.
+func consoleHasAnyKey(c config.Console) bool {
+	for _, product := range []string{"protect", "access", "network"} {
+		if k, _ := c.KeyFor(product); !k.IsZero() {
+			return true
+		}
+	}
+	return false
 }
 
 func anyKey(cs []web.ProbeConsole) bool {
@@ -143,8 +156,10 @@ func (p *probeDeps) start(name string, listen time.Duration, products []string) 
 		return fmt.Errorf("no console called %q is configured", name)
 	}
 
-	key, _ := chosen.ResolveAPIKey()
-	if key.IsZero() {
+	protectKey, _ := chosen.KeyFor("protect")
+	accessKey, _ := chosen.KeyFor("access")
+	networkKey, _ := chosen.KeyFor("network")
+	if protectKey.IsZero() && accessKey.IsZero() && networkKey.IsZero() {
 		// Refused rather than run. This is the whole point of the section:
 		// the run would reach the login page and report nothing.
 		return fmt.Errorf("%s has no API key, so a probe would only reach its "+
@@ -154,9 +169,9 @@ func (p *probeDeps) start(name string, listen time.Duration, products []string) 
 
 	err := p.runner.Start(probe.Options{
 		Host:       chosen.Host,
-		ProtectKey: key,
-		AccessKey:  key,
-		NetworkKey: key,
+		ProtectKey: protectKey,
+		AccessKey:  accessKey,
+		NetworkKey: networkKey,
 		Listen:     listen,
 		Products:   products,
 		Version:    p.version,

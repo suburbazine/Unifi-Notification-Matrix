@@ -1488,8 +1488,10 @@ function renderConsolesSection(body, ctx) {
     secretRow(card, c.api_key_set, "API key", c, "api_key_new");
     card.appendChild(el("div", "note",
       "The stored key is never sent to this page, only whether one exists. " +
-      "Protect, Access and Network each issue their OWN key -- one key does " +
-      "not cover the others."));
+      "Protect, Access and Network each issue their OWN key — one key does " +
+      "not cover the others, so the key above is used only where no key for " +
+      "that application is set below."));
+    appKeyRows(card, c);
 
     var rm = el("button", "act", "Remove this console");
     rm.type = "button";
@@ -2486,6 +2488,56 @@ var VOICE_SAY_LANGUAGES = [
   "nl-NL", "pt-BR", "pt-PT", "da-DK", "sv-SE", "nb-NO",
   "pl-PL", "ru-RU", "ja-JP", "ko-KR", "zh-CN"
 ];
+
+// appKeyRows: one key per application, which is how UniFi issues them.
+//
+// THE NOTE ABOVE HAS ALWAYS SAID SO. "Protect, Access and Network each issue
+// their OWN key" was on this screen while the screen offered exactly one
+// field, so an operator who read it carefully still had nowhere to put the
+// second key -- and on a real site the Protect key went in, Access answered
+// 401, and the board could only report that Access was not talking.
+//
+// Only the applications this console is set to watch get a row. A console
+// watching Protect alone has one key to think about, and three boxes would
+// invite pasting the same key into all of them.
+function appKeyRows(card, c) {
+  var watched = c.sources || [];
+  var any = false;
+  ["protect", "access", "network"].forEach(function (product) {
+    if (watched.indexOf(product) < 0) return;
+    any = true;
+    var isSet = !!c[product + "_key_set"];
+    var row = el("div", "row");
+    row.appendChild(badge(isSet ? product + " key set" : product + " uses the key above",
+      isSet ? "on" : "off"));
+    if (isSet) {
+      // Without this, a key pasted into the wrong application can only be
+      // taken back by editing the file -- and "leave blank to keep what is
+      // stored" means blanking the box cannot mean remove.
+      var clear = el("button", "act small", "Use the key above instead");
+      clear.type = "button";
+      clear.addEventListener("click", function () {
+        c.clear_keys = (c.clear_keys || []).concat([product]);
+        c[product + "_key_new"] = "";
+        clear.disabled = true;
+        clear.textContent = "will be removed on save";
+      });
+      row.appendChild(clear);
+    }
+    card.appendChild(row);
+    var i = keepOutOfPasswordManagers(el("input"));
+    i.type = "password";
+    i.placeholder = "leave blank to keep what is stored";
+    i.addEventListener("input", function () { c[product + "_key_new"] = i.value; });
+    card.appendChild(labelled("Replace " + product + " key", i));
+  });
+  if (any) {
+    card.appendChild(el("div", "note",
+      "Each of these comes from that application's own integrations screen in " +
+      "UniFi, not from the console's. A key from the wrong one is answered 401 " +
+      "by the right one, which reads here as the application being down."));
+  }
+}
 
 function secretRow(card, isSet, label, obj, key) {
   var r = el("div", "row");

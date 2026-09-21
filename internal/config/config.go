@@ -94,6 +94,22 @@ type Console struct {
 	// UI-written key would override it (ARCHITECTURE.md §9a).
 	APIKeyCredential string `json:"api_key_credential,omitempty"`
 
+	// ProtectKey, AccessKey and NetworkKey override APIKey for one
+	// application each.
+	//
+	// UNIFI ISSUES A KEY PER APPLICATION. Protect, Access and Network each
+	// mint their own, and a key minted by one is answered 401 by the others --
+	// which a site found the hard way: the Protect key worked, Access refused
+	// it, and the board could only report that Access was not talking. One
+	// field per console could be right for at most one application.
+	//
+	// Optional, and empty means "use APIKey". A site whose console issues one
+	// key that covers everything, or that only runs one application, is left
+	// exactly as it was.
+	ProtectKey secret.Secret `json:"protect_key,omitempty"`
+	AccessKey  secret.Secret `json:"access_key,omitempty"`
+	NetworkKey secret.Secret `json:"network_key,omitempty"`
+
 	// Fingerprint is the pinned certificate SHA-256. Empty means no pin.
 	//
 	// Learning a pin is an OPERATOR action, never automatic: a client that
@@ -484,6 +500,32 @@ func (c Console) ResolveAPIKey() (secret.Secret, string) {
 		}
 	}
 	return c.APIKey, "config file"
+}
+
+// KeyFor returns the key to use for one application, and where it came from.
+//
+// The per-application key wins when set, because an operator who went to the
+// trouble of pasting a second key has stated which application it belongs to.
+// Otherwise the console key stands: one key covering everything is still the
+// common case and is not to be broken by the existence of an override nobody
+// filled in.
+//
+// The origin string is shown to an operator, so it names the field they would
+// edit rather than a struct field.
+func (c Console) KeyFor(product string) (secret.Secret, string) {
+	var per secret.Secret
+	switch strings.ToLower(strings.TrimSpace(product)) {
+	case "protect":
+		per = c.ProtectKey
+	case "access":
+		per = c.AccessKey
+	case "network":
+		per = c.NetworkKey
+	}
+	if !per.IsZero() {
+		return per, product + " key for this console"
+	}
+	return c.ResolveAPIKey()
 }
 
 // BuildPolicies materialises the escalation policies for this config, given

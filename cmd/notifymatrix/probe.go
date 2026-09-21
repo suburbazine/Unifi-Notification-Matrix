@@ -210,12 +210,17 @@ func probeOptions(dir, host string, listen time.Duration, products string) (prob
 		cfg = nil
 	}
 
-	var key secret.Secret
+	var protectKey, accessKey, networkKey secret.Secret
 	if cfg != nil {
 		for _, c := range cfg.Consoles {
 			if host == "" || strings.EqualFold(c.Host, host) || strings.EqualFold(c.Name, host) {
 				host = c.Host
-				key, _ = c.ResolveAPIKey()
+				// One per application, because UniFi mints them that way and
+				// a key from one application is answered 401 by the others.
+				// Each falls back to the console key.
+				protectKey, _ = c.KeyFor("protect")
+				accessKey, _ = c.KeyFor("access")
+				networkKey, _ = c.KeyFor("network")
 				break
 			}
 		}
@@ -230,9 +235,9 @@ func probeOptions(dir, host string, listen time.Duration, products string) (prob
 	// separate integration key per application, so each may be overridden --
 	// and a 401 from a product whose key is wrong is itself a recorded finding
 	// rather than a failure.
-	opts.ProtectKey = envKey("NOTIFYMATRIX_PROTECT_KEY", key)
-	opts.AccessKey = envKey("NOTIFYMATRIX_ACCESS_KEY", key)
-	opts.NetworkKey = envKey("NOTIFYMATRIX_NETWORK_KEY", key)
+	opts.ProtectKey = envKey("NOTIFYMATRIX_PROTECT_KEY", protectKey)
+	opts.AccessKey = envKey("NOTIFYMATRIX_ACCESS_KEY", accessKey)
+	opts.NetworkKey = envKey("NOTIFYMATRIX_NETWORK_KEY", networkKey)
 	return opts, nil
 }
 
