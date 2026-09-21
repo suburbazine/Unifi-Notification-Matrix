@@ -13,6 +13,18 @@ view against the release before them.
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.4.0] — 2026-09-21
+
+**Take this one if you run UniFi Access.** Its notifications socket moved, and
+earlier builds cannot find it — which means no live door events, silently.
+
+A minor rather than a patch because alerts can now carry a sentence they never
+carried before, and there is a new panel on the Health tab to go with it.
+
 ### Added
 
 - **Alerts can say whether they arrived alone or in a crowd**, and the Health
@@ -998,6 +1010,7 @@ They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
 [Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...HEAD
+[0.4.0]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.9...v0.4.0
 [0.3.9]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.6...v0.3.7
