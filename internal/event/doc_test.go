@@ -81,6 +81,18 @@ left empty to mean *anything*. The **entity** is a camera or door name from
 your own site, so no list here can supply it -- the Rules editor suggests the
 ones this daemon has actually seen events about.
 
+Each of the three takes a list, and a list means **any of these, never all**.
+The three are then combined: *a Protect event, about one of these cameras,
+whose condition is one of these*.
+
+> **"Both X and Y" is not a rule, and cannot be made into one.** A rule looks
+> at a single event, and an event carries a single condition, so a rule
+> demanding two conditions would match nothing -- and it would look entirely
+> correct while raising nothing, which is the failure this product exists to
+> refuse. Two things being true at once is a question about two events and a
+> span of time. That is a different mechanism, and this build does not have
+> one.
+
 A condition is also part of the stored dedup key, which is why it is a fixed
 vocabulary rather than free text: the same real problem arriving by two routes
 has to use the same string, or it becomes two incidents that both nag.

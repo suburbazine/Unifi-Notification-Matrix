@@ -35,6 +35,20 @@ type Delivery struct {
 	// the future, in a spoken script with no zone in it to give the game away.
 	site *time.Location
 
+	// SurgeNote says whether the site is unusually busy right now, in one
+	// sentence, or "" when there is nothing worth saying.
+	//
+	// HERE because alertFor is the only place an Alert is built, so a note
+	// added here reaches every channel present and future without any of them
+	// knowing it exists. Optional: a build that supplies none delivers exactly
+	// what it delivered before.
+	//
+	// It DECORATES and never decides. The severity, the ladder and the
+	// escalation are untouched by what this returns -- a statistical signal
+	// nudging a real alarm up a tier is how a firmware rollout becomes a phone
+	// call at 3am.
+	SurgeNote func(at time.Time) string
+
 	// broken records channels that were configured and could not be built.
 	//
 	// They used to abort the whole construction, which meant one malformed
@@ -310,6 +324,17 @@ func (d *Delivery) alertFor(inc *incident.Incident, stage int) channel.Alert {
 	}
 	if inc.LastAlertAt != nil {
 		a.At = d.inSiteZone(*inc.LastAlertAt)
+	}
+	// Appended rather than prefixed: the incident's own detail is what the
+	// alert is ABOUT, and context that pushed it off the top of a phone
+	// notification would be context that cost somebody the alarm.
+	if d.SurgeNote != nil {
+		if note := strings.TrimSpace(d.SurgeNote(a.At)); note != "" {
+			if a.Body != "" {
+				a.Body += "\n\n"
+			}
+			a.Body += note
+		}
 	}
 	a.AckURL = d.AckURL(inc, "")
 	return a
