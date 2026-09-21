@@ -13,6 +13,16 @@ view against the release before them.
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.3.7] — 2026-09-21
+
+**The health board could say a source was reporting when it had never once
+reached its console.** If you run this anywhere, take this one: the state it
+got wrong is the state this product exists to catch.
+
 ### Added
 
 - **A key per application.** UniFi mints an API key for Protect, for Access
@@ -824,6 +834,7 @@ They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
 [Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...HEAD
+[0.3.7]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.3...v0.3.4
