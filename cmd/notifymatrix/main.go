@@ -33,6 +33,24 @@ import (
 	"syscall"
 	"time"
 
+	// THE TIME ZONE DATABASE TRAVELS WITH THE BINARY.
+	//
+	// Windows has no /usr/share/zoneinfo, so time.LoadLocation there falls back
+	// to the copy inside a Go INSTALLATION -- which the machine running this
+	// does not have. Every IANA name was therefore refused on Windows, while
+	// "UTC" and "Local" worked, because those two are the only names resolved
+	// without the database. Reported as "the / in the name breaks the field",
+	// which is exactly what it looks like from the outside: every name that
+	// has a slash in it is every name that is not one of those two.
+	//
+	// It is not only a rejected field. Quiet hours are validated at load, so a
+	// zone written into config.yaml by hand refuses the START, and the site is
+	// then watched by nothing.
+	//
+	// ~450KB, and it also covers a Linux install whose image carries no tzdata
+	// package -- a container, or a stripped appliance filesystem.
+	_ "time/tzdata"
+
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ack"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/channel"

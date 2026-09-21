@@ -13,9 +13,25 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Fixed
+
+- **On Windows, every time zone name was refused.** Setting quiet hours to
+  `America/New_York` — the example printed beside the field — failed, while
+  `UTC` worked, which reads as the slash in the name breaking the field. It was
+  not the slash: those two are simply the only names that resolve without a
+  time zone database, and Windows has none. The binary fell back to a copy
+  inside a Go *installation*, which no machine running a release has.
+
+  Worse than a rejected field: quiet hours are checked when the configuration
+  loads, so a zone written into `config.yaml` by hand refused the daemon's
+  start outright, and the site was then watched by nothing.
+
+  The database now travels inside the binary, which also covers a Linux install
+  whose image carries no `tzdata` package. It costs 402KB.
+
+  The site's time zone is not only about quiet hours — it is the clock every
+  alert is announced in, so anyone running on Windows who left it blank has
+  been getting times in the server's zone.
 
 ## [0.4.1] — 2026-09-21
 
