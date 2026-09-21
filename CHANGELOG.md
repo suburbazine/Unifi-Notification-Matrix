@@ -13,6 +13,15 @@ view against the release before them.
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.3.9] — 2026-09-21
+
+Everything here came out of one evening's first live pairing and the first
+UniFi Access console this product has ever read.
+
 ### Fixed
 
 - **A disagreeing dedup key was labelled a manifest violation.** The first
@@ -907,6 +916,7 @@ They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
 [Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...HEAD
+[0.3.9]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.5...v0.3.6
