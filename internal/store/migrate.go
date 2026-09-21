@@ -165,6 +165,32 @@ var migrations = []migration{
 			`CREATE INDEX observed_entities_mac ON observed_entities (mac) WHERE mac <> ''`,
 		},
 	},
+	{
+		version: 4,
+		stmts: []string{
+			// How busy this site is, ten minutes at a time, so an alert can
+			// say whether it arrived alone or in a crowd.
+			//
+			// BOUNDED BY CONSTRUCTION AND NOT BY LUCK. 144 buckets a day for
+			// the 56 days the baseline looks back is 8,064 rows for ANY site,
+			// busy or quiet, because a row costs the same whether it holds
+			// zero events or ten thousand. Under a megabyte, and the oldest
+			// rows are deleted as new ones are written rather than by a
+			// sweeper nobody remembers to run.
+			//
+			// start is the bucket's left edge as Unix seconds, which is its
+			// own primary key: two rows for one ten-minute span is not a
+			// thing that can be true, and a restart mid-bucket must not be
+			// able to create one.
+			`CREATE TABLE activity_buckets (
+				start    INTEGER PRIMARY KEY,
+				events   INTEGER NOT NULL,
+				devices  INTEGER NOT NULL,
+				degraded INTEGER NOT NULL DEFAULT 0,
+				flagged  INTEGER NOT NULL DEFAULT 0
+			) STRICT`,
+		},
+	},
 }
 
 func latestVersion() int {

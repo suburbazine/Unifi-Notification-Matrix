@@ -51,6 +51,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/service"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/store"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/surge"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/unifi"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/update"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/web"
@@ -555,6 +556,38 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	// A delivery failure is reported as it lands: a channel that has started
 	// failing is itself something the operator needs to know, not only a field
 	// on an incident nobody is looking at.
+	// The supervisor is built much further down -- it needs the sources, which
+	// need the config that is still being validated here -- so the activity
+	// measurement reaches it through a pointer set at that point. Read per
+	// call rather than captured, because "is a source silent" is a question
+	// about now.
+	var supervisorRef atomic.Pointer[ingest.Supervisor]
+	blind := func() bool {
+		sup := supervisorRef.Load()
+		if sup == nil {
+			// Nothing is watching yet, which is the most blind a daemon gets.
+			return true
+		}
+		for _, st := range sup.Statuses() {
+			if st.Silent || st.Fatal != "" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// How busy this site is, measured at the ingest boundary and quoted on
+	// alerts. Decoration only: it cannot move a severity or a ladder.
+	activity := newSiteActivity(
+		// Blind means a configured source is not reporting. A count taken
+		// while half the site is unreachable measures what still reaches us,
+		// not the site.
+		surge.NewRecorder(db, time.Now, blind),
+		surge.NewReporter(db, cfg.QuietHours.SiteLocation(), time.Now,
+			func() (time.Time, bool) { return time.Time{}, blind() }),
+		db.FlagBucket,
+	)
+
 	delivery, err := config.BuildDelivery(cfg, func(r channel.Result) {
 		kind, summary := audit.KindAlertSent, "delivered via "+r.Channel
 		fields := map[string]string{"channel": r.Channel}
@@ -575,6 +608,10 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 		return err
 	}
 	defer delivery.Close()
+
+	// The one place an Alert is built asks how busy the site is. Appended to
+	// the body; it cannot reach the severity or the ladder.
+	delivery.SurgeNote = activity.note
 
 	// A CHANNEL THAT IS CONFIGURED AND COULD NOT BE BUILT MUST SAY SO.
 	//
@@ -772,6 +809,7 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	hooks := config.BuildHooks(cfg)
 	receiver := inbound.New(hooks, inbound.Options{
 		Emit: func(ev event.Event) {
+			activity.observe(ev)
 			if _, err := engine.Handle(context.Background(), ev); err != nil {
 				fmt.Fprintln(os.Stderr, "inbound:", err)
 			}
@@ -833,6 +871,11 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			// deadman keeps working and the rules editor keeps learning
 			// entities, and this reverses the instant the peer stops being
 			// able to serve.
+			// Counted BEFORE the peer check as well as before the rules: an
+			// event a peer is already raising still happened at this site,
+			// and the measurement is of the site rather than of what this
+			// installation chose to do about it.
+			activity.observe(ev)
 			if links.suppressedByPeer(ev, time.Now(), peerSilentAfter) {
 				return nil
 			}
@@ -852,6 +895,7 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			fmt.Fprintf(os.Stderr, format+"\n", args...)
 		},
 	})
+	supervisorRef.Store(supervisor)
 	if err != nil {
 		return err
 	}
@@ -1485,6 +1529,7 @@ process elevates. This will do it for you, prompting if it has to:
 				db:       db,
 				delivery: delivery,
 				handle: func(ctx context.Context, ev event.Event) error {
+					activity.observe(ev)
 					_, err := engine.Handle(ctx, ev)
 					return err
 				},
@@ -1535,6 +1580,12 @@ process elevates. This will do it for you, prompting if it has to:
 	// nothing escalated, would be halfway broken in a way neither half could
 	// report.
 	ingestCtx, stopIngest := context.WithCancel(ctx)
+
+	// Closing buckets on a timer, because a site that goes SILENT stops
+	// producing events and a silent stretch is a measurement rather than the
+	// absence of one.
+	go activity.run(ingestCtx)
+
 	var ingestDone sync.WaitGroup
 	ingestDone.Add(1)
 	go func() {
