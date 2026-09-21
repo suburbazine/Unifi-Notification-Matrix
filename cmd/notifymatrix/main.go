@@ -436,6 +436,88 @@ Channels: ntfy, email, pushover, webhook.
 }
 
 // runDaemon is the supervised process.
+
+// applyLive puts a configuration into force on the running daemon.
+//
+// Shared by the two ways a configuration can change: saved through the
+// interface, and edited on disk. They were not the same path, and the
+// difference was invisible -- a setting saved from the page took effect while
+// the identical setting typed into config.yaml did not, which is the kind of
+// disagreement an operator resolves by never trusting either.
+//
+// Returns the first subsystem that would not take it. Nothing is rolled back:
+// a daemon running the first half of one configuration and the second half of
+// another is the state that must not be reachable, and the caller says which
+// half is live.
+func applyLive(
+	ctx context.Context,
+	next *config.Config,
+	swapDelivery func(context.Context, *config.Config) error,
+	deliveryNames func() []string,
+	sched *escalate.Scheduler,
+	engine *rule.Engine,
+	receiver *inbound.Receiver,
+) error {
+	// APPLIED TO THE RUNNING DAEMON, not only to the file.
+	//
+	// Everything below this comment used to be a restart. The
+	// channel set, the escalation ladders, the rules and the quiet
+	// window were built once at start and never rebuilt, so every
+	// save updated the file, updated the interface, and left the
+	// process delivering alarms by the old configuration -- with
+	// nothing on any screen saying the two had parted company.
+	//
+	// Applied AFTER the write, deliberately: the file is the
+	// persisted truth, and a live change that failed to persist
+	// would vanish at the next start with no record of why.
+	//
+	// Order matters once. Channels first, because the escalation
+	// ladders are validated against the channel names that exist,
+	// and a ladder naming a channel that has not been built yet is
+	// a ladder that refuses.
+	if err := swapDelivery(ctx, next); err != nil {
+		return fmt.Errorf("this configuration was accepted, but the channels "+
+			"could not be rebuilt, so this daemon is still delivering "+
+			"through the previous set -- restart it to close the gap: %w", err)
+	}
+
+	built, err := next.BuildPolicies(deliveryNames())
+	if err != nil {
+		return fmt.Errorf("this configuration was accepted, but the escalation "+
+			"ladders could not be rebuilt and the previous ones are still "+
+			"in force -- restart to close the gap: %w", err)
+	}
+	pol := map[incident.Severity]escalate.Policy{}
+	for name, p := range built {
+		pol[incident.Severity(name)] = p
+	}
+	if err := sched.SetPolicies(pol); err != nil {
+		return fmt.Errorf("this configuration was accepted, but the escalation "+
+			"ladders were refused and the previous ones are still in "+
+			"force -- restart to close the gap: %w", err)
+	}
+	if err := sched.SetQuietHours(next.QuietHours); err != nil {
+		return fmt.Errorf("this configuration was accepted, but the quiet hours "+
+			"window was refused and the previous one is still in force -- "+
+			"restart to close the gap: %w", err)
+	}
+	// rule.Engine.SetRules exists, takes the engine's write lock,
+	// and was called by nothing -- so a saved rule reached the file
+	// and the interface and not the thing that decides. Silencing
+	// an alarm from its own card is only true if the next event is
+	// actually dropped, and that needs this line.
+	if err := engine.SetRules(next.Rules); err != nil {
+		return fmt.Errorf("this configuration was accepted, but the running "+
+			"daemon would not take the new rules and is still using the "+
+			"previous ones -- restart it to close the gap: %w", err)
+	}
+	// And the inbound hooks, so a URL the interface has just shown
+	// the operator is a URL that answers. It used to 404 until a
+	// restart, which is the same reply a wrong token gets.
+	receiver.SetHooks(config.BuildHooks(next))
+	return nil
+}
+
 func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	// ONE instance per data directory. The classic failure is a service and a
 	// logon task both running, both ingesting, both alerting -- on a product
@@ -988,6 +1070,10 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	// and printed not one word about any of it. config.LoadOrCreate now mints
 	// the key on the way in, so reaching here without one means that failed:
 	// say so and stop, rather than run headless and look healthy.
+	// Held out here because the goroutine that runs it starts below the web
+	// block, with the other long-lived ones.
+	var cfgWatch *configWatcher
+
 	if cfg.Web.AckKey.IsZero() {
 		return errors.New("there is no acknowledgement key in the configuration, so " +
 			"nothing could sign an acknowledgement link and no interface would be " +
@@ -1068,6 +1154,23 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			return current
 		})
 
+		// Changes made to the FILE rather than to the page.
+		//
+		// Declared before the interface's own save path so that path can tell
+		// the watcher which version it wrote, and not have its own save read
+		// back two seconds later and announced as somebody else's edit.
+		applyFromFile := func(next *config.Config) error {
+			cfgMu.Lock()
+			current = next
+			cfgMu.Unlock()
+			return applyLive(context.Background(), next, swapDelivery,
+				func() []string { return deliveryRef.Load().Names() },
+				sched, engine, receiver)
+		}
+		cfgWatch = newConfigWatcher(dataDir, applyFromFile, func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, format+"\n", args...)
+		})
+
 		ui, err := web.New(web.Deps{
 			Store:            db,
 			Audit:            auditLog,
@@ -1086,68 +1189,18 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 				if err := config.Save(dataDir, next); err != nil {
 					return err
 				}
+				// This daemon wrote it, so the watcher must not read it back
+				// and announce it as an edit somebody made on disk.
+				cfgWatch.written()
 				cfgMu.Lock()
 				current = next
 				cfgMu.Unlock()
 
-				// APPLIED TO THE RUNNING DAEMON, not only to the file.
-				//
-				// Everything below this comment used to be a restart. The
-				// channel set, the escalation ladders, the rules and the quiet
-				// window were built once at start and never rebuilt, so every
-				// save updated the file, updated the interface, and left the
-				// process delivering alarms by the old configuration -- with
-				// nothing on any screen saying the two had parted company.
-				//
-				// Applied AFTER the write, deliberately: the file is the
-				// persisted truth, and a live change that failed to persist
-				// would vanish at the next start with no record of why.
-				//
-				// Order matters once. Channels first, because the escalation
-				// ladders are validated against the channel names that exist,
-				// and a ladder naming a channel that has not been built yet is
-				// a ladder that refuses.
-				if err := swapDelivery(context.Background(), next); err != nil {
-					return fmt.Errorf("the settings were saved, but the channels "+
-						"could not be rebuilt, so this daemon is still delivering "+
-						"through the previous set -- restart it to close the gap: %w", err)
+				if err := applyLive(context.Background(), next, swapDelivery,
+					func() []string { return deliveryRef.Load().Names() },
+					sched, engine, receiver); err != nil {
+					return err
 				}
-
-				built, err := next.BuildPolicies(deliveryRef.Load().Names())
-				if err != nil {
-					return fmt.Errorf("the settings were saved, but the escalation "+
-						"ladders could not be rebuilt and the previous ones are still "+
-						"in force -- restart to close the gap: %w", err)
-				}
-				pol := map[incident.Severity]escalate.Policy{}
-				for name, p := range built {
-					pol[incident.Severity(name)] = p
-				}
-				if err := sched.SetPolicies(pol); err != nil {
-					return fmt.Errorf("the settings were saved, but the escalation "+
-						"ladders were refused and the previous ones are still in "+
-						"force -- restart to close the gap: %w", err)
-				}
-				if err := sched.SetQuietHours(next.QuietHours); err != nil {
-					return fmt.Errorf("the settings were saved, but the quiet hours "+
-						"window was refused and the previous one is still in force -- "+
-						"restart to close the gap: %w", err)
-				}
-				// rule.Engine.SetRules exists, takes the engine's write lock,
-				// and was called by nothing -- so a saved rule reached the file
-				// and the interface and not the thing that decides. Silencing
-				// an alarm from its own card is only true if the next event is
-				// actually dropped, and that needs this line.
-				if err := engine.SetRules(next.Rules); err != nil {
-					return fmt.Errorf("the settings were saved, but the running "+
-						"daemon would not take the new rules and is still using the "+
-						"previous ones -- restart it to close the gap: %w", err)
-				}
-				// And the inbound hooks, so a URL the interface has just shown
-				// the operator is a URL that answers. It used to 404 until a
-				// restart, which is the same reply a wrong token gets.
-				receiver.SetHooks(config.BuildHooks(next))
-
 				fmt.Fprintln(os.Stderr, "settings saved and applied")
 				return nil
 			},
@@ -1735,6 +1788,7 @@ process elevates. This will do it for you, prompting if it has to:
 	// producing events and a silent stretch is a measurement rather than the
 	// absence of one.
 	go activity.run(ingestCtx)
+	go cfgWatch.run(ingestCtx)
 
 	var ingestDone sync.WaitGroup
 	ingestDone.Add(1)
