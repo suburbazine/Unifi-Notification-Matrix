@@ -88,6 +88,22 @@ var Catalogue = []Endpoint{
 	{Product: "network", Auth: AuthNetwork, Known: true, Path: "/proxy/network/integration/v1/sites", Expect: "site list; ids feed the paths below"},
 	{Product: "network", Auth: AuthNetwork, Known: true, Path: "/proxy/network/integration/v1/sites/{site}/devices", Expect: "device list for the first site"},
 	{Product: "network", Auth: AuthNetwork, Path: "/proxy/network/integration/v1/info", Expect: "controller version, if this path exists"},
+
+	// A CANDIDATE, asked because a design question turns on the answer.
+	//
+	// A wireless attack -- a deauth flood, a jammer -- shows first as clients
+	// leaving an access point, and only later as anything a device list
+	// notices. Whether this API exposes a per-device COUNT of them decides
+	// whether that is buildable here at all.
+	//
+	// The client LIST is not asked for and must not be: /clients is refused
+	// above as "the site's occupants and their personal devices", and adding
+	// it here was caught by the test that holds the catalogue to those rules.
+	// A count is a number about a radio; a list is a roster of the people in
+	// the building, and no alarm is worth building the second one to get the
+	// first.
+	{Product: "network", Auth: AuthNetwork, Path: "/proxy/network/integration/v1/sites/{site}/devices/statistics",
+		Expect: "whether per-device counters (client counts, radio state) are exposed, WITHOUT naming a client"},
 }
 
 // refusal is a path this probe will not request, and why.
