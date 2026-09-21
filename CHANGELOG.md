@@ -13,6 +13,21 @@ view against the release before them.
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.4.2] — 2026-09-21
+
+**Take this one if you have ever waited for a restart to make a setting
+count.** Saved settings now apply to the running daemon — channels, escalation,
+rules, quiet hours, hooks and consoles — and so does a `config.yaml` you edit
+by hand. Only the listen addresses still need the daemon stopped.
+
+Also fixes two things reported from a live site: time zones could not be set at
+all on Windows, and every Network offline incident claimed the device had been
+down for three minutes.
+
 ### Added
 
 - **Silence an alarm from the alarm.** A card for something you have decided
@@ -51,6 +66,14 @@ view against the release before them.
   A change that cannot be applied is refused rather than half-applied, and says
   which subsystem kept its old configuration and that a restart will close the
   gap.
+
+  **Consoles too, and a console nobody touched keeps its connection.** Protect
+  holds a WebSocket, a backoff ladder and the table that turns an update frame
+  into a clear; saving an unrelated setting no longer costs any of them. Which
+  sources are unchanged is decided by what each was built from — host,
+  application, that application's key, the pinned fingerprint — rather than by
+  its name, because every source of an application shares one name and a
+  corrected API key would otherwise be taken for the broken source it replaces.
 
   **A `config.yaml` edited by hand is applied too**, a few seconds after you
   finish editing it — the setup guide tells you to edit that file, so the
@@ -1130,6 +1153,7 @@ They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
 [Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...HEAD
+[0.4.2]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.9...v0.4.0
 [0.3.9]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.8...v0.3.9
