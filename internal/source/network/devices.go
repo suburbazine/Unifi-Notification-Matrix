@@ -18,10 +18,50 @@ type deviceState struct {
 
 	// offlineSince is when the device was first seen down. Kept so a flapping
 	// PoE port does not produce an incident per flap -- see observe.
+	//
+	// IT IS NOT WHEN THE DEVICE WENT DOWN, and the difference is the whole of
+	// downDetail below. It is when THIS PROCESS first saw it down, which for a
+	// device that was already off when the daemon started is simply when the
+	// daemon started.
 	offlineSince time.Time
+
+	// everOnline is whether this process has ever seen this device up.
+	//
+	// The only evidence there is for when an outage began. This source polls a
+	// list of current states -- the Integration API carries no events and, on
+	// the hardware this has been observed on, no timestamp of any kind on a
+	// device: no lastSeen, no uptime, no disconnectedAt. So a device that was
+	// already down at the first poll has an outage of unknown age, and one we
+	// watched go down does not.
+	everOnline bool
 
 	// raised is whether an offline incident is currently open for it.
 	raised bool
+}
+
+// downDetail says what is actually known about how long, which is not the same
+// sentence in the two cases that can raise this incident.
+//
+// IT USED TO QUOTE THE THRESHOLD. The text was "the console has reported this
+// device down for " + d.downFor.String(), and downFor is the three-minute wait
+// before an outage counts -- a constant. So every offline incident ever raised
+// said "down for 3m0s", including ones for access points that had been off for
+// weeks. Reported from a real site, where the daemon had been restarted eleven
+// minutes earlier and the card claimed a three-minute outage.
+//
+// The honest split: an outage this process watched begin is as old as the
+// incident, and the elapsed figure means something. An outage that was already
+// running at the first poll has NO knowable start -- and saying so is the
+// point, because the incident's own "opened" time is then when we noticed,
+// which a reader will otherwise take for when it failed.
+func (st *deviceState) downDetail(now time.Time) string {
+	since := now.Sub(st.offlineSince).Round(time.Second)
+	if st.everOnline {
+		return "the console has reported this device down for " + since.String()
+	}
+	return "this device was already down when this started watching " +
+		since.String() + " ago, so the outage is at least that old and may be " +
+		"far older -- the console does not report when a device went down"
 }
 
 // devices is this source's memory of every device it has seen.
@@ -111,6 +151,7 @@ func (d *devices) applyLocked(st *deviceState, next State, now time.Time) []tran
 	case StateOnline:
 		st.state = StateOnline
 		st.offlineSince = time.Time{}
+		st.everOnline = true
 		if st.raised {
 			st.raised = false
 			return []transition{{device: *st, clears: true,
@@ -125,9 +166,7 @@ func (d *devices) applyLocked(st *deviceState, next State, now time.Time) []tran
 		}
 		if !st.raised && now.Sub(st.offlineSince) >= d.downFor {
 			st.raised = true
-			return []transition{{device: *st,
-				detail: "the console has reported this device down for " +
-					d.downFor.String()}}
+			return []transition{{device: *st, detail: st.downDetail(now)}}
 		}
 		_ = prev
 		return nil
@@ -149,8 +188,7 @@ func (d *devices) tick(now time.Time) []transition {
 		}
 		if now.Sub(st.offlineSince) >= d.downFor {
 			st.raised = true
-			out = append(out, transition{device: *st,
-				detail: "the console has reported this device down for " + d.downFor.String()})
+			out = append(out, transition{device: *st, detail: st.downDetail(now)})
 		}
 	}
 	return out

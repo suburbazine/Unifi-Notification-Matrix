@@ -15,6 +15,19 @@ view against the release before them.
 
 ### Fixed
 
+- **Every Network offline incident claimed the device had been down for three
+  minutes.** Three minutes is the threshold — how long a device must be seen
+  down before it counts as an outage at all — and the incident quoted that
+  constant instead of measuring anything. Access points that had been off for
+  weeks were reported as three-minute outages.
+
+  It now says how long the device has actually been down. And when the device
+  was *already* down at the first poll — which is every pre-existing outage,
+  every time the daemon restarts — it says that instead, because the age of
+  that outage is genuinely unknown: this API carries no events and no timestamp
+  on a device, so the only clock available is our own, which started at the
+  restart. An incident that quotes it reads as something that has just broken.
+
 - **On Windows, every time zone name was refused.** Setting quiet hours to
   `America/New_York` — the example printed beside the field — failed, while
   `UTC` worked, which reads as the slash in the name breaking the field. It was
