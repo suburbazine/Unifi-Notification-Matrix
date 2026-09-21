@@ -91,7 +91,17 @@
   /* A hairline highlight along the top edge is what lifts a dark card off a
      dark page; a drop shadow alone is invisible at these luminances. */
   --shadow:inset 0 1px 0 #ffffff08,0 1px 2px #0000004d;
-  --header-h:46px;                        /* sticky offsets key off this */
+  /* The chrome: what is stuck to the top of the viewport. header.bar is
+     --header-h tall and nav.tabs is --tabs-h tall -- a number, not a
+     measurement: the bar is given that height rather than growing to its
+     type, so that an offset under it can be written in CSS. --chrome-h is
+     the two together, and it is what every other sticky offset and every
+     anchor target keys off. Keyed off the header alone, the rail stuck under
+     the tab bar and was covered by it. On a phone the header scrolls away
+     and --chrome-h is the tab bar alone; see 12. */
+  --header-h:46px;
+  --tabs-h:40px;
+  --chrome-h:calc(var(--header-h) + var(--tabs-h));
   --ease:.14s ease;
 }
 
@@ -167,16 +177,33 @@ a#headline{text-decoration:none}
 a#headline:hover{filter:brightness(1.15)}
 
 /* Tabs. An underline indicator rather than a filled pill: the pill read as a
-   button, and the row of them as a toolbar. */
+   button, and the row of them as a toolbar.
+
+   Stuck beneath the header, because the pages under it are long -- Settings
+   runs to eight thousand pixels -- and a tab bar at the top of the document
+   is one the reader has to scroll back up to. It is its own band rather than
+   folded into the header: the header holds the brand, a live badge and the
+   session, and five tabs beside those fit on one row only above ~900px, so
+   folding them in would be this same second row at every other width, with
+   more special cases. The height is a token, --tabs-h, so the offsets under
+   it are arithmetic; that means the tabs must not wrap, and they scroll
+   sideways instead if they ever overflow (a count pill on a 320px phone),
+   the last one peeking in from the right as the chip strip's does. The
+   hairline is an inset shadow rather than a border because a scroll
+   container clips at its padding edge, and the selected tab's underline has
+   to sit on the line, not a pixel above it. */
 nav.tabs{
-  display:flex;gap:2px;padding:0 var(--sp-4);flex-wrap:wrap;
-  border-bottom:1px solid var(--line);background:var(--bg);
+  display:flex;gap:2px;padding:0 var(--sp-4);
+  height:var(--tabs-h);flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;
+  background:var(--bg);box-shadow:inset 0 -1px 0 var(--line);
+  position:sticky;top:var(--header-h);z-index:5;
 }
+nav.tabs::-webkit-scrollbar{display:none}
 nav.tabs button{
-  display:inline-flex;align-items:center;gap:6px;
+  display:inline-flex;align-items:center;align-self:stretch;flex:none;gap:6px;
   font:inherit;font-size:var(--fs-md);font-weight:500;color:var(--muted);
   background:transparent;border:0;border-bottom:2px solid transparent;
-  margin-bottom:-1px;padding:10px 12px;cursor:pointer;
+  padding:0 12px;cursor:pointer;white-space:nowrap;
   transition:color var(--ease);
 }
 nav.tabs button:hover{color:var(--fg)}
@@ -207,7 +234,7 @@ section[hidden]{display:none}
    left at desktop width, a horizontal chip strip at phone width (see 12).
    The rail marks the section in view with aria-current="true". */
 .railed{display:grid;grid-template-columns:11rem minmax(0,1fr);gap:var(--sp-5);align-items:start}
-.rail{position:sticky;top:calc(var(--header-h) + var(--sp-3));display:flex;flex-direction:column;gap:2px}
+.rail{position:sticky;top:calc(var(--chrome-h) + var(--sp-3));display:flex;flex-direction:column;gap:2px}
 .rail a{
   display:block;padding:6px 10px;border-radius:var(--r);border-left:2px solid transparent;
   color:var(--muted);text-decoration:none;font-size:var(--fs-md);
@@ -215,8 +242,8 @@ section[hidden]{display:none}
 }
 .rail a:hover{color:var(--fg);background:var(--muted-tint)}
 .rail a[aria-current="true"]{color:var(--fg);border-left-color:var(--accent);background:var(--accent-tint)}
-/* Anchor targets land under the sticky header unless told otherwise. */
-[id]{scroll-margin-top:calc(var(--header-h) + var(--sp-3))}
+/* Anchor targets land under the stuck chrome unless told otherwise. */
+[id]{scroll-margin-top:calc(var(--chrome-h) + var(--sp-3))}
 
 
 /* ---------- 4. surfaces ---------------------------------------------------- */
@@ -774,16 +801,26 @@ table.matrix input[type=checkbox]:disabled{opacity:.3}
 }
 
 @media (max-width:760px){
+  /* A phone has one short screen, and would otherwise have three bars stuck
+     to the top of it: header, tabs and the Settings chip strip. The header
+     goes -- it is the brand, the version and a badge the Incidents tab
+     repeats -- and the tabs stick at the very top, so the chrome is the tab
+     bar alone and the chip strip sits under that. */
+  :root{--chrome-h:var(--tabs-h);--strip-h:44px}
+  header.bar{position:static}
+  nav.tabs{top:0}
   .railed{grid-template-columns:1fr;gap:var(--sp-3)}
   .settings-section>h2{font-size:var(--fs-lg)}
-  /* The rail becomes a chip strip pinned under the header. Negative margins
+  /* The rail becomes a chip strip pinned under the tab bar. Negative margins
      let it run edge to edge so the last chip peeks in from the right, which
-     is the only hint a strip can be scrolled. */
+     is the only hint a strip can be scrolled. Its height is a token too,
+     because an anchor target has to clear it as well as the tabs. */
   .rail{
-    position:sticky;top:var(--header-h);z-index:4;flex-direction:row;overflow-x:auto;
-    gap:6px;margin:0 calc(-1 * var(--sp-4));padding:8px var(--sp-4);
+    position:sticky;top:var(--chrome-h);z-index:4;flex-direction:row;align-items:center;overflow-x:auto;
+    height:var(--strip-h);gap:6px;margin:0 calc(-1 * var(--sp-4));padding:0 var(--sp-4);
     background:var(--bg);border-bottom:1px solid var(--line);scrollbar-width:none;
   }
+  .railed [id]{scroll-margin-top:calc(var(--chrome-h) + var(--strip-h) + var(--sp-2))}
   .rail::-webkit-scrollbar{display:none}
   .rail a{
     white-space:nowrap;border:1px solid var(--line);border-left-width:1px;
@@ -799,7 +836,7 @@ table.matrix input[type=checkbox]:disabled{opacity:.3}
   header.bar{padding:0 var(--sp-3)}
   header.bar .brand .ver{display:none}
   nav.tabs{padding:0 var(--sp-1)}
-  nav.tabs button{padding:9px 9px;font-size:var(--fs-sm)}
+  nav.tabs button{padding:0 9px;font-size:var(--fs-sm)}
   main{padding:var(--sp-3) var(--sp-3) 40px}
   .card{padding:var(--sp-3)}
   .fields{grid-template-columns:1fr}

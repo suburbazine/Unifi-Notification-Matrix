@@ -2364,18 +2364,31 @@ function watchRail() {
   var update = function () {
     pending = false;
     if (state.tab !== "settings" || !settingsCtx) return;
-    // The reference line: just under the header, or just under the top of the
-    // viewport if the header is not there. Clamped at 0 because the bottom
-    // edge is only a sensible line to measure from while the header is
-    // actually stuck; a header that has scrolled away reports a bottom of
-    // -5469, and a reference line that far above the viewport marks whatever
-    // section the reader passed several screens ago. That is a real bug this
-    // page shipped with (a body of `height:100%` confined the header's sticky
-    // box to one screenful), and the clamp is what makes the rail correct
-    // whether or not sticky is working at this width.
-    var bar = document.querySelector("header.bar");
+    // The reference line: just under the chrome, or just under the top of the
+    // viewport if the chrome is not there. The chrome is measured at the tab
+    // bar, not the header: the tab bar is the lowest band stuck to the top at
+    // every width, while the header scrolls away on a phone. Clamped at 0
+    // because the bottom edge is only a sensible line to measure from while
+    // the bar is actually stuck; a header that had scrolled away reported a
+    // bottom of -5469, and a reference line that far above the viewport
+    // marked whatever section the reader passed several screens ago. That is
+    // a real bug this page shipped with (a body of `height:100%` confined the
+    // header's sticky box to one screenful), and the clamp is what makes the
+    // rail correct whether or not sticky is working at this width.
+    var bar = document.querySelector("nav.tabs");
     var rect = bar && bar.getBoundingClientRect ? bar.getBoundingClientRect() : null;
-    var top = (rect ? Math.max(0, rect.bottom) : 0) + 24;
+    var edge = rect ? Math.max(0, rect.bottom) : 0;
+    // On a phone the rail is a chip strip stuck to the underside of the tab
+    // bar, and a section whose heading is behind the strip is not the one
+    // being read: the line comes from under the strip. flex-direction:row is
+    // what the stylesheet turns the rail into a strip with, so it is what
+    // says the rail is one.
+    var strip = document.querySelector(".rail");
+    if (strip && strip.getBoundingClientRect && window.getComputedStyle &&
+        window.getComputedStyle(strip).flexDirection === "row") {
+      edge = Math.max(edge, strip.getBoundingClientRect().bottom);
+    }
+    var top = edge + 24;
     // The last sections on the page can never be brought up to that line:
     // the document runs out of scroll before their tops get there. On an
     // 800x600 window Password is the final section and its top stops 254px

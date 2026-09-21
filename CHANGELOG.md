@@ -13,6 +13,20 @@ view against the release before them.
 
 ## [Unreleased]
 
+### Changed
+
+- **The tabs stay with you down a long page.** Settings runs past eight
+  thousand pixels and Help is longer; changing tab meant scrolling all the way
+  back to the top first. The tab bar is now stuck beneath the header, and on a
+  phone — where three stacked bars would eat a quarter of the screen — the
+  header scrolls away instead and the tabs take the top.
+
+  The Settings section rail, the chip strip a phone shows in its place, and
+  every anchored heading were all offset by the height of the header alone;
+  they now key off the height of everything stuck above them, so a section you
+  jump to lands below the chrome rather than behind it. That last part was
+  already slightly wrong at phone width before this change.
+
 ### Fixed
 
 - **A configuration without an acknowledgement key started a daemon with no
