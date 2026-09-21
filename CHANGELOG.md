@@ -13,6 +13,16 @@ view against the release before them.
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.3.8] — 2026-09-21
+
+**If you pin certificates, take this one.** A pinned console could not connect
+unless certificate verification was also switched off, which made the
+strongest configuration this product offers look broken.
+
 ### Added
 
 - **Something to press, where the warning said there would be.** "pin a
@@ -866,6 +876,7 @@ They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
 [Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...HEAD
+[0.3.8]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...v0.3.5
