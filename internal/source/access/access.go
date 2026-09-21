@@ -47,8 +47,19 @@ const DefaultDirectPort = 12445
 const (
 	proxyRESTBase = "/proxy/access/integration/v1/developer"
 	proxyWSPath   = "/proxy/access/api/v1/developer/devices/notifications"
-	directBase    = "/api/v1/developer"
-	directWSPath  = "/api/v1/developer/devices/notifications"
+
+	// THE SOCKET MOVED. On an ENVR running current Access the `api` path
+	// above answers 404 to a key whose `integration` REST paths return
+	// twenty-eight doors, and the same path under the REST base connects and
+	// delivers. Captured by the probe on real hardware, which is the only
+	// reason this is a fact rather than a guess.
+	//
+	// Both are kept: the two door-state message shapes this build knows were
+	// captured on the older path, and a site on that firmware must not lose
+	// its socket to a fix for another.
+	proxyWSPathIntegration = "/proxy/access/integration/v1/developer/devices/notifications"
+	directBase             = "/api/v1/developer"
+	directWSPath           = "/api/v1/developer/devices/notifications"
 )
 
 var (
@@ -239,6 +250,12 @@ type Health struct {
 	// has never been enumerated from hardware, so this is how it gets found.
 	UnknownLogKeys map[string]int64
 
+	// Noise counts frames that are neither door state nor a failure to read
+	// one: keepalives and informational events. Separated from Unrecognised
+	// because that counter is the evidence for an alarm, and a keepalive is
+	// not evidence of anything.
+	Noise int64
+
 	// LastSocketErr is why the notifications socket last failed, kept so the
 	// interface can say what is wrong rather than only that nothing arrived.
 	// On a console with no Access installed the handshake fails against the
@@ -273,6 +290,10 @@ type Source struct {
 
 	restBase string
 	wsPath   string
+
+	// wsAlso are the other paths this firmware might serve the socket on,
+	// tried in order when the first answers 404.
+	wsAlso []string
 
 	doors *doors
 	poll  *poller
@@ -319,8 +340,12 @@ func New(cfg Config) (*Source, error) {
 	case ModeDirect:
 		base.Host = hostWithPort(base.Host, cfg.DirectPort)
 		s.restBase, s.wsPath = directBase, directWSPath
+		s.wsAlso = nil
 	default:
-		s.restBase, s.wsPath = proxyRESTBase, proxyWSPath
+		// Current firmware first: a 404 costs a reconnect delay, and the
+		// common case should not pay it.
+		s.restBase, s.wsPath = proxyRESTBase, proxyWSPathIntegration
+		s.wsAlso = []string{proxyWSPath}
 	}
 
 	s.backoff = unifi.Backoff{Base: cfg.MinBackoff, Max: cfg.MaxBackoff, Rand: cfg.Rand}
@@ -393,6 +418,12 @@ func (s *Source) LastContact() time.Time {
 		last = lastRun
 	}
 	return last
+}
+
+// wsCandidates is every path the notifications socket might live on, in the
+// order they are tried.
+func (s *Source) wsCandidates() []string {
+	return append([]string{s.wsPath}, s.wsAlso...)
 }
 
 // LastError is the most recent reason a read failed, or "" when the last one
@@ -762,9 +793,39 @@ func (s *Source) readSocket(ctx context.Context, out event.Sink) (time.Duration,
 	hdr := http.Header{}
 	s.authorise(hdr)
 
-	wsURL := "wss://" + s.base.Host + s.wsPath
-	started := s.cfg.Now()
-	conn, resp, err := s.dial().DialContext(ctx, wsURL, hdr)
+	// A 404 MEANS "NOT HERE", NOT "NOT ALLOWED", so it is the one handshake
+	// failure worth answering by asking somewhere else. The path that
+	// connects is remembered, so a reconnect does not re-walk the list and a
+	// site never pays the 404 twice.
+	var (
+		conn    *websocket.Conn
+		resp    *http.Response
+		err     error
+		wsURL   string
+		started = s.cfg.Now()
+	)
+	for i, path := range s.wsCandidates() {
+		wsURL = "wss://" + s.base.Host + path
+		started = s.cfg.Now()
+		conn, resp, err = s.dial().DialContext(ctx, wsURL, hdr)
+		if err == nil {
+			if i > 0 {
+				// Promote it: this firmware serves the socket here.
+				s.mu.Lock()
+				s.wsAlso = append([]string{s.wsPath}, s.wsAlso[:i]...)
+				s.wsAlso = append(s.wsAlso, s.wsAlso[i:]...)
+				s.wsPath = path
+				s.mu.Unlock()
+			}
+			break
+		}
+		if resp == nil || resp.StatusCode != http.StatusNotFound {
+			break
+		}
+		_ = resp.Body.Close()
+		s.cfg.Logf("access: the notifications socket is not at %s on this "+
+			"firmware (404); trying the next known path", path)
+	}
 	if err != nil {
 		s.mu.Lock()
 		s.health.LastSocketErr = err.Error()
@@ -857,9 +918,39 @@ func (s *Source) handleFrame(data []byte, out event.Sink) {
 	s.health.LastMessageAt = now
 	s.mu.Unlock()
 
+	// PROTOCOL NOISE IS NOT A FRAME WE FAILED TO UNDERSTAND.
+	//
+	// A real ENVR sends a bare string six times a minute as a keepalive, and
+	// an informational event about its own log depth. Counted as unreadable,
+	// fifty of those raise the stream-unintelligible alarm -- HIGH, saying
+	// door-forced detection is degraded -- on a console whose socket is
+	// working perfectly, because nobody has opened a door yet. Which is most
+	// sites at 3am.
+	//
+	// The alarm exists for door state arriving in a shape this build cannot
+	// read. A frame that is not even an object is not evidence of that.
+	if !isJSONObject(data) {
+		s.mu.Lock()
+		s.health.Noise++
+		s.mu.Unlock()
+		return
+	}
+
 	var n notification
 	if err := json.Unmarshal(data, &n); err != nil {
 		s.noteUnrecognised("<undecodable>", out)
+		return
+	}
+	if informational[n.Event] {
+		// Recorded so an operator can see what the socket actually carries,
+		// and kept out of the mute evidence: this one is understood well
+		// enough to know it says nothing about a door.
+		s.mu.Lock()
+		s.health.Noise++
+		if len(s.health.UnknownEvents) < 512 {
+			s.health.UnknownEvents[n.Event]++
+		}
+		s.mu.Unlock()
 		return
 	}
 	states := n.states()
@@ -886,6 +977,33 @@ func (s *Source) handleFrame(data []byte, out event.Sink) {
 		all = append(all, s.doors.observeLock(st.DoorID, st.Name, st.Lock, st.Held, now)...)
 	}
 	s.emit(context.Background(), out, all)
+}
+
+// informational names socket events that carry no door state and are known to
+// carry none. Captured from a real console by the probe.
+//
+// Kept SHORT and explicit. Anything not in here that fails to yield door state
+// is still evidence the stream is unintelligible, which is the direction the
+// error should point: an unfamiliar door event must not be waved through as
+// housekeeping.
+var informational = map[string]bool{
+	"access.base.info": true,
+}
+
+// isJSONObject reports whether a frame is an object rather than a bare string,
+// number or array.
+func isJSONObject(data []byte) bool {
+	for _, b := range data {
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case '{':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // noteUnrecognised counts a frame nothing understood, and reports a socket

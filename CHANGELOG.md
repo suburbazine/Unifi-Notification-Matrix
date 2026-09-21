@@ -13,6 +13,31 @@ view against the release before them.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Access notifications socket moved, and this build now finds it.** On
+  an ENVR running current Access, `/proxy/access/api/v1/developer/devices/notifications`
+  answers 404 to a key whose `integration` REST paths return 28 doors — and
+  the same path under the REST base connects and delivers. Captured by the
+  probe on real hardware, which is why this is a fact rather than a guess.
+
+  Both paths are tried, current firmware first, and the one that connects is
+  remembered so a reconnect never pays the 404 twice. The older path is kept
+  because the only two door-state message shapes this build knows were
+  captured there, and a site on that firmware must not lose its socket to a
+  fix for another.
+
+- **A keepalive is no longer evidence that the stream is unintelligible.**
+  That console sends a bare string six times a minute, plus an informational
+  event about its own log depth. Counted as frames nobody could read, fifty of
+  them raise a **high** incident saying door-forced detection is degraded — on
+  a console whose socket is working perfectly, because nobody has opened a
+  door yet. Which is most sites at 3am.
+
+  Protocol noise is now counted apart from failures to understand. The alarm
+  still fires for what it was built for: door state arriving in a shape this
+  build cannot read.
+
 ### Changed
 
 - **A Network device going offline now raises `low`, not `high`.** On the

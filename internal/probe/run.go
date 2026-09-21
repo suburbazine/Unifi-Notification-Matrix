@@ -265,7 +265,12 @@ func diff(r *Report) []Finding {
 			out = append(out, Finding{
 				Record: "finding", Kind: "event.unhandled", Product: s.Product,
 				Detail: key,
-				Note:   "this build has no " + s.Product + " source; the type is recorded, not handled",
+				// NOT "no source". This build has an Access source and an
+				// operator reading that would go looking for a configuration
+				// mistake. What it has no table of is socket message TYPES
+				// for anything but Protect, which is a different sentence.
+				Note: "this build maps no " + s.Product + " socket message types, " +
+					"so the type is recorded rather than handled",
 			})
 		}
 		if s.Unreadable > 0 {
