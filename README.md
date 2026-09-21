@@ -297,6 +297,9 @@ service, or bundling it into a product you sell.
 
 Commercial licensing: **licensing@xtremission.com**
 
+The same address takes security reports — see
+[SECURITY.md](SECURITY.md), and put *security* in the subject.
+
 GitHub labels this repository "Other" because PolyForm is not an OSI-approved
 licence. That is expected, not an error.
 
@@ -356,7 +359,9 @@ without one.
 
 ## Reporting a security problem
 
-Use GitHub's private reporting —
+Mail **licensing@xtremission.com** — a secure mailbox, so the details can go in
+the first mail — or use GitHub's private reporting if you would rather keep the
+thread there:
 **[Report a vulnerability](https://github.com/suburbazine/Unifi-Notification-Matrix/security/advisories/new)**.
 Not a public issue, please, for anything that would tell somebody how to reach
 a stranger's installation before there is a fix to point at.

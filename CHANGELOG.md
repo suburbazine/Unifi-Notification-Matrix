@@ -16,9 +16,9 @@ view against the release before them.
 ### Added
 
 - **A security policy, and a private channel to use it on.**
-  [`SECURITY.md`](SECURITY.md) names where a report goes — GitHub's private
-  advisories, which are enabled on this repository — what is in scope, and
-  what happens after you send it.
+  [`SECURITY.md`](SECURITY.md) names where a report goes — a secure mailbox,
+  or GitHub's private advisories if a reporter would rather keep the thread
+  there — what is in scope, and what happens after you send it.
 
   It also lists what is **already known and written down**: the acknowledgement
   token travelling in cleartext, the random acknowledgement port not being a

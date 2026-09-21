@@ -7,19 +7,23 @@ that is worth more than a feature request, and it will be treated that way.
 
 ## Reporting a vulnerability
 
-**Use GitHub's private reporting:**
+**Mail licensing@xtremission.com.** It is a secure mailbox and it reaches a
+person, not a queue — so the details belong in the first mail rather than
+after a round trip asking for somewhere to put them. Put *security* in the
+subject; it is the same address the licence points at and that is what sorts
+one from the other.
+
+If you would rather keep the whole thing on GitHub, private reporting is
+enabled here:
 [**Report a vulnerability**](https://github.com/suburbazine/Unifi-Notification-Matrix/security/advisories/new).
-It is enabled on this repository. The thread is private between you and the
-maintainer until an advisory is published, and it carries attachments.
+The thread stays private between you and the maintainer until an advisory is
+published, it carries attachments, and it is the better channel if you want a
+published advisory or a CVE with your name on it at the end. Either channel
+reaches the same person; take whichever you trust more.
 
 **Please do not** open a public issue, a pull request or a discussion for
 anything that would tell somebody how to reach a stranger's installation
 before there is a fix to point at.
-
-If you cannot use GitHub at all, mail **licensing@xtremission.com** asking for
-a private channel — **and put no details in that mail.** It is an ordinary
-business mailbox, not a secure one; you will be moved to a private advisory and
-can send the details there.
 
 ### What helps
 
