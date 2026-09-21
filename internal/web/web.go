@@ -123,6 +123,10 @@ type Deps struct {
 	ProbeStop   func()
 	ProbeRead   func(name string) ([]byte, error)
 
+	// Activity reports how busy the site is. Optional: a build that supplies
+	// none simply has no panel.
+	Activity func() SiteActivity
+
 	// FetchFingerprint reads the certificate a console is presenting, so the
 	// interface can show it to an operator who is deciding whether to pin it.
 	//
@@ -303,6 +307,55 @@ type SourceHealth struct {
 	// matters -- the board showed three sources "reporting" on a console
 	// where two of the three applications were not installed at all.
 	NeverConnected bool `json:"never_connected,omitempty"`
+}
+
+// SiteActivity is how busy the site is, for the Health screen.
+//
+// SEPARATE FROM THE ALERT'S SENTENCE, because a panel and a notification are
+// answering different questions. An alert says "this arrived in a crowd"; the
+// panel says what the crowd is, what is normal, and -- the part an alert never
+// needs -- WHY there is no figure when there is none.
+type SiteActivity struct {
+	// Available is false where this build does not measure activity at all.
+	Available bool `json:"available"`
+
+	// Saying is whether an alert right now would carry the sentence below.
+	Saying   bool   `json:"saying"`
+	Silent   string `json:"silent,omitempty"`
+	Sentence string `json:"sentence,omitempty"`
+
+	// Verdict is "busy", "quiet" or "" for ordinary.
+	Verdict string `json:"verdict,omitempty"`
+
+	Events  int `json:"events"`
+	Devices int `json:"devices"`
+
+	// Slot is the comparable stretch in words: "a weekday at this hour".
+	Slot string `json:"slot,omitempty"`
+
+	// Typical is the median for that slot, and Earned says whether it has
+	// been earned. An unearned baseline reports what it is waiting for
+	// instead of quoting numbers it cannot support.
+	Earned         bool `json:"earned"`
+	TypicalEvents  int  `json:"typical_events"`
+	TypicalDevices int  `json:"typical_devices"`
+	LearnedDays    int  `json:"learned_days"`
+	NeedDays       int  `json:"need_days"`
+	SlotSamples    int  `json:"slot_samples"`
+	NeedSamples    int  `json:"need_samples"`
+
+	// Recent is the last few completed stretches, oldest first, so a surge is
+	// visible as a shape rather than only stated as a claim.
+	Recent []ActivityBucket `json:"recent"`
+}
+
+// ActivityBucket is one completed stretch on the screen.
+type ActivityBucket struct {
+	At       time.Time `json:"at"`
+	Events   int       `json:"events"`
+	Devices  int       `json:"devices"`
+	Degraded bool      `json:"degraded,omitempty"`
+	Flagged  string    `json:"flagged,omitempty"`
 }
 
 // ChannelHealth mirrors channel.Stats plus whether the channel is switched on.

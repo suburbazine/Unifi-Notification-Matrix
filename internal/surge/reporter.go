@@ -99,6 +99,70 @@ func (r *Reporter) Window() (events, devices int) {
 	return len(r.events), len(r.seen)
 }
 
+// Status is everything the interface shows about site activity.
+//
+// A SCREEN NEEDS THE REASON A NUMBER IS ABSENT, which an alert does not: an
+// alert with no note simply has no note, while an operator looking at a panel
+// with nothing in it is owed the difference between "this site is ordinary",
+// "not enough history yet" and "we are not currently watching all of it".
+type Status struct {
+	// Saying is whether an alert right now would carry a sentence.
+	Saying bool
+
+	// Silent is why not, in one clause, when Saying is false and the reason
+	// is this product rather than the site.
+	Silent string
+
+	Events  int
+	Devices int
+
+	Stats   Stats
+	Slot    Slot
+	Verdict Verdict
+
+	// Sentence is what an alert would carry, "" when nothing would be said.
+	Sentence string
+
+	// Recent is the last few completed buckets, oldest first, so a surge can
+	// be seen as a shape rather than read as a claim.
+	Recent []Bucket
+}
+
+// Status answers what the interface shows.
+func (r *Reporter) Status(at time.Time) Status {
+	now := r.now()
+	st := Status{Slot: SlotFor(now, r.site), Stats: r.Stats(now)}
+	st.Events, st.Devices = r.Window()
+	st.Verdict = Judge(st.Events, st.Devices, st.Stats)
+
+	if r.store != nil {
+		// Six buckets is the last hour: long enough to show a shape, short
+		// enough that the row is readable on a phone.
+		if got, err := r.store.Buckets(now.Add(-6*Width).Truncate(Width), now.Truncate(Width)); err == nil {
+			st.Recent = got
+		}
+	}
+
+	switch {
+	case now.Sub(r.startedAt) < Width:
+		st.Silent = "not long enough since this started to measure ten minutes of it"
+		return st
+	case r.isBlind(now):
+		st.Silent = "a source is not reporting, so this would measure what still " +
+			"reaches us rather than the site"
+		return st
+	}
+
+	st.Saying = true
+	st.Sentence = Sentence(st.Events, st.Devices, st.Stats, st.Slot, st.Verdict)
+	return st
+}
+
+func (r *Reporter) isBlind(now time.Time) bool {
+	since, blindNow := r.blind()
+	return blindNow || (!since.IsZero() && now.Sub(since) < Width)
+}
+
 // Note is the sentence for an alert, or "" when there is nothing honest to
 // say.
 //
@@ -117,18 +181,7 @@ func (r *Reporter) Window() (events, devices int) {
 // And when the baseline has not been earned, there is a count but no
 // comparison; the sentence says so rather than implying one.
 func (r *Reporter) Note(at time.Time) string {
-	now := r.now()
-	if now.Sub(r.startedAt) < Width {
-		return ""
-	}
-	if since, blindNow := r.blind(); blindNow || (!since.IsZero() && now.Sub(since) < Width) {
-		return ""
-	}
-
-	events, devices := r.Window()
-	st := r.Stats(now)
-	slot := SlotFor(now, r.site)
-	return Sentence(events, devices, st, slot, Judge(events, devices, st))
+	return r.Status(at).Sentence
 }
 
 // Stats reads the baseline for the slot containing at.

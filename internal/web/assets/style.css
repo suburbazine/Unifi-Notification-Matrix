@@ -880,3 +880,23 @@ a.pair .pair-v{color:var(--accent)}
    meant to be read before. */
 .probe-log{max-height:16rem}
 .probe-file{max-height:26rem;white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* ---------- site activity -------------------------------------------------- */
+
+/* The last hour as a shape. A surge is a thing you can see in a row of bars
+   and a thing you have to be told in a sentence; both are here, because the
+   sentence is what an alert carries and the shape is what makes it credible. */
+.actbars{display:flex;align-items:flex-end;gap:4px;height:32px;margin-top:6px}
+.actbar{
+  width:22px;height:100%;display:flex;align-items:flex-end;
+  background:var(--card-2);border:1px solid var(--line);border-radius:4px;
+}
+.actbar-fill{width:100%;background:var(--accent);border-radius:3px}
+.actbar.is-busy .actbar-fill{background:var(--warn)}
+.actbar.is-quiet .actbar-fill{background:var(--muted)}
+/* Hatched rather than coloured: a stretch nobody was fully watching is not a
+   measurement of the site, and it must not read as one at a glance. */
+.actbar.is-degraded{
+  background:repeating-linear-gradient(45deg,var(--card-2),var(--card-2) 3px,transparent 3px,transparent 6px);
+  border-style:dashed;
+}

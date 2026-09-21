@@ -683,6 +683,8 @@ function renderHealth(h) {
     srcs.appendChild(wrap(t));
   }
 
+  renderActivity(h && h.activity);
+
   var chs = byId("health-channels"); clear(chs);
   if (!channels.length) {
     chs.appendChild(emptyState("No channels are configured",
@@ -4697,6 +4699,97 @@ function renderDemoBanner(text) {
   var b = el("div", "banner is-err", text);
   b.id = "demo-banner";
   document.body.insertBefore(b, document.body.firstChild);
+}
+
+// renderActivity: how busy the site is, and why there is no figure when there
+// is none.
+//
+// THE ABSENCE NEEDS A REASON. An alert with no note simply has no note, but an
+// operator looking at an empty panel is owed the difference between "this site
+// is ordinary", "not enough history yet" and "we are not currently watching
+// all of it" -- and the last of those is the one that matters, because a
+// number taken while a source is dead measures what still reaches us rather
+// than the site.
+function renderActivity(a) {
+  var box = byId("health-activity");
+  if (!box) return;
+  clear(box);
+
+  if (!a || !a.available) {
+    box.appendChild(stateBlock("empty", {
+      icon: "activity", compact: true,
+      title: "Not measured on this build",
+      text: "Alerts carry no note about how busy the site was."
+    }));
+    return;
+  }
+
+  var card = el("div", "card");
+
+  // The figure, always, because a count is a fact even when no comparison
+  // has been earned.
+  var head = el("div", "row");
+  head.appendChild(el("span", "title lg",
+    (a.events === 1 ? "1 event" : a.events + " events") + " across " +
+    (a.devices === 1 ? "1 device" : a.devices + " devices")));
+  head.appendChild(el("span", "muted small", "in the last 10 minutes"));
+  if (a.verdict === "busy") head.appendChild(badge("unusually busy", "is-warn"));
+  if (a.verdict === "quiet") head.appendChild(badge("unusually quiet", "is-warn"));
+  card.appendChild(head);
+
+  if (a.earned) {
+    card.appendChild(el("div", "note",
+      "Typical for " + a.slot + " is " + a.typical_events + " across " +
+      a.typical_devices + " — the middle of " + a.slot_samples +
+      " comparable stretches over the last eight weeks."));
+  } else if (a.learned_days < a.need_days) {
+    card.appendChild(el("div", "note",
+      "No typical figure yet: " + a.learned_days + " of " + a.need_days +
+      " days learned. Until then this counts and does not compare, because a " +
+      "comparison drawn from a few days would be confident and wrong."));
+  } else {
+    card.appendChild(el("div", "note",
+      "No typical figure for this hour yet: " + a.slot_samples + " of " +
+      a.need_samples + " comparable stretches seen."));
+  }
+
+  // Why an alert would carry nothing. Distinct from "nothing unusual", which
+  // is the ordinary case and says itself.
+  if (!a.saying && a.silent) {
+    card.appendChild(callout(
+      "Alerts are carrying no activity note: " + a.silent + ".",
+      "warn", "Not saying anything yet"));
+  } else if (a.sentence) {
+    card.appendChild(el("div", "note mono", a.sentence));
+  }
+
+  // THE SHAPE, not only the claim. Six stretches is the last hour, and a
+  // surge is a thing you can see in it.
+  var recent = a.recent || [];
+  if (recent.length) {
+    var peak = 1;
+    recent.forEach(function (b) { if (b.events > peak) peak = b.events; });
+
+    var bars = el("div", "actbars");
+    recent.forEach(function (b) {
+      var col = el("div", "actbar" +
+        (b.degraded ? " is-degraded" : "") +
+        (b.flagged === "busy" ? " is-busy" : "") +
+        (b.flagged === "quiet" ? " is-quiet" : ""));
+      var fill = el("div", "actbar-fill");
+      // A floor of two pixels so a watched-but-empty stretch is visibly a
+      // measurement rather than a gap in the row.
+      fill.style.height = Math.max(2, Math.round(28 * b.events / peak)) + "px";
+      col.appendChild(fill);
+      col.title = stamp(b.at) + " — " + b.events + " events across " +
+        b.devices + " devices" + (b.degraded ? " (not fully watched)" : "");
+      bars.appendChild(col);
+    });
+    card.appendChild(el("div", "label", "The last hour, ten minutes at a time"));
+    card.appendChild(bars);
+  }
+
+  box.appendChild(card);
 }
 
 // renderSelfWatchBanner says, on every screen, that a quiet board here cannot

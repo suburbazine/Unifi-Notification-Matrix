@@ -7,6 +7,7 @@ import (
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/surge"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/web"
 )
 
 // Wiring the activity measurement to the events it measures.
@@ -56,6 +57,56 @@ func (a *siteActivity) observe(ev event.Event) {
 	key := ev.Source + "/" + ev.Entity.ID
 	a.rec.Observe(key, at)
 	a.rep.Observe(key, at)
+}
+
+// panel is what the Health screen asks for.
+//
+// The translation from the measurement's own vocabulary into the wire shape
+// happens here, in the daemon, for the same reason every other view does: the
+// web package holds no opinion about how a site is measured, and the surge
+// package holds none about how a page is drawn.
+func (a *siteActivity) panel() web.SiteActivity {
+	if a == nil {
+		return web.SiteActivity{}
+	}
+	st := a.rep.Status(time.Now())
+	out := web.SiteActivity{
+		Available: true,
+		Saying:    st.Saying,
+		Silent:    st.Silent,
+		Sentence:  st.Sentence,
+		Verdict:   verdictName(st.Verdict),
+		Events:    st.Events,
+		Devices:   st.Devices,
+		Slot:      st.Slot.Name(),
+
+		Earned:         st.Stats.Earned,
+		TypicalEvents:  st.Stats.MedianEvents,
+		TypicalDevices: st.Stats.MedianDevices,
+		LearnedDays:    st.Stats.LearnedDays,
+		NeedDays:       surge.MinDays,
+		SlotSamples:    st.Stats.Samples,
+		NeedSamples:    surge.MinSamples,
+		Recent:         make([]web.ActivityBucket, 0, len(st.Recent)),
+	}
+	for _, b := range st.Recent {
+		out.Recent = append(out.Recent, web.ActivityBucket{
+			At: b.Start, Events: b.Events, Devices: b.Devices,
+			Degraded: b.Degraded, Flagged: verdictName(b.Flagged),
+		})
+	}
+	return out
+}
+
+func verdictName(v surge.Verdict) string {
+	switch v {
+	case surge.Busy:
+		return "busy"
+	case surge.Quiet:
+		return "quiet"
+	default:
+		return ""
+	}
 }
 
 // note is what an alert asks for.

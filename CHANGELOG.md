@@ -13,6 +13,40 @@ view against the release before them.
 
 ## [Unreleased]
 
+### Added
+
+- **Alerts can say whether they arrived alone or in a crowd**, and the Health
+  tab shows what the crowd is.
+
+  The motivating case is a wireless jammer before a break-in: several devices
+  going quiet at once, none of them decisive on its own. Not caught as
+  unusual silence — a site that is normally silent at 3am has no signal to
+  lose — but as the disconnect burst the jamming causes, which is many devices
+  at once and is what the measurement watches for.
+
+  **Spread carries the verdict and volume never does alone.** Fifty events
+  from one flapping camera is not a surge and must never read as one; nine
+  devices producing one each is the shape that matters. Events that rules
+  silenced are counted, because a site whose motion is suppressed is still a
+  site with motion in it, and those are exactly the events a jammer removes.
+
+  **Decoration only.** It cannot move a severity or a ladder: a statistical
+  signal nudging a real alarm up a tier is how a firmware rollout becomes a
+  phone call at 3am.
+
+  The baseline is learned per hour, weekday and weekend apart, over eight
+  weeks, and is not quoted until it has been earned — fourteen days, and
+  twenty-four comparable stretches for the hour in question. Until then the
+  panel states the count and says what it is waiting for.
+
+  It stays quiet in two states where a sentence would be worse than none:
+  under ten minutes of uptime, and while any source is not reporting. The
+  panel says which, because "nothing unusual" and "we are not watching all of
+  it" look identical on a screen and are opposite facts.
+
+  At 144 stretches a day for 56 days the history is 8,064 rows for any site,
+  busy or quiet, pruned as it is written.
+
 ### Fixed
 
 - **The Access notifications socket moved, and this build now finds it.** On

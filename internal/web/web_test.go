@@ -205,6 +205,10 @@ type harness struct {
 	hookArmed []string
 	hookFired []string
 
+	// How busy the site is, as the Health panel sees it.
+	activity    SiteActivity
+	activityOff bool
+
 	// The certificate a console is presenting, as the operator would be shown
 	// it before deciding to pin it.
 	fingerprint      string
@@ -360,6 +364,14 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 			defer h.mu.Unlock()
 			h.hookFired = append(h.hookFired, name)
 			return "TEST — Wan down — Head office", nil
+		},
+		Activity: func() SiteActivity {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if h.activityOff {
+				return SiteActivity{}
+			}
+			return h.activity
 		},
 		FetchFingerprint: func(_ context.Context, host string) (string, error) {
 			h.mu.Lock()

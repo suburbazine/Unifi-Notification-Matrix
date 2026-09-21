@@ -133,6 +133,7 @@ func (s *Server) viewOf(inc *incident.Incident) incidentView {
 type healthView struct {
 	StartedAt     *time.Time         `json:"started_at,omitempty"`
 	UptimeSeconds int64              `json:"uptime_seconds"`
+	Activity      *SiteActivity      `json:"activity,omitempty"`
 	Sources       []sourceHealthView `json:"sources"`
 	Channels      []ChannelHealth    `json:"channels"`
 	Service       ServiceHealth      `json:"service"`
@@ -158,6 +159,13 @@ func (s *Server) healthView(h Health) healthView {
 		Channels: h.Channels,
 		Service:  h.Service,
 		Sources:  []sourceHealthView{},
+	}
+	if s.deps.Activity != nil {
+		a := s.deps.Activity()
+		if a.Recent == nil {
+			a.Recent = []ActivityBucket{}
+		}
+		out.Activity = &a
 	}
 	if out.Channels == nil {
 		out.Channels = []ChannelHealth{}

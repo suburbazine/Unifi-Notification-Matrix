@@ -983,6 +983,7 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 		ui, err := web.New(web.Deps{
 			Store:            db,
 			Audit:            auditLog,
+			Activity:         activity.panel,
 			FetchFingerprint: fetchFingerprint,
 			ProbeStatus:      prb.status,
 			ProbeStart:       prb.start,
