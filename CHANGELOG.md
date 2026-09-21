@@ -13,9 +13,32 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Changed
+
+- **A Network device going offline now raises `low`, not `high`.** On the
+  default ladders `high` wakes somebody — for an access point rebooting, a PoE
+  port cycling, or a switch that was unplugged on purpose. Most of what
+  polling a controller produces is operational noise, and an operator woken by
+  it either stops trusting the product or turns the source off.
+
+  What makes one of these serious is the company it keeps: the same outage
+  taking a camera or a door controller with it. The Network source polls one
+  API and knows nothing about Protect or Access, so deciding that there would
+  be a guess dressed as a severity. A site that knows which switch carries the
+  door hardware raises that one with a rule.
+
+### Fixed
+
+- **"The only way Network events exist at all" was wrong, and read as
+  "Network needs webhooks".** A console with an API key and `network` in its
+  sources already reports switches and access points going offline, derived
+  from polling, with no rule involved. Alarm Manager rules are for the alarms
+  no API carries — WAN outages, threat detections, PoE faults, and Protect's
+  own hardware alarms.
+
+  Corrected in the README, in the setup guide, in the checklist's own
+  reasoning, and on the Webhooks screen, which now says plainly that none of
+  it is needed to watch a console.
 
 ## [0.3.9] — 2026-09-21
 

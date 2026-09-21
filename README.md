@@ -218,7 +218,14 @@ now, ntfy and email in fifteen minutes".
 ![The escalation matrix: severities as rows, channels as columns, with repeat and give-up intervals per severity](docs/images/escalation.png)
 
 **Inbound hooks are managed here too** — one endpoint per Alarm Manager rule,
-because that is the only way UniFi Network alarms exist at all.
+because a WAN outage, a threat detection or a PoE fault is readable by no API
+and exists only as a rule somebody makes by hand.
+
+**Network does not need one to be watched**, which is worth saying because the
+sentence above has been read the other way: switches and access points going
+offline are derived from polling the integration API, so a console with a key
+and `network` in its sources reports those with no hook at all. A rule is for
+the alarms the API does not carry.
 
 ![A hook's card: its URL and header ready to paste, how many alarms have arrived, and the two ways to test it](docs/images/hooks.png)
 

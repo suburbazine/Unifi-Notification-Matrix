@@ -1704,6 +1704,13 @@ function renderWebhooksSection(body, ctx) {
     "alarms are not readable by any API. They exist ONLY as Alarm Manager " +
     "rules that push to a URL, and no API can create those rules -- so these " +
     "endpoints are the only way those alarms reach this product at all."));
+  // Said here because the paragraph above has been read as "Network needs
+  // webhooks", by somebody already running Network on a key alone.
+  body.appendChild(el("p", "note",
+    "None of this is needed to watch a console. A console with an API key and " +
+    "its sources ticked already reports cameras, doors and switches going " +
+    "offline on its own — these endpoints are only for the alarms no API " +
+    "carries."));
   renderHooks(body, draft, s.hook_conditions || [], creds || {});
 
   body.appendChild(el("h3", null, "Push to your own systems (here \u2192 you)"));

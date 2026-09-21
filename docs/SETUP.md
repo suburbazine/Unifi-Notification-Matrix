@@ -89,6 +89,13 @@ sources listed is polled for nothing, and everything still looks correct.
 | `access` | doors: forced open, held open, refused credentials |
 | `network` | switches and access points going offline |
 
+**Network raises `low`**, on purpose. Most of what polling a controller
+produces is an access point rebooting or a PoE port cycling, and paging
+somebody for that is how a source gets switched off. What makes one serious is
+the company it keeps — the same outage taking a camera or a door controller
+with it — and a site that knows which switch carries the door hardware raises
+that one with a rule.
+
 The key is encrypted the next time the configuration is saved, and is bound to
 this machine. Copying the file to another computer will not carry the
 credentials with it.
@@ -489,6 +496,11 @@ map. `notifymatrix probe` asks your own console what it really exposes.
 Some alarms are **not readable by any API**. They exist only as UniFi **Alarm
 Manager** rules that push to a URL, and no API can create those rules — so if
 nobody makes them by hand, those alarms never reach this product at all.
+
+> **This is not "Network needs webhooks".** A console with an API key and
+> `network` in its sources already reports switches and access points going
+> offline, derived from polling; no rule is involved and none is needed. This
+> section is about the alarms the API does not carry at all.
 
 That covers:
 

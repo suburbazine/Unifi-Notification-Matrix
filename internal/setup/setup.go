@@ -6,8 +6,11 @@
 // of them told you what to DO. A config file that validates, a service that is
 // running and a status page that is green can all coexist with a product that
 // will never raise an alarm, because nobody added a console, or enabled a
-// channel, or made the Alarm Manager rule that is the only way Network events
-// exist at all.
+// channel, or made the Alarm Manager rule that is the only way a WAN outage
+// reaches anything. (Not Network as a whole: device offline comes from
+// polling the integration API and needs no rule. The distinction matters --
+// stated the other way round, this sends somebody to build webhooks they do
+// not need, and an operator said so.)
 //
 // One assessment, rendered in several places -- the terminal, the first-run
 // screen, the interface -- so they cannot drift apart and disagree with each

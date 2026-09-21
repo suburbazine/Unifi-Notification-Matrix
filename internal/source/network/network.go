@@ -362,6 +362,22 @@ func (s *Source) poll(ctx context.Context, out event.Sink) {
 	s.emit(out, all)
 }
 
+// offlineSeverity is what a Network device going offline is worth on its own.
+//
+// LOW, AND THE REASON IS WHAT THIS SOURCE CANNOT SEE. It was High, which on
+// the default ladders wakes somebody -- for an access point rebooting, a PoE
+// port cycling, or a switch somebody unplugged on purpose. Most of what
+// polling a network controller produces is operational noise, and an operator
+// woken by it either stops trusting the product or switches the source off.
+//
+// What makes one of these serious is the company it keeps: the same outage
+// taking a camera or a door controller with it. This source polls one API and
+// knows nothing about Protect or Access, so deciding that here would be a
+// guess dressed as a severity. A site that knows a particular switch carries
+// the door hardware raises that one with a rule, which is the surface built
+// for exactly this.
+func offlineSeverity() incident.Severity { return incident.SeverityLow }
+
 func (s *Source) notePoll(now time.Time, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -552,7 +568,7 @@ func (s *Source) eventFor(t transition) event.Event {
 		Entity: event.Entity{
 			ID: t.device.id, Name: name, Kind: "device", MAC: t.device.mac,
 		},
-		Severity: incident.SeverityHigh,
+		Severity: offlineSeverity(),
 		Title:    title,
 		Detail:   detail,
 
