@@ -13,6 +13,25 @@ view against the release before them.
 
 ## [Unreleased]
 
+### Added
+
+- **Something to press, where the warning said there would be.** "pin a
+  certificate (notifymatrix will show you its fingerprint)" has been printed
+  beside every unpinned console since pinning existed, and nothing behind it
+  was wired: the function that reads a certificate was written, tested,
+  documented as the thing a setup screen would call — and called by nothing.
+  Pinning meant going and finding openssl.
+
+  The Consoles screen now has **Read the certificate**, and there is
+  `notifymatrix fingerprint --host`. Both read local addresses only, the same
+  rule the probe follows and for the same reason.
+
+  **They show; they do not pin.** The value comes back with a note that it is
+  whatever is answering at that address right now, and accepting it is a
+  second click and an ordinary save. Trust-on-first-use is an operator
+  action, and the mechanical guard that keeps any connection path from
+  learning a pin by itself now covers every package that dials a console.
+
 ### Fixed
 
 - **A pinned console could not connect unless certificate verification was

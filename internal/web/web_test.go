@@ -205,6 +205,12 @@ type harness struct {
 	hookArmed []string
 	hookFired []string
 
+	// The certificate a console is presenting, as the operator would be shown
+	// it before deciding to pin it.
+	fingerprint      string
+	fingerprintErr   error
+	fingerprintCalls int
+
 	// The probe, as the interface sees it: what status reports, what a run
 	// was asked for, and the bytes a report would hand back.
 	probeStatus   ProbeStatus
@@ -354,6 +360,12 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 			defer h.mu.Unlock()
 			h.hookFired = append(h.hookFired, name)
 			return "TEST — Wan down — Head office", nil
+		},
+		FetchFingerprint: func(_ context.Context, host string) (string, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.fingerprintCalls++
+			return h.fingerprint, h.fingerprintErr
 		},
 		ProbeStatus: func() ProbeStatus {
 			h.mu.Lock()

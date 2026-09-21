@@ -123,6 +123,14 @@ type Deps struct {
 	ProbeStop   func()
 	ProbeRead   func(name string) ([]byte, error)
 
+	// FetchFingerprint reads the certificate a console is presenting, so the
+	// interface can show it to an operator who is deciding whether to pin it.
+	//
+	// It SHOWS; it never pins. The caller supplies the local-network check --
+	// this is a daemon dialling an address somebody typed into a form, and
+	// the rule the probe follows applies here for the same reason.
+	FetchFingerprint func(ctx context.Context, host string) (string, error)
+
 	// TestChannel sends one channel's proof-of-configuration message and
 	// reports what happened. Optional: a build that does not supply it simply
 	// has no test button.
@@ -469,6 +477,11 @@ func (s *Server) Handler() http.Handler {
 	// so every route is behind a session: running one is an action against
 	// the console, and a report is configuration detail about the site even
 	// after redaction.
+	// Reading a console's certificate is a dial to an address from a form, so
+	// it is behind a session like every other write, and the daemon refuses
+	// anything that is not on a local network.
+	mux.Handle("POST /api/consoles/fingerprint",
+		s.requireAuth(http.HandlerFunc(s.handleFetchFingerprint)))
 	mux.Handle("GET /api/probe", s.requireAuth(http.HandlerFunc(s.handleProbeStatus)))
 	mux.Handle("POST /api/probe/run", s.requireAuth(http.HandlerFunc(s.handleProbeRun)))
 	mux.Handle("POST /api/probe/stop", s.requireAuth(http.HandlerFunc(s.handleProbeStop)))

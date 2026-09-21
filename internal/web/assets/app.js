@@ -1456,8 +1456,10 @@ function renderConsolesSection(body, ctx) {
     var f = el("div", "fields");
     f.appendChild(labelled("Name", bind(c, "name")));
     f.appendChild(labelled("Host or IP address", bind(c, "host")));
-    f.appendChild(labelled("Certificate fingerprint (SHA-256, optional)", bind(c, "fingerprint")));
+    var fpInput = bind(c, "fingerprint");
+    f.appendChild(labelled("Certificate fingerprint (SHA-256, optional)", fpInput));
     card.appendChild(f);
+    card.appendChild(fingerprintOffer(c, fpInput, ctx));
 
     // Sources were displayed as a comma-joined string and could only be
     // changed by editing YAML -- on the setting that decides whether anything
@@ -2506,6 +2508,69 @@ var VOICE_SAY_LANGUAGES = [
   "nl-NL", "pt-BR", "pt-PT", "da-DK", "sv-SE", "nb-NO",
   "pl-PL", "ru-RU", "ja-JP", "ko-KR", "zh-CN"
 ];
+
+// fingerprintOffer: read the certificate this console is presenting, and show
+// it to somebody who is deciding whether to pin it.
+//
+// TRUST-ON-FIRST-USE IS AN OPERATOR ACTION. The button reads and SHOWS; it
+// does not fill the field, and accepting the value is a second click followed
+// by an ordinary save. A button that pinned what it had just read would be
+// the machine performing the decision, and a client that learns a pin by
+// itself has no protection on the one connection an attacker would target.
+//
+// It exists because the warning beside every unpinned console has always said
+// "notifymatrix will show you its fingerprint", and nothing did.
+function fingerprintOffer(c, input, ctx) {
+  var box = el("div", "stack");
+  var bar = el("div", "formbar");
+  var msg = el("div", "msg");
+
+  var go = el("button", "act small", "Read the certificate");
+  go.type = "button";
+  go.addEventListener("click", function () {
+    var host = (c.host || "").trim();
+    if (!host) {
+      msg.className = "msg warn";
+      msg.textContent = "Fill in the host first — that is the address this reads.";
+      return;
+    }
+    go.disabled = true;
+    msg.className = "msg";
+    msg.textContent = "reading …";
+    api("POST", "api/consoles/fingerprint", { host: host }).then(function (res) {
+      go.disabled = false;
+      if (!res.ok) {
+        // Verbatim: "not a local address", "connection refused" and "no TLS
+        // there" are three different problems with the address just typed.
+        msg.className = "msg err";
+        msg.textContent = (res.data && res.data.error) || "could not read a certificate there";
+        return;
+      }
+      clear(msg);
+      msg.className = "msg";
+      msg.appendChild(el("div", "mono", res.data.fingerprint));
+      msg.appendChild(el("div", "muted small",
+        "This is whatever is answering at " + host + " right now. Worth " +
+        "confirming against the console's own interface before you pin it."));
+      var use = el("button", "act small primary", "Use this fingerprint");
+      use.type = "button";
+      use.addEventListener("click", function () {
+        c.fingerprint = res.data.fingerprint;
+        input.value = res.data.fingerprint;
+        use.disabled = true;
+        use.textContent = "filled in — save to pin it";
+      });
+      var ub = el("div", "formbar");
+      ub.appendChild(use);
+      msg.appendChild(ub);
+    });
+  });
+
+  bar.appendChild(go);
+  box.appendChild(bar);
+  box.appendChild(msg);
+  return box;
+}
 
 // appKeyRows: one key per application, which is how UniFi issues them.
 //

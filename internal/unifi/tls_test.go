@@ -155,7 +155,18 @@ func TestFetchCertFingerprintReportsWhatIsThenPinnable(t *testing.T) {
 // against that regression is mechanical rather than a reviewer's memory: no
 // shipped code may call FetchCertFingerprint at all.
 func TestNoShippedCodeLearnsAPinByItself(t *testing.T) {
-	dirs := []string{".", filepath.Join("..", "source", "protect")}
+	// Every package that OPENS a connection to a console. The list grew when
+	// a setup screen and a CLI verb were finally given the operator-facing
+	// half of this -- those are allowed to ask, and nothing that dials on a
+	// schedule is.
+	dirs := []string{
+		".",
+		filepath.Join("..", "source", "protect"),
+		filepath.Join("..", "source", "access"),
+		filepath.Join("..", "source", "network"),
+		filepath.Join("..", "ingest"),
+		filepath.Join("..", "probe"),
+	}
 
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)

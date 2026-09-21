@@ -44,12 +44,14 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ingest"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/integrity"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/link"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/probe"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/reconcile"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/rule"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/service"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/store"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/unifi"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/update"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/web"
 )
@@ -273,6 +275,12 @@ func run(alone bool) int {
 	if cmd == "probe" {
 		return probeCommand(service.DefaultDataDir(), flagArgs)
 	}
+	// Same reason: --host belongs to this verb and to nothing else, and the
+	// shared set below is ExitOnError, so it would refuse the command rather
+	// than run it.
+	if cmd == "fingerprint" {
+		return fingerprintCmd(flagArgs)
+	}
 
 	fs := flag.NewFlagSet("notifymatrix", flag.ExitOnError)
 	dataDir := fs.String("data-dir", "", "where config, the incident store and the lock live")
@@ -392,6 +400,7 @@ Either rename it to notifymatrix.exe, or read every command below as:
   notifymatrix setup        what is left to do, step by step (--all for everything)
   notifymatrix selfcheck    report what this machine can do
   notifymatrix probe        ask a console what it exposes (local networks only)
+  notifymatrix fingerprint  show a console's certificate fingerprint, to pin it
   notifymatrix version
 
 Flags:
@@ -928,12 +937,13 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 		})
 
 		ui, err := web.New(web.Deps{
-			Store:       db,
-			Audit:       auditLog,
-			ProbeStatus: prb.status,
-			ProbeStart:  prb.start,
-			ProbeStop:   prb.stop,
-			ProbeRead:   prb.read,
+			Store:            db,
+			Audit:            auditLog,
+			FetchFingerprint: fetchFingerprint,
+			ProbeStatus:      prb.status,
+			ProbeStart:       prb.start,
+			ProbeStop:        prb.stop,
+			ProbeRead:        prb.read,
 			Config: func() *config.Config {
 				cfgMu.RLock()
 				defer cfgMu.RUnlock()
@@ -1906,6 +1916,30 @@ func sourceHealthFrom(st ingest.Status) web.SourceHealth {
 		}
 	}
 	return sh
+}
+
+// fetchFingerprint reads the certificate a console is presenting.
+//
+// LOCAL ADDRESSES ONLY, enforced with the probe's own check. This is the
+// daemon dialling whatever an operator typed into a form; pointed at somebody
+// else's address it is a connection made from this machine to a host nobody
+// here chose, and the probe refuses that for exactly the same reason.
+//
+// It SHOWS a fingerprint and never stores one. Trust-on-first-use is an
+// operator action: what comes back is displayed for a human to accept, and
+// accepting it is an ordinary save of the console.
+func fetchFingerprint(ctx context.Context, host string) (string, error) {
+	if err := probe.CheckHost(ctx, host); err != nil {
+		if errors.Is(err, probe.ErrNotLocal) {
+			// Said in this verb's own words. The probe's phrasing names the
+			// probe, and somebody who pressed "read the certificate" did not
+			// run a probe.
+			return "", fmt.Errorf("%s is not on a local network, and this "+
+				"reads certificates on local networks only", host)
+		}
+		return "", err
+	}
+	return unifi.FetchCertFingerprint(ctx, host)
 }
 
 // firstLine trims a source's error down to something a table cell can hold.
