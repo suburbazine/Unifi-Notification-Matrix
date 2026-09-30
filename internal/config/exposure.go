@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
 )
 
 // internalSuffixes are hostname endings that are never on the public internet.
@@ -282,6 +284,11 @@ func (c Config) exposureWarnings() []string {
 			". Acknowledgement links will time out unless a tunnel or reverse "+
 			"proxy on this machine forwards to it. For a phone on the LAN, set "+
 			"web.listen to 0.0.0.0 and use this machine's LAN address")
+	}
+	// A link with no port goes to 80, and nothing of ours answers there. The
+	// sentence is the Setup step's own, so the two cannot disagree.
+	if msg := setup.AckPortProblem(c.Web.AckBaseURL, c.Web.Listen, c.Web.AckListen); msg != "" {
+		w = append(w, "web.ack_base_url "+msg)
 	}
 	if scoped && listensOnLoopbackOnly(c.Web.AckListen) {
 		_, port, _ := net.SplitHostPort(strings.TrimSpace(c.Web.AckListen))

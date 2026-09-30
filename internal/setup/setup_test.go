@@ -307,10 +307,12 @@ func TestAScopedPublicAckURLIsDone(t *testing.T) {
 	}
 }
 
-// Scoped but plain http still leaks the token in transit.
+// Scoped but plain http still leaks the token in transit. With its port: an
+// http address with none goes to 80, which is a broken link before it is a
+// leaky one (see ackport_test.go).
 func TestAScopedButUnencryptedPublicAckURLIsFlagged(t *testing.T) {
 	in := workable()
-	in.AckBaseURL = "http://alarms.example.com"
+	in.AckBaseURL = "http://alarms.example.com:8322"
 	in.PublicAckURL = true
 	in.AckScoped = true
 

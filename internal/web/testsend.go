@@ -75,6 +75,9 @@ func (s *Server) handleTestChannel(w http.ResponseWriter, r *http.Request) {
 	if res.IncidentID != "" {
 		body["incident_id"] = res.IncidentID
 		body["ack_link"] = res.AckLink
+		if res.AckWarning != "" {
+			body["ack_warning"] = res.AckWarning
+		}
 		if res.AckLink {
 			body["detail"] = "Sent a test alert. Press Acknowledge on it, on the " +
 				"device, to prove acknowledgement works from " + name +
@@ -106,4 +109,8 @@ type ChannelTest struct {
 	// it could not when it did not.
 	AckLink   bool
 	AckReason string
+	// AckWarning is set when the alert carries a link that will not reach
+	// this program -- today, one with no port going to 80. The test is still
+	// sent: pressing the button on the phone is what proves it either way.
+	AckWarning string
 }

@@ -319,3 +319,19 @@ func TestStartUpClosesInterruptedTestsAndNothingElse(t *testing.T) {
 		t.Error("start-up closed a real incident from the same source")
 	}
 }
+
+// The field configuration: the test tells the page, with the alert, that the
+// link it carries goes to port 80 and what to set instead.
+func TestTheChannelTestWarnsAboutALinkWithNoPort(t *testing.T) {
+	c := &config.Config{}
+	c.Web.Listen = "127.0.0.1:8322"
+	c.Web.AckListen = "0.0.0.0:50001"
+	c.Web.AckBaseURL = "http://fpcbr.xtremission.com"
+	if w := testAckWarning(c); !strings.Contains(w, "http://fpcbr.xtremission.com:50001") {
+		t.Errorf("warning = %q; want it to give the address with its port", w)
+	}
+	c.Web.AckBaseURL = "http://fpcbr.xtremission.com:50001"
+	if w := testAckWarning(c); w != "" {
+		t.Errorf("warned %q about an address that has its port", w)
+	}
+}

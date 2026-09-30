@@ -10,6 +10,7 @@ import (
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/web"
 )
 
@@ -157,4 +158,11 @@ func closeLeftoverChannelTests(ctx context.Context, st incident.Store, now time.
 		}
 	}
 	return nil
+}
+
+// testAckWarning is what the settings page is told, with the test, about a
+// link the configuration already shows will not reach this program. Setup's
+// own sentence, so the page and the checklist say the same thing.
+func testAckWarning(c *config.Config) string {
+	return setup.AckPortProblem(c.Web.AckBaseURL, c.Web.Listen, c.Web.AckListen)
 }

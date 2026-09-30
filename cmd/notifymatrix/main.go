@@ -1514,6 +1514,12 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 				if live.CarriesAck(name) {
 					res, err := testWithAck(ctx, db, live, name, time.Now())
 					if err == nil && res.AckLink {
+						// Said now, with the test, rather than after fifteen
+						// minutes of a button that times out on the phone.
+						cfgMu.RLock()
+						c := current
+						cfgMu.RUnlock()
+						res.AckWarning = testAckWarning(c)
 						id := res.IncidentID
 						time.AfterFunc(testAckWindow, func() {
 							if err := expireChannelTest(context.Background(), db, id, time.Now()); err != nil &&

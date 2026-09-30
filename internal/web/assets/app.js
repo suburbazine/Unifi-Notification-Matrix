@@ -3264,6 +3264,13 @@ function testRow(card, name, opts) {
         }
         out.className = "muted small";
         out.textContent = r.data.detail;
+        // A link the server already knows will not reach it -- no port, so
+        // port 80 -- is said now. Still watched: the phone is the proof.
+        if (r.data.ack_warning) {
+          out.className = "err small";
+          out.textContent = r.data.detail + " Its link will probably fail: " +
+            r.data.ack_warning + ".";
+        }
         watchTestAck(r.data.incident_id, name, out);
         return;
       }

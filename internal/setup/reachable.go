@@ -169,3 +169,60 @@ func portOfURL(raw string) string {
 	}
 	return port
 }
+
+// AckPortProblem says so when the acknowledgement address names no port and
+// the port it therefore means is not one this program answers on. "" when
+// there is nothing to say.
+//
+// Found on a real site: web.ack_base_url was http://<public name>, the
+// ack-only listener was on 50001, and every Acknowledge button in every alert
+// went to port 80, where nothing was listening. Each half looked right on its
+// own, the checklist called the step all but done, and the only symptom was a
+// phone saying it could not connect -- discovered by the channel test that
+// exists to find exactly this.
+//
+// Only plain http with NO port. An https address with no port is 443, which is
+// a TLS proxy in front -- the recommended shape, and never a port of ours. An
+// explicit port that differs from ours may be a deliberate NAT remap, and was
+// typed on purpose. A missing port was almost certainly not a decision.
+func AckPortProblem(ackURL, listen, ackListen string) string {
+	raw := strings.TrimSpace(ackURL)
+	lower := strings.ToLower(raw)
+	if !strings.HasPrefix(lower, "http://") || portOfURL(raw) != "" {
+		return ""
+	}
+	// The listener that answers acknowledgements: the scoped one when there
+	// is one, the main one otherwise. A loopback-only one is reported by the
+	// step's own earlier case, and a port that cannot be read says nothing.
+	serving := strings.TrimSpace(ackListen)
+	if serving == "" {
+		serving = strings.TrimSpace(listen)
+	}
+	port := ListenPort(serving)
+	if port == "" || port == "80" || ListenIsLoopbackOnly(serving) {
+		return ""
+	}
+	// A main listener on 80 that the LAN can reach answers the link too.
+	if ListenPort(listen) == "80" && !ListenIsLoopbackOnly(listen) {
+		return ""
+	}
+	fixed := withPort(raw, port)
+	return raw + " names no port, so every acknowledgement link goes to port 80 -- " +
+		"but acknowledgements are answered on port " + port + ". Set " +
+		"web.ack_base_url to " + fixed + " (and forward that port, if the address " +
+		"is public), unless something already forwards port 80 to " + port
+}
+
+// withPort puts a port on an address that has none, keeping any path.
+func withPort(raw, port string) string {
+	scheme, rest := "", raw
+	if i := strings.Index(raw, "://"); i >= 0 {
+		scheme, rest = raw[:i+3], raw[i+3:]
+	}
+	host, path := rest, ""
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		host, path = rest[:i], rest[i:]
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	return scheme + net.JoinHostPort(host, port) + path
+}

@@ -42,6 +42,26 @@ func TestATestAlertHandsThePageTheIncidentToWatch(t *testing.T) {
 	}
 }
 
+// A link the server knows will not reach it is said with the test, not
+// fifteen minutes later as a timeout.
+func TestATestAlertPassesOnTheLinkWarning(t *testing.T) {
+	h := newHarness(t)
+	h.testChannelResult = func(context.Context, string) (ChannelTest, error) {
+		return ChannelTest{IncidentID: "t3", AckLink: true, AckWarning: "names no port"}, nil
+	}
+	h.setPassword(testPassword)
+	h.signIn()
+
+	_, raw := h.do("POST", "/api/channels/ntfy/test", nil)
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["ack_warning"] != "names no port" {
+		t.Errorf("reply %s: the warning about the link did not reach the page", raw)
+	}
+}
+
 // And with no button on it, the page is told why, in the server's words.
 func TestATestAlertWithNoButtonSaysWhy(t *testing.T) {
 	h := newHarness(t)
@@ -90,6 +110,11 @@ func TestTheSettingsPageWaitsForTheTestToBeAcknowledged(t *testing.T) {
 	if !strings.Contains(row, "r.data.ack_link") || !strings.Contains(row, "r.data.ack_reason") {
 		t.Error("testRow() does not tell the operator when the alert carried no " +
 			"acknowledgement at all, and would wait for ever for a button that is not there.")
+	}
+
+	if !regexp.MustCompile(`if \(r\.data\.ack_warning\)`).MatchString(row) {
+		t.Error("testRow() drops the server's warning about the link, and the operator " +
+			"finds out from a phone that cannot connect")
 	}
 
 	watch := fnBody(src, "function watchTestAck(")

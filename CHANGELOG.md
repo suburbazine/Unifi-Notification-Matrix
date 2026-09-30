@@ -13,9 +13,22 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Fixed
+
+- **An acknowledgement address with no port is now called out, with the
+  fix.** With `web.ack_base_url` set to `http://` plus a name and no port,
+  every Acknowledge button and link goes to port 80. If acknowledgements are
+  answered somewhere else, such as an ack-only listener on port 50001, not
+  one of them works. Nothing said so: each setting looked right on its own,
+  and Setup marked the step as close to done. Found on a real site by the new
+  channel test, as a phone that could not connect.
+
+  Setup now marks the step as to-do and gives the address to set, port
+  included. The same sentence is printed at every start, and pressing *Send
+  a test* on a channel shows it at once, instead of fifteen minutes of a
+  button that times out. `https://` addresses with no port are left alone,
+  because that is port 443 with a TLS proxy in front, which is the
+  recommended setup. So is an address with a port typed on purpose.
 
 ## [0.5.4] — 2026-09-30
 

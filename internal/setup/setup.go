@@ -503,6 +503,13 @@ func ackStep(in Input) Step {
 			"port. It is where this machine listens, so it never takes the public " +
 			"hostname -- that stays in web.ack_base_url"
 
+	// The link names no port and so goes to 80, where nothing answers. It
+	// fell through to the plain-http note below, and the step read as all but
+	// done at a site where no acknowledgement button had ever worked.
+	case AckPortProblem(in.AckBaseURL, in.Listen, in.AckListen) != "":
+		s.Status = Todo
+		s.State = AckPortProblem(in.AckBaseURL, in.Listen, in.AckListen)
+
 	case in.PublicAckURL && strings.HasPrefix(strings.ToLower(in.AckBaseURL), "http://"):
 		s.Status = Optional
 		s.State = in.AckBaseURL + " is public over plain http -- the acknowledgement " +

@@ -413,3 +413,21 @@ func TestTheUnscopedWarningSaysWhatToType(t *testing.T) {
 		t.Errorf("suggested the main listener's own port as the ack port:\n%v", c.Warnings())
 	}
 }
+
+// An http acknowledgement address with no port goes to 80. At the site where
+// that was true, the ack-only listener was on 50001 and no button had ever
+// worked -- and nothing said so at start. The sentence is Setup's own.
+func TestAnAckAddressWithNoPortIsWarnedAboutAtStart(t *testing.T) {
+	c := Default()
+	c.Web.Listen = "127.0.0.1:8322"
+	c.Web.AckListen = "0.0.0.0:50001"
+	c.Web.AckBaseURL = "http://fpcbr.xtremission.com"
+
+	if !warnsAbout(c, "http://fpcbr.xtremission.com:50001") {
+		t.Fatalf("no warning, with the fix, for a link that goes to port 80:\n%v", c.Warnings())
+	}
+	c.Web.AckBaseURL = "http://fpcbr.xtremission.com:50001"
+	if warnsAbout(c, "names no port") {
+		t.Errorf("warned about an address that has its port:\n%v", c.Warnings())
+	}
+}
