@@ -35,6 +35,20 @@ view against the release before them.
   interrupted. Voice and webhooks test the way they did before: nobody
   acknowledges from either.
 
+### Fixed
+
+- **A fresh install opened straight onto Settings now offers the first
+  password.** It usually showed a plain *Password* box instead, with nowhere to
+  put the setup token. Anything typed there was refused with "no password is
+  set yet". The page drew the card before it knew setup was still needed, and
+  did not redraw it once it did. Going to another tab and back got past it.
+- **A listener bound to this machine's LAN address is no longer called
+  unreachable.** With `web.listen` set to an address like
+  `192.168.20.115:8322`, every start warned that nothing was listening where a
+  phone could reach it, and advised `0.0.0.0`. A phone on that LAN reaches it
+  perfectly well. The warning now fires only when the listeners are on
+  loopback, which is the case it was written for.
+
 ## [0.5.3] — 2026-09-30
 
 **Take this one if you run Sentry.** Stopping Sentry now hands the doors back

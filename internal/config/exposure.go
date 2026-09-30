@@ -269,8 +269,13 @@ func (c Config) exposureWarnings() []string {
 	// A warning and not a refusal, because there is a legitimate shape here: a
 	// tunnel or reverse proxy running ON this machine and connecting to
 	// loopback. Only the operator knows whether one exists.
+	//
+	// "Could reach" is anything but loopback -- NOT "every interface". A
+	// listener pinned to this machine's LAN address answers a phone on that
+	// LAN perfectly well, and the every-interface test told an operator with
+	// exactly that working setup that every link was dead.
 	if strings.TrimSpace(c.Web.AckBaseURL) != "" && !ackURLIsThisMachine(c.Web.AckBaseURL) &&
-		!forwardable && (!scoped || listensOnLoopbackOnly(c.Web.AckListen)) {
+		listensOnLoopbackOnly(c.Web.Listen) && (!scoped || listensOnLoopbackOnly(c.Web.AckListen)) {
 		w = append(w, "web.ack_base_url points at "+ackHost(c.Web.AckBaseURL)+
 			" but nothing is listening anywhere a phone could reach: web.listen "+
 			"is bound to this machine only"+ackListenNote(c.Web.AckListen)+

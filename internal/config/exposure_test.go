@@ -281,6 +281,28 @@ func TestAReachableAckAddressIsNotWarnedAbout(t *testing.T) {
 	}
 }
 
+// A listener pinned to this machine's LAN address is reachable too. It used
+// to be told "web.listen is bound to this machine only" -- the test was "every
+// interface", not "anything but loopback" -- and to set 0.0.0.0, which would
+// only have published the interface on every other network the machine is on.
+func TestAListenerOnTheLANAddressIsNotWarnedAbout(t *testing.T) {
+	c := Default()
+	c.Web.Listen = "192.168.20.115:8322"
+	c.Web.AckBaseURL = "http://192.168.20.115:8322"
+
+	if warnsAbout(c, "nothing is listening") {
+		t.Fatalf("a listener on the LAN address was reported unreachable:\n%v", c.Warnings())
+	}
+	// And the same for a scoped ack listener on the LAN address, behind a
+	// loopback-only main listener.
+	c.Web.Listen = "127.0.0.1:8322"
+	c.Web.AckListen = "192.168.20.115:8323"
+	c.Web.AckBaseURL = "http://192.168.20.115:8323"
+	if warnsAbout(c, "nothing is listening") {
+		t.Fatalf("an ack listener on the LAN address was reported unreachable:\n%v", c.Warnings())
+	}
+}
+
 // A tunnel or reverse proxy on this machine connecting to loopback is
 // legitimate, which is why this is a warning and not a refusal -- but the
 // scoped ack listener bound to every interface is ALSO a working shape and

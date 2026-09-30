@@ -1348,7 +1348,7 @@ function refreshStatus(done) {
       return;
     }
     var d = res.data;
-    var wasAuthed = state.authed;
+    var wasAuthed = state.authed, wasSetup = state.setupRequired;
     state.authed = !!d.authenticated;
     state.setupRequired = !!d.setup_required;
     state.minPassword = d.min_password_length || 12;
@@ -1397,7 +1397,13 @@ function refreshStatus(done) {
     state.selfWatch = d.self_watch || {};
     renderSelfWatchBanner(state.selfWatch);
     renderHealth(d.health);
-    if (wasAuthed !== state.authed) refreshTab();
+    // Redrawn when either fact changes, because the tab may already have been
+    // drawn without it. refreshAll fetches this and the tab side by side, and
+    // on a fresh install loaded straight onto Settings the settings request's
+    // 401 usually lands first -- so the sign-in card was drawn while
+    // setupRequired was still its initial false, and a first-run operator
+    // got "Password" with no place to put the setup token.
+    if (wasAuthed !== state.authed || wasSetup !== state.setupRequired) refreshTab();
     if (done) done();
   });
 }
