@@ -13,6 +13,12 @@ view against the release before them.
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.5.4] — 2026-09-30
+
 ### Changed
 
 - **Testing ntfy, Pushover or email now tests the Acknowledge button too.**
@@ -44,7 +50,7 @@ view against the release before them.
   did not redraw it once it did. Going to another tab and back got past it.
 - **A listener bound to this machine's LAN address is no longer called
   unreachable.** With `web.listen` set to an address like
-  `192.168.20.115:8322`, every start warned that nothing was listening where a
+  `192.168.1.50:8322`, every start warned that nothing was listening where a
   phone could reach it, and advised `0.0.0.0`. A phone on that LAN reaches it
   perfectly well. The warning now fires only when the listeners are on
   loopback, which is the case it was written for.
@@ -1363,6 +1369,7 @@ They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
 [Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...HEAD
+[0.5.4]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.0...v0.5.1
