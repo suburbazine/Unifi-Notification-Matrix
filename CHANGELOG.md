@@ -36,6 +36,12 @@ view against the release before them.
   product is going longer between contacts than its window**, before its
   silence alarm fires for a product that is fine.
 
+  Shortening a window never pages anybody about a healthy product: it learns
+  its new rate at its next contact, and until then it is held to the window it
+  was last told. After this product restarts, a product not yet heard from is
+  given at least six minutes — the slowest rate it might still be on, and a
+  minute — before it can be reported silent.
+
 ## [0.5.1] — 2026-09-30
 
 **Take this one if you pair other products with this.** When a paired product

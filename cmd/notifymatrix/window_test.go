@@ -126,3 +126,52 @@ func TestAPeerNotKeepingToItsWindowIsFlagged(t *testing.T) {
 			"(gap %ds)", v.Peers[0].ObservedGapSeconds)
 	}
 }
+
+// SHORTENING A WINDOW MUST NOT PAGE ANYBODY ABOUT A HEALTHY PEER.
+//
+// The peer learns its rate from the reply to its next request, up to one old
+// interval away. Judged by the new window in the meantime, it is silent
+// because an operator changed a number. Found by the Rewards session in the
+// live test.
+func TestShorteningAWindowWaitsForThePeerToHearOfIt(t *testing.T) {
+	l, r := newLiveFixture(liveT0)
+	window := 16 * time.Minute
+	l.windowFor = func(string) time.Duration { return window }
+	ctx := context.Background()
+
+	l.contact("sentry", liveT0) // told: 16m, so heartbeat every 5m
+	window = time.Minute        // the operator shortens it
+
+	// Three minutes on, a peer on its old five-minute rate has not been told.
+	l.check(ctx, []string{"sentry"}, liveT0.Add(3*time.Minute))
+	if len(r.raised) != 0 {
+		t.Fatal("a healthy peer was reported silent three minutes after its window " +
+			"was shortened, before it could have heard of the change")
+	}
+
+	// It makes contact and is told the new rate; now it is held to it.
+	l.contact("sentry", liveT0.Add(5*time.Minute))
+	l.check(ctx, []string{"sentry"}, liveT0.Add(6*time.Minute+30*time.Second))
+	if len(r.raised) != 1 {
+		t.Errorf("after making contact under the new window it went 90 s silent and "+
+			"was not reported against its 1m window (raised %v)", r.raised)
+	}
+}
+
+// After a restart a peer may be on any rate up to five minutes, so a short
+// window must not fire before it could have made contact.
+func TestAfterARestartAShortWindowWaitsForTheSlowestBeat(t *testing.T) {
+	l, r := newLiveFixture(liveT0)
+	l.windowFor = func(string) time.Duration { return time.Minute }
+	ctx := context.Background()
+
+	l.check(ctx, []string{"sentry"}, liveT0.Add(4*time.Minute))
+	if len(r.raised) != 0 {
+		t.Fatal("four minutes after a restart, a 1m-window peer never heard from was " +
+			"reported silent; one still on a five-minute beat is healthy")
+	}
+	l.check(ctx, []string{"sentry"}, liveT0.Add(6*time.Minute+30*time.Second))
+	if len(r.raised) != 1 {
+		t.Error("a peer not heard from in over six minutes after a restart was never reported")
+	}
+}

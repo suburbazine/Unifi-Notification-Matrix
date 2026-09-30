@@ -8,6 +8,7 @@ import (
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/link"
 )
 
 // A paired peer's deadman.
@@ -48,7 +49,17 @@ type peerLiveness struct {
 	// heartbeating every five minutes against a two-minute window is
 	// reported silent between every beat.
 	gap map[string]time.Duration
+
+	// told is the window that was in force at each peer's last contact --
+	// which is the window its last reply told it to keep to. See check.
+	told map[string]time.Duration
 }
+
+// slowestBeat is the slowest heartbeat any peer may be on: the rate a peer
+// keeps when nobody has told it otherwise, and the ceiling on what it can be
+// told. No peer can be required to make contact faster than this before it
+// has had the chance to hear it should.
+const slowestBeat = 5 * time.Minute
 
 // observedGap is the longest recent wait between two contacts from a peer,
 // and whether there has been enough contact to say.
@@ -71,7 +82,7 @@ func newPeerLiveness(started time.Time, silentAfter time.Duration,
 	return &peerLiveness{
 		silentAfter: silentAfter, windowFor: windowFor, raise: raise, resolve: resolve,
 		started: started, last: map[string]time.Time{}, raised: map[string]bool{},
-		gap: map[string]time.Duration{},
+		gap: map[string]time.Duration{}, told: map[string]time.Duration{},
 	}
 }
 
@@ -79,7 +90,9 @@ func newPeerLiveness(started time.Time, silentAfter time.Duration,
 // is open. Closed HERE rather than at the next check, because "it is back" is
 // news worth delivering the moment it is true.
 func (l *peerLiveness) contact(slug string, now time.Time) {
+	window := l.window(slug) // outside the lock: it reads the configuration
 	l.mu.Lock()
+	l.told[slug] = window
 	if prev, ok := l.last[slug]; ok && now.After(prev) {
 		// Decays: a new gap replaces the recorded one unless it is longer,
 		// and a recorded one is halved on each shorter gap, so a peer that
@@ -129,16 +142,32 @@ func (l *peerLiveness) check(ctx context.Context, paired []string, now time.Time
 			since = l.started
 		}
 		quiet := now.Sub(since)
-		window := l.silentAfter
-		if l.windowFor != nil {
-			if w := l.windowFor(slug); w > 0 {
-				window = w
+		window := l.window(slug)
+
+		// A PEER CANNOT BE HELD TO A WINDOW IT HAS NOT BEEN TOLD ABOUT.
+		//
+		// It learns its heartbeat rate from the replies to its own requests,
+		// so a window shortened here reaches it at its next contact -- up to
+		// one old interval away. Judged by the new window in the meantime, a
+		// perfectly healthy peer is reported silent because the operator
+		// changed a number. Found by the Rewards session in the live test,
+		// before anybody was paged for it.
+		//
+		// So: until it has made contact under the current window, it is held
+		// to the window that was in force when it last did. And one never
+		// heard from since this started may be on any rate up to the slowest,
+		// so it is given at least that, and a minute.
+		if heard {
+			if prev := l.told[slug]; prev > window {
+				window = prev
 			}
+		} else if floor := slowestBeat + time.Minute; window < floor {
+			window = floor
 		}
 		if quiet <= window {
 			continue
 		}
-		beat := (window / 3).Truncate(time.Second)
+		beat := link.Peer{SilentAfter: window}.HeartbeatEvery()
 		l.raised[slug] = true
 		why := fmt.Sprintf("Nothing has arrived from %s for %s, against a window of %s. "+
 			"It is asked to heartbeat every %s, so it has missed at least three: "+
@@ -199,3 +228,13 @@ func peerEntity(slug string) event.Entity {
 // peerSilentSeverity matches a native source going silent: the same fact,
 // the same weight.
 const peerSilentSeverity = incident.SeverityHigh
+
+// window is a peer's configured window, or the default.
+func (l *peerLiveness) window(slug string) time.Duration {
+	if l.windowFor != nil {
+		if w := l.windowFor(slug); w > 0 {
+			return w
+		}
+	}
+	return l.silentAfter
+}
