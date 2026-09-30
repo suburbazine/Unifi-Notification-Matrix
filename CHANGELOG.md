@@ -13,6 +13,17 @@ view against the release before them.
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.5.1] — 2026-09-30
+
+**Take this one if you pair other products with this.** When a paired product
+keeps using a credential it no longer holds — as a Sentry watch did after a
+re-pair — the Peer link page now says which product and what to do, instead
+of reporting a stranger.
+
 ### Changed
 
 - **A product still sending with a credential this installation retired is
@@ -1243,6 +1254,7 @@ They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
 [Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...HEAD
+[0.5.1]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.4.0...v0.4.1
