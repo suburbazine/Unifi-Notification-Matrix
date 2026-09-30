@@ -450,11 +450,19 @@ type LinkCondition struct {
 	// DemotesClaim marks a condition meaning "alive, but cannot serve what I
 	// claimed" -- so raising it hands the capability back to our own source.
 	DemotesClaim bool `json:"demotes_claim,omitempty"`
+
+	// PerOccurrence is the peer's declaration; see link.ConditionSpec.
+	PerOccurrence *bool `json:"per_occurrence,omitempty"`
 }
 
 // LinkOverride is the operator's decision about one condition.
 type LinkOverride struct {
 	Momentary *bool `json:"momentary,omitempty"`
+
+	// PerOccurrence false makes arrivals after an acknowledgement fold into
+	// the reviewed incident instead of opening a new one; true does the
+	// reverse. Unset follows the peer's declaration.
+	PerOccurrence *bool `json:"per_occurrence,omitempty"`
 }
 
 // SecretsMeta records how this file's secrets were protected.

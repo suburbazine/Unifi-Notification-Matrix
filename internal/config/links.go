@@ -26,11 +26,12 @@ func BuildLinks(c *Config) ([]link.Peer, []link.Credential) {
 			conds = append(conds, link.ConditionSpec{
 				Name: c.Name, Meaning: c.Meaning, Severity: c.Severity,
 				Momentary: c.Momentary, DemotesClaim: c.DemotesClaim,
+				PerOccurrence: c.PerOccurrence,
 			})
 		}
 		over := map[string]link.Override{}
 		for name, o := range l.Overrides {
-			over[name] = link.Override{Momentary: o.Momentary}
+			over[name] = link.Override{Momentary: o.Momentary, PerOccurrence: o.PerOccurrence}
 		}
 		peers = append(peers, link.Peer{
 			Slug:   l.Slug,

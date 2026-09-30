@@ -42,6 +42,21 @@ type ConditionSpec struct {
 	// cannot know either. So the peer proposes and the operator may override.
 	Momentary bool `json:"momentary"`
 
+	// PerOccurrence says whether, for a momentary condition, EVERY arrival is
+	// a new fact to keep -- and one arriving after an acknowledgement is news
+	// that alerts again -- or whether the acknowledgement covers what follows.
+	//
+	// Omitted means yes: a momentary condition is a thing that happened, and
+	// the second one is usually worth knowing about. A void at a till is. A
+	// door refusing somebody during a watch, once a person has already looked
+	// at the cascade, may not be -- the operator decided exactly that for
+	// Sentry's access denials -- and this is how a peer says so per condition.
+	// Separate from Momentary because they are two decisions: whether a
+	// quickly-cleared arrival is delivered at all, and whether one after a
+	// review starts a new incident. Folding them into one flag meant nobody
+	// could have the first without the second.
+	PerOccurrence *bool `json:"per_occurrence,omitempty"`
+
 	// DemotesClaim marks a condition that means "I am alive but cannot serve
 	// the capability I claimed".
 	//
@@ -77,7 +92,8 @@ type Manifest struct {
 // who decided otherwise; the delta shows "peer proposes momentary, your
 // override: state" and the override stands until they change it deliberately.
 type Override struct {
-	Momentary *bool `json:"momentary,omitempty"`
+	Momentary     *bool `json:"momentary,omitempty"`
+	PerOccurrence *bool `json:"per_occurrence,omitempty"`
 }
 
 // Peer is a paired product and everything approved for it.
@@ -230,6 +246,30 @@ func (p Peer) IsMomentary(condition string) bool {
 		return *o.Momentary
 	}
 	return spec.Momentary
+}
+
+// IsPerOccurrence reports whether every arrival of this condition is kept, and
+// one after an acknowledgement opens a fresh incident.
+//
+// Only ever true for a condition that is momentary in effect: state is state,
+// and "still failing", reported again, is never a new fact. After that, the
+// operator's override where they made one, then the peer's declaration, then
+// yes.
+func (p Peer) IsPerOccurrence(condition string) bool {
+	if !p.IsMomentary(condition) {
+		return false
+	}
+	spec, ok := p.Spec(condition)
+	if !ok {
+		return false
+	}
+	if o, has := p.Overrides[condition]; has && o.PerOccurrence != nil {
+		return *o.PerOccurrence
+	}
+	if spec.PerOccurrence != nil {
+		return *spec.PerOccurrence
+	}
+	return true
 }
 
 // DemotesClaim reports whether this condition, while raised, means the peer

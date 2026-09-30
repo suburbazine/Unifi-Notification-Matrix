@@ -344,6 +344,7 @@ func (d linkDeps) storePeer(p link.Peer, key []byte) error {
 		conds = append(conds, config.LinkCondition{
 			Name: c.Name, Meaning: c.Meaning, Severity: c.Severity,
 			Momentary: c.Momentary, DemotesClaim: c.DemotesClaim,
+			PerOccurrence: c.PerOccurrence,
 		})
 	}
 	entry := config.Link{
@@ -638,6 +639,7 @@ func manifestConditions(in []config.LinkCondition) []link.ConditionSpec {
 		out = append(out, link.ConditionSpec{
 			Name: c.Name, Meaning: c.Meaning, Severity: c.Severity,
 			Momentary: c.Momentary, DemotesClaim: c.DemotesClaim,
+			PerOccurrence: c.PerOccurrence,
 		})
 	}
 	return out
@@ -701,7 +703,7 @@ func occurrenceFor(peers []link.Peer, ev event.Event) bool {
 		}
 		for _, spec := range p.Manifest.Conditions {
 			if clean(spec.Name) == want {
-				return p.IsMomentary(spec.Name)
+				return p.IsPerOccurrence(spec.Name)
 			}
 		}
 	}
