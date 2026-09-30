@@ -13,6 +13,12 @@ view against the release before them.
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.5.5] — 2026-09-30
+
 ### Fixed
 
 - **An acknowledgement address with no port is now called out, with the
@@ -1382,6 +1388,7 @@ They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
 [Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...HEAD
+[0.5.5]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.1...v0.5.2
