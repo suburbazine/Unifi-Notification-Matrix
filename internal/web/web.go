@@ -45,6 +45,7 @@ import (
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/firewall"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/reconcile"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/setup"
@@ -138,6 +139,11 @@ type Deps struct {
 	// TestChannel sends one channel's test and reports what happened.
 	// Optional: a build that does not supply it simply has no test button.
 	TestChannel func(ctx context.Context, name string) (ChannelTest, error)
+
+	// Firewall reports the Windows Firewall rules for the listeners meant to
+	// be reached from elsewhere, or with apply, creates or corrects them
+	// first. Optional: without it the Web settings offer nothing.
+	Firewall func(ctx context.Context, apply bool) (firewall.Report, error)
 
 	// HookTestMode arms a hook's test mode for minutes, or disarms it when
 	// minutes is zero or less. It returns when the mode lapses.
@@ -507,6 +513,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rules/repoint", s.requireAuth(http.HandlerFunc(s.handleRepointRule)))
 	mux.Handle("POST /api/password", s.requireAuth(http.HandlerFunc(s.handleChangePassword)))
 	mux.Handle("POST /api/channels/{name}/test", s.requireAuth(http.HandlerFunc(s.handleTestChannel)))
+	// Opens ports, so it is behind a session like the settings beside it.
+	mux.Handle("GET /api/firewall", s.requireAuth(http.HandlerFunc(s.handleFirewall)))
+	mux.Handle("POST /api/firewall", s.requireAuth(http.HandlerFunc(s.handleFirewallApply)))
 	// Gated: arming makes this installation deliberately deaf to one hook, and
 	// firing costs real notifications and possibly a real phone call.
 	mux.Handle("POST /api/hooks/{name}/test-mode", s.requireAuth(http.HandlerFunc(s.handleHookTestMode)))

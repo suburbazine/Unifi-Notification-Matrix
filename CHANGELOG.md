@@ -13,9 +13,38 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Added
+
+- **The Web settings offer the Windows Firewall rule for the ports they
+  choose.** On a real site the acknowledgement address was right and the
+  router forwarded the port, and every Acknowledge button still timed out:
+  Windows Firewall dropped the connection before this program saw it. It took
+  a rule typed by hand into Defender.
+
+  Under **Settings → Web**, a *Windows Firewall* card now says, for the
+  ack-only listener and the peer link listener, whether a rule lets them in:
+  *allowed*, *blocked*, *out of date* (wrong port, switched off, or for
+  another copy of the program), or *not needed* (not set, `auto` until its
+  first start, or on this machine only). **Allow through Windows Firewall**
+  creates or corrects the rules, and the Activity log records which ports it
+  opened. Beside it is the exact PowerShell the button runs, to paste into an
+  administrator terminal instead. That is the way when this program is
+  running from an ordinary terminal without the rights, or when you would
+  rather do it yourself.
+
+  It works from the saved addresses, so a port changed and saved on this page
+  gets its rule before the restart that opens it. It never opens *Listen on*,
+  which is this page and its sign-in. Each rule allows one TCP port for this
+  program only, and belongs to the `NotifyMatrix` group so it is easy to
+  find. `notifymatrix uninstall` removes them. The router still needs its own
+  forward for anything reached from outside the building.
+
+### Changed
+
+- **The Ack-only listener's help now says the link needs the same port.**
+  `http://your.name:50001` goes with `0.0.0.0:50001`, unless the router
+  deliberately forwards a different outside port to it. It used to say only
+  "never your public hostname", which read as if the two should differ.
 
 ## [0.5.5] — 2026-09-30
 

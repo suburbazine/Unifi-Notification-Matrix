@@ -22,6 +22,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/audit"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/firewall"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/reconcile"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/secret"
@@ -204,6 +205,9 @@ type harness struct {
 	// for a test that sent a real alert the page must then watch.
 	testChannelResult func(context.Context, string) (ChannelTest, error)
 
+	// firewall stands in for the Windows Firewall; nil means none.
+	firewall func(context.Context, bool) (firewall.Report, error)
+
 	// hookArmed and hookFired record what the hook test endpoints asked for.
 	hookArmed []string
 	hookFired []string
@@ -333,6 +337,15 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 			defer h.mu.Unlock()
 			h.serviceActions = append(h.serviceActions, a)
 			return h.serviceErr
+		},
+		Firewall: func(ctx context.Context, apply bool) (firewall.Report, error) {
+			h.mu.Lock()
+			fn := h.firewall
+			h.mu.Unlock()
+			if fn == nil {
+				return firewall.Report{}, nil
+			}
+			return fn(ctx, apply)
 		},
 		TestChannel: func(ctx context.Context, name string) (ChannelTest, error) {
 			h.mu.Lock()

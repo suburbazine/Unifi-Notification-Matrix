@@ -57,6 +57,7 @@ import (
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/config"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/escalate"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/event"
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/firewall"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/inbound"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/ingest"
@@ -1507,6 +1508,22 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 				links.proposals.ForgetPeer(slug)
 				return true, nil
 			},
+			// Against the SAVED addresses, so a port just changed in Web gets
+			// its rule before the restart that opens it. See internal/firewall.
+			Firewall: func(ctx context.Context, apply bool) (firewall.Report, error) {
+				cfgMu.RLock()
+				c := current
+				cfgMu.RUnlock()
+				exe, err := exePath()
+				if err != nil {
+					return firewall.Report{}, err
+				}
+				fw := firewall.System(exe)
+				if apply {
+					return fw.Apply(ctx, c.Web.AckListen, c.Web.LinkListen)
+				}
+				return fw.Status(ctx, c.Web.AckListen, c.Web.LinkListen)
+			},
 			TestChannel: func(ctx context.Context, name string) (web.ChannelTest, error) {
 				live := deliveryRef.Load()
 				// A channel a person acknowledges from is tested with a real
@@ -2055,6 +2072,17 @@ func serviceCmd(cmd, dataDir, user string, portable bool) int {
 		})
 	case "uninstall":
 		err = m.Uninstall()
+		if err == nil {
+			// Ports this program opened are closed with it. Best effort, and
+			// said when it fails: an open port left behind is exactly what
+			// the rule group exists to make findable.
+			if ferr := firewall.System("").RemoveAll(context.Background()); ferr != nil {
+				fmt.Fprintf(os.Stderr, "note: could not remove the Windows Firewall rules "+
+					"in group %q (%v) -- remove them in Windows Defender Firewall, or run "+
+					"Remove-NetFirewallRule -Group %s in an administrator PowerShell\n",
+					firewall.Group, ferr, firewall.Group)
+			}
+		}
 	case "start":
 		err = m.Start()
 	case "stop":

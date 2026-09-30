@@ -2152,7 +2152,10 @@ function renderWebSection(body, ctx) {
   wf.appendChild(labelled("Ack-only listener", ackListen,
     { text: "Where THIS MACHINE listens for acknowledgements: \"auto\", or " +
       "0.0.0.0 and a port. Never your public hostname -- that goes in Ack " +
-      "link address above. A second listener starts that serves ONLY /ack/, " +
+      "link address above, WITH THIS SAME PORT on the end (" +
+      "http://your.name:50001 for 0.0.0.0:50001), unless your router " +
+      "deliberately forwards a different outside port to this one. A second " +
+      "listener starts that serves ONLY /ack/, " +
       "and that is the port to forward from outside, if you must: a NAT " +
       "forward cannot pick a path, so forwarding the main listen address " +
       "publishes the whole status page along with it.",
@@ -2181,6 +2184,81 @@ function renderWebSection(body, ctx) {
     "Minted on first start. Not editable here: rotating it would invalidate every link already sent."));
   wc.appendChild(wr);
   body.appendChild(wc);
+
+  var fw = el("div", "");
+  body.appendChild(fw);
+  loadFirewall(fw);
+}
+
+// loadFirewall draws the Windows Firewall card under the Web settings.
+//
+// Here and not in Setup, because this is where the ports are chosen: a check
+// that runs before the operator has picked the port says nothing useful, and
+// the site that needed it had fixed the address and forwarded the port and
+// still had every Acknowledge button time out -- Windows Firewall was
+// dropping the connection. The button runs exactly the command shown, so an
+// operator who would rather not let the service touch the firewall, or whose
+// copy is not running with the rights to, can paste it instead.
+function loadFirewall(mount) {
+  api("GET", "/api/firewall").then(function (r) {
+    clear(mount);
+    var d = (r.ok && r.data) || {};
+    if (!d.supported) return; // no Windows Firewall here; say nothing
+    var card = el("div", "card");
+    card.appendChild(el("div", "card-title", "Windows Firewall"));
+    if (d.error) card.appendChild(callout(d.error, "warn", "Could not read the rules"));
+    if (!d.error && !d.firewall_on) {
+      card.appendChild(callout("Windows Firewall is switched off on every network " +
+        "profile, so it is not what stops a connection here.", "info", "Switched off"));
+    }
+    (d.rules || []).forEach(function (rule) {
+      var row = el("div", "row");
+      var tone = { allowed: "on", missing: "is-err", stale: "is-warn" }[rule.status] || "is-muted";
+      var word = { allowed: "allowed", missing: "blocked", stale: "out of date" }[rule.status] ||
+        "not needed";
+      row.appendChild(badge(word, tone));
+      row.appendChild(el("span", "", rule.purpose + " "));
+      row.appendChild(el("span", "key", rule.setting));
+      row.appendChild(el("span", "muted small", " -- " + rule.detail));
+      card.appendChild(row);
+    });
+    var msg = el("div", "msg");
+    if (d.needs_fix) {
+      var bar = el("div", "formbar");
+      var go = el("button", "act primary", "Allow through Windows Firewall");
+      go.type = "button";
+      go.addEventListener("click", function () {
+        go.disabled = true;
+        msg.className = "msg"; msg.textContent = "changing the rules...";
+        api("POST", "/api/firewall", {}).then(function (res) {
+          go.disabled = false;
+          if (!res.ok) {
+            msg.className = "msg err";
+            msg.textContent = (res.data && res.data.error) || "that did not work";
+            return;
+          }
+          loadFirewall(mount);
+        });
+      });
+      bar.appendChild(go);
+      card.appendChild(bar);
+      card.appendChild(msg);
+    }
+    if (d.command) {
+      card.appendChild(el("div", "label", d.needs_fix ?
+        "Or run this in an administrator PowerShell -- it is exactly what the button does:" :
+        "What sets these rules, for an administrator PowerShell:"));
+      card.appendChild(credRow(d.command.trim(), true));
+    }
+    card.appendChild(el("div", "note",
+      "For the SAVED addresses: save first if you have just changed a port. Only " +
+      "the ack-only and peer link listeners are ever allowed in -- never Listen " +
+      "on, which is this page and its sign-in. Each rule is for this program " +
+      "and one port, in the \"NotifyMatrix\" group, and is removed on " +
+      "uninstall. Your router still needs its own forward for anything reached " +
+      "from outside the building."));
+    mount.appendChild(card);
+  });
 }
 
 function renderPasswordSection(body, ctx) {
