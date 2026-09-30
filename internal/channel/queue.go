@@ -386,6 +386,31 @@ func (q *Queue) TestSummary() string {
 	return ""
 }
 
+// CarriesAck reports whether a person acknowledges from this channel.
+func (q *Queue) CarriesAck() bool {
+	ac, ok := q.ch.(AckCarrier)
+	return ok && ac.CarriesAck()
+}
+
+// SendTest delivers one real alert now, bypassing the queue, for the test
+// button. Everything Test does about the backoff it does too, for the same
+// reasons: a success clears the hold, and a failure is not counted against the
+// channel.
+func (q *Queue) SendTest(ctx context.Context, a Alert) error {
+	select {
+	case <-q.closed:
+		return errors.New("channel queue is closed")
+	default:
+	}
+	ctx, cancel := context.WithTimeout(ctx, q.timeout)
+	defer cancel()
+	err := q.ch.Send(ctx, a)
+	if err == nil {
+		q.recordOutcome(nil, time.Time{})
+	}
+	return err
+}
+
 // Test sends the channel's own proof-of-configuration message.
 //
 // Deliberately NOT queued. A test is a person standing in front of the screen

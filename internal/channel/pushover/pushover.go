@@ -768,3 +768,8 @@ func truncateRunes(s string, limit int, marker string) string {
 	}
 	return strings.TrimRight(string(r[:keep]), " \t\n") + marker
 }
+
+// CarriesAck: a person acknowledges from what this channel delivers, so its
+// test is a real alert with the real acknowledgement on it. See
+// channel.AckCarrier.
+func (c *Channel) CarriesAck() bool { return true }

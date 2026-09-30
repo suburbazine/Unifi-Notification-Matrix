@@ -13,9 +13,27 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Changed
+
+- **Testing ntfy, Pushover or email now tests the Acknowledge button too.**
+  The test used to send each channel's own hand-written message with nothing
+  to press on it. It proved the message arrived and nothing about
+  acknowledging it, which is how ntfy's Acknowledge button could do nothing
+  (fixed in 0.5.2) while every test passed.
+
+  The test now sends a real alert about a real test incident. It is built by
+  the same code as every other alert and carries the same button or link.
+  Press Acknowledge on it, on the device, and the settings page says
+  *Acknowledged via ntfy — acknowledgement works from ntfy*. If it was
+  acknowledged from the web page instead, or closed without being
+  acknowledged, the page says that instead. If `web.ack_base_url` is not set,
+  the alert has no button on it, and the page says so and why.
+
+  A test never escalates and never counts as alerting on the board. If nobody
+  acknowledges it, it is closed after fifteen minutes. Pressing test again
+  replaces the one still waiting, and a restart closes any test it
+  interrupted. Voice and webhooks test the way they did before: nobody
+  acknowledges from either.
 
 ## [0.5.3] — 2026-09-30
 

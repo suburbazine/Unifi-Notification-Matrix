@@ -225,6 +225,26 @@ func (d *Delivery) Test(ctx context.Context, name string) (string, error) {
 	return q.TestSummary(), nil
 }
 
+// CarriesAck reports whether a person acknowledges from this channel.
+func (d *Delivery) CarriesAck(name string) bool {
+	q, ok := d.queues[name]
+	return ok && q.CarriesAck()
+}
+
+// SendTest delivers a REAL alert about a test incident through one channel,
+// so the Acknowledge button or link on it is exactly the one real alerts
+// carry. via is the channel's name, so the acknowledgement records where it
+// came from.
+func (d *Delivery) SendTest(ctx context.Context, name string, inc *incident.Incident) error {
+	q, ok := d.queues[name]
+	if !ok {
+		return fmt.Errorf("channel %q is not enabled", name)
+	}
+	a := d.alertFor(inc, 0)
+	a.AckURL = d.AckURL(inc, name)
+	return q.SendTest(ctx, a)
+}
+
 // Names lists the live channels.
 func (d *Delivery) Names() []string {
 	out := make([]string, 0, len(d.queues))

@@ -37,7 +37,8 @@ func (s *Server) handleTestChannel(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), testSendTimeout)
 	defer cancel()
 
-	summary, err := s.deps.TestChannel(ctx, name)
+	res, err := s.deps.TestChannel(ctx, name)
+	summary := res.Summary
 	if err != nil {
 		s.record(r, audit.Entry{
 			Kind: audit.KindAlertFailed, Actor: "web",
@@ -66,10 +67,43 @@ func (s *Server) handleTestChannel(w http.ResponseWriter, r *http.Request) {
 		detail = summary
 		recorded = "test of " + name + ": " + summary
 	}
+	// A REAL ALERT WAS SENT, with the real acknowledgement on it. The page is
+	// told which incident to watch, so it can say "acknowledged via ntfy"
+	// when the button is pressed -- the part of the channel the old test
+	// never touched, and the part that was broken.
+	body := map[string]any{"ok": true, "detail": detail}
+	if res.IncidentID != "" {
+		body["incident_id"] = res.IncidentID
+		body["ack_link"] = res.AckLink
+		if res.AckLink {
+			body["detail"] = "Sent a test alert. Press Acknowledge on it, on the " +
+				"device, to prove acknowledgement works from " + name +
+				" -- this page will say when it arrives."
+		} else {
+			body["ack_reason"] = res.AckReason
+		}
+		recorded = "test alert sent to " + name + " (incident " + res.IncidentID + ")"
+	}
 	s.record(r, audit.Entry{
 		Kind: audit.KindAlertSent, Actor: "web",
 		Summary: recorded,
 		Fields:  map[string]string{"channel": name},
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": detail})
+	writeJSON(w, http.StatusOK, body)
+}
+
+// ChannelTest is what a channel's test did.
+type ChannelTest struct {
+	// Summary is what the channel says its test did, when that is not
+	// "delivered a message" -- voice checks credentials and places no call.
+	Summary string
+
+	// IncidentID is the test incident a real alert was sent about, for a
+	// channel a person acknowledges from. Empty for any other.
+	IncidentID string
+
+	// AckLink says the alert carried an acknowledgement, and AckReason why
+	// it could not when it did not.
+	AckLink   bool
+	AckReason string
 }

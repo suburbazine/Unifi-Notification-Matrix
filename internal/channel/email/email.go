@@ -276,3 +276,8 @@ func (c Channel) String() string {
 	return fmt.Sprintf("email{host:%s port:%d tls:%v from:%q recipients:%d password:<redacted>}",
 		c.cfg.Host, c.cfg.Port, c.cfg.TLS, c.cfg.From, len(c.cfg.To))
 }
+
+// CarriesAck: a person acknowledges from what this channel delivers, so its
+// test is a real alert with the real acknowledgement on it. See
+// channel.AckCarrier.
+func (c *Channel) CarriesAck() bool { return true }

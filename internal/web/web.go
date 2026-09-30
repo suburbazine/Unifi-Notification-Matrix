@@ -135,10 +135,9 @@ type Deps struct {
 	// the rule the probe follows applies here for the same reason.
 	FetchFingerprint func(ctx context.Context, host string) (string, error)
 
-	// TestChannel sends one channel's proof-of-configuration message and
-	// reports what happened. Optional: a build that does not supply it simply
-	// has no test button.
-	TestChannel func(ctx context.Context, name string) (summary string, err error)
+	// TestChannel sends one channel's test and reports what happened.
+	// Optional: a build that does not supply it simply has no test button.
+	TestChannel func(ctx context.Context, name string) (ChannelTest, error)
 
 	// HookTestMode arms a hook's test mode for minutes, or disarms it when
 	// minutes is zero or less. It returns when the mode lapses.

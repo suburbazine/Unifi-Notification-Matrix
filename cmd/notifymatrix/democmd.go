@@ -87,8 +87,8 @@ func demoCmd(dataDir string, explicitDir bool) int {
 		PasswordHash:    func() string { return "" },
 		SetPasswordHash: func(string) error { return nil },
 		Checklist:       func() setup.Input { return demoChecklist(cfg) },
-		TestChannel: func(context.Context, string) (string, error) {
-			return "", fmt.Errorf("nothing is sent in demo mode")
+		TestChannel: func(context.Context, string) (web.ChannelTest, error) {
+			return web.ChannelTest{}, fmt.Errorf("nothing is sent in demo mode")
 		},
 		// Present, and switched off, rather than absent: "this build cannot
 		// run a probe" would be a lie about the build. Demo mode contacts

@@ -694,6 +694,12 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			"before it cannot open the upgraded database")
 	}
 
+	// A channel test a restart interrupted: the timer that would have closed
+	// it went with the old process. See channeltest.go.
+	if err := closeLeftoverChannelTests(context.Background(), db, time.Now()); err != nil {
+		fmt.Fprintln(os.Stderr, "closing interrupted channel tests:", err)
+	}
+
 	upd := newUpdater(version)
 	// The binary a previous update replaced, cleaned up here rather than at
 	// the end of that update: at the end of an update the old file is still
@@ -1501,11 +1507,26 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 				links.proposals.ForgetPeer(slug)
 				return true, nil
 			},
-			TestChannel: func(ctx context.Context, name string) (string, error) {
+			TestChannel: func(ctx context.Context, name string) (web.ChannelTest, error) {
 				live := deliveryRef.Load()
+				// A channel a person acknowledges from is tested with a real
+				// alert carrying the real acknowledgement -- see channeltest.go.
+				if live.CarriesAck(name) {
+					res, err := testWithAck(ctx, db, live, name, time.Now())
+					if err == nil && res.AckLink {
+						id := res.IncidentID
+						time.AfterFunc(testAckWindow, func() {
+							if err := expireChannelTest(context.Background(), db, id, time.Now()); err != nil &&
+								!errors.Is(err, incident.ErrConflict) {
+								fmt.Fprintln(os.Stderr, "closing an unacknowledged channel test:", err)
+							}
+						})
+					}
+					return res, err
+				}
 				summary, err := live.Test(ctx, name)
 				if err == nil {
-					return summary, nil
+					return web.ChannelTest{Summary: summary}, nil
 				}
 				// "channel ntfy is not enabled" is a lie when the operator has
 				// just enabled it, saved, and pressed Test. That used to be
@@ -1528,11 +1549,11 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 					if berr, ok := live.Broken()[name]; ok && berr != nil {
 						why = ": " + berr.Error()
 					}
-					return "", fmt.Errorf("%s is enabled in the configuration, but this "+
+					return web.ChannelTest{}, fmt.Errorf("%s is enabled in the configuration, but this "+
 						"daemon could not build it, so it is not running and real alarms "+
 						"would not reach it either%s", name, why)
 				}
-				return "", err
+				return web.ChannelTest{}, err
 			},
 			// Restarting is the action this page most needed and least had.
 			// Channels, policies and rules are built once, at start, so every

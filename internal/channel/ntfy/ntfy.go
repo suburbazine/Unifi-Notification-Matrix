@@ -741,3 +741,8 @@ func collapseDashes(s string) string {
 func (c Channel) String() string {
 	return fmt.Sprintf("ntfy{server:%s topic:%q token:<redacted>}", c.base, c.cfg.Topic)
 }
+
+// CarriesAck: a person acknowledges from what this channel delivers, so its
+// test is a real alert with the real acknowledgement on it. See
+// channel.AckCarrier.
+func (c *Channel) CarriesAck() bool { return true }

@@ -905,7 +905,10 @@ function refreshIncidents() {
       if (inc.state === "closed") { recent.appendChild(incidentCard(inc, false)); nDone++; }
       else {
         open.appendChild(incidentCard(inc, true)); nOpen++;
-        if (inc.state === "acknowledged") nAcked++; else nAlert++;
+        // A channel test waiting for its button is on the board so it can be
+        // seen, but it is not an alarm: it must not turn the wall red.
+        if (inc.state === "acknowledged") nAcked++;
+        else if (inc.condition !== "channel-test") nAlert++;
       }
     });
 
@@ -3243,6 +3246,21 @@ function testRow(card, name, opts) {
     out.textContent = opts.button ? "checking..." : "sending...";
     api("POST", "/api/channels/" + encodeURIComponent(name) + "/test").then(function (r) {
       btn.disabled = false;
+      if (r.ok && r.data && r.data.ok && r.data.incident_id) {
+        // A real alert was sent, carrying the real acknowledgement. The test
+        // is not finished until somebody presses it: that is the part of the
+        // channel the old test never touched, and the part that was broken.
+        if (!r.data.ack_link) {
+          out.className = "err small";
+          out.textContent = "Delivered, but it carries no acknowledgement. " +
+            (r.data.ack_reason || "");
+          return;
+        }
+        out.className = "muted small";
+        out.textContent = r.data.detail;
+        watchTestAck(r.data.incident_id, name, out);
+        return;
+      }
       if (r.ok && r.data && r.data.ok) {
         out.className = "ok small";
         out.textContent = opts.success || r.data.detail || "sent";
@@ -3252,6 +3270,69 @@ function testRow(card, name, opts) {
       out.textContent = (r.data && r.data.error) || "failed";
     });
   });
+}
+
+// watchTestAck waits for the test alert's acknowledgement to come back, and
+// says so when it does. That is the end of the test: a message that arrived
+// and a button that did nothing is exactly what the old test passed.
+//
+// It gives up when the server does -- the test is closed unacknowledged after
+// fifteen minutes -- and stops quietly if a newer test replaces this one or
+// the card is redrawn.
+var TEST_ACK_WINDOW_MS = 15 * 60 * 1000;
+function watchTestAck(id, name, out) {
+  var started = Date.now();
+  out.dataset.watching = id;
+  function tick() {
+    if (out.dataset.watching !== id || !document.body.contains(out)) return;
+    api("GET", "/api/incidents").then(function (r) {
+      if (out.dataset.watching !== id) return;
+      var inc = null;
+      var list = (r.ok && r.data && r.data.incidents) || [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === id) { inc = list[i]; break; }
+      }
+      var verdict = testAckVerdict(inc, name);
+      if (verdict) {
+        out.className = verdict.ok ? "ok small" : "err small";
+        out.textContent = verdict.text;
+        delete out.dataset.watching;
+        return;
+      }
+      if (Date.now() - started > TEST_ACK_WINDOW_MS) {
+        out.className = "err small";
+        out.textContent = "Nothing was acknowledged from " + name +
+          " in fifteen minutes. If you pressed Acknowledge and this did not change, " +
+          "acknowledgement from " + name + " does not work.";
+        delete out.dataset.watching;
+        return;
+      }
+      setTimeout(tick, 3000);
+    });
+  }
+  setTimeout(tick, 3000);
+}
+
+// testAckVerdict reads one poll of the test incident: null while it is still
+// waiting, otherwise what to say. Separate so the decision can be tested
+// without a timer.
+function testAckVerdict(inc, name) {
+  if (!inc) return null;
+  if (inc.acknowledged) {
+    var via = inc.ack_via || "unknown";
+    // Acknowledged from THIS page is not the channel working: say which.
+    if (via === "web") {
+      return { ok: false, text: "Acknowledged from this page, not from " + name +
+        " -- press Acknowledge on the alert itself to test the channel." };
+    }
+    return { ok: true, text: "Acknowledged via " + via +
+      " -- acknowledgement works from " + name + "." };
+  }
+  if (inc.state === "closed") {
+    return { ok: false, text: "The test was closed without being acknowledged" +
+      (inc.close_reason ? ": " + inc.close_reason : "") + "." };
+  }
+  return null;
 }
 
 // ---------- setup ----------

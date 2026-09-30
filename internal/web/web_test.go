@@ -200,6 +200,9 @@ type harness struct {
 	// returns is how a channel says its test did something other than deliver
 	// a message -- voice checks credentials and places no call.
 	testChannel func(context.Context, string) (string, error)
+	// testChannelResult, when set, answers instead with the whole result --
+	// for a test that sent a real alert the page must then watch.
+	testChannelResult func(context.Context, string) (ChannelTest, error)
 
 	// hookArmed and hookFired record what the hook test endpoints asked for.
 	hookArmed []string
@@ -331,14 +334,18 @@ func newHarness(t *testing.T, incs ...*incident.Incident) *harness {
 			h.serviceActions = append(h.serviceActions, a)
 			return h.serviceErr
 		},
-		TestChannel: func(ctx context.Context, name string) (string, error) {
+		TestChannel: func(ctx context.Context, name string) (ChannelTest, error) {
 			h.mu.Lock()
-			fn := h.testChannel
+			fn, full := h.testChannel, h.testChannelResult
 			h.mu.Unlock()
-			if fn == nil {
-				return "", nil
+			if full != nil {
+				return full(ctx, name)
 			}
-			return fn(ctx, name)
+			if fn == nil {
+				return ChannelTest{}, nil
+			}
+			summary, err := fn(ctx, name)
+			return ChannelTest{Summary: summary}, err
 		},
 		KnownEntities: func() []EntitySeen {
 			h.mu.Lock()

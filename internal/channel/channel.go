@@ -68,6 +68,18 @@ type Channel interface {
 	Test(ctx context.Context) error
 }
 
+// AckCarrier marks a channel a PERSON acknowledges from -- a button or a link
+// on what they receive. Its test is a real alert about a real incident, so the
+// acknowledgement on it is the production one and can be pressed.
+//
+// It exists because the test used to be each channel's own hand-written
+// message, built by different code from the real alert and carrying no
+// acknowledgement at all. ntfy's Acknowledge button silently did nothing for
+// months, and every test anybody could run passed.
+type AckCarrier interface {
+	CarriesAck() bool
+}
+
 // TestDescriber lets a channel say what its test ACTUALLY DID.
 //
 // Every channel here delivers a message when tested, so the generic "Sent. If
