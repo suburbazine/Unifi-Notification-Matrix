@@ -16,12 +16,12 @@
 
 <!-- codestats:start -->
 <p align="center">
-  <img alt="Go: 27,059 lines" src="https://img.shields.io/badge/Go-27,059%20lines-00ADD8">
-  <img alt="tests: 30,040 lines" src="https://img.shields.io/badge/tests-30,040%20lines-2ea44f">
-  <img alt="test functions: 1282" src="https://img.shields.io/badge/test%20functions-1282-2ea44f">
+  <img alt="Go: 27,657 lines" src="https://img.shields.io/badge/Go-27,657%20lines-00ADD8">
+  <img alt="tests: 31,099 lines" src="https://img.shields.io/badge/tests-31,099%20lines-2ea44f">
+  <img alt="test functions: 1310" src="https://img.shields.io/badge/test%20functions-1310-2ea44f">
   <img alt="comments: 33%" src="https://img.shields.io/badge/comments-33%25-8957e5">
   <img alt="packages: 34" src="https://img.shields.io/badge/packages-34-555555">
-  <img alt="docs: 4,536 lines" src="https://img.shields.io/badge/docs-4,536%20lines-555555">
+  <img alt="docs: 4,603 lines" src="https://img.shields.io/badge/docs-4,603%20lines-555555">
 </p>
 
 <p align="center">

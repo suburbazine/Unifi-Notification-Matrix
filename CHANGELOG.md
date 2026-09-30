@@ -17,6 +17,88 @@ Nothing yet. Entries land here as work merges, and the heading is renamed to
 the version on the day it ships — writing a release's section from scratch at
 tag time is how 0.1.8 nearly went out with none.
 
+## [0.5.0] — 2026-09-30
+
+**Take this one if you pair other Xtremission products with this, or intend
+to.** Two new ones — Lightspeed Rewards and LSProtect — can pair for the first
+time, every paired product now has a deadman, and events that are a new fact
+each time they arrive are kept one by one instead of folded away.
+
+A minor rather than a patch because incidents can now carry something they
+never carried before, and the store gains a table to hold it.
+
+### Added
+
+- **Every occurrence of a per-occurrence event is kept, and one after review
+  alerts again.** Some events are a new fact every time they arrive — a sale
+  voided at a register, a free item handed out with no loyalty reward behind
+  it. Folding a repeat into the open incident used to keep the first arrival
+  and discard the rest, so a second void was recorded nowhere, and a void
+  arriving after a manager had acknowledged the incident was delivered to
+  nobody at all.
+
+  An incident now counts how many times the thing it is about has happened
+  and keeps each arrival in full — its own title, detail and severity — with
+  the most recent hundred kept and the total never capped. The alert carries
+  the newest arrival and says which occurrence it is and since when. The
+  incident board shows the count and the list.
+
+  **An acknowledgement is a review** of what had arrived when it was given. An
+  arrival after it closes the reviewed incident and opens a fresh one linked
+  to it, which escalates from the first rung. The acknowledgement stays on the
+  record exactly as it was given.
+
+  This applies to a paired product's momentary conditions only. Nothing about
+  this product's own sources changes: motion arrives in bursts, and a new
+  incident for every burst after an acknowledgement would page somebody all
+  afternoon.
+
+  A condition can opt out, so that an acknowledgement also covers what
+  follows: the peer declares `per_occurrence: false` for it, or the operator
+  sets it under the peer's `overrides` in `config.yaml`. Sentry's access
+  denials are the first such condition — a single denial after somebody has
+  already looked at the cascade is not news, while a credential sweep after
+  review still is. Sentry declares it itself from 1.6.12; at a site paired on
+  an earlier Sentry, this release writes the override into `config.yaml` on
+  its own at start, where it can be seen and changed. Set
+  `per_occurrence: true` explicitly to keep denials re-alerting instead.
+
+- **A paired product that stands in for none of this product's sources can
+  pair.** A peer used to have to claim a capability — Sentry claims Access, and
+  our own Access ingest stands down while it is healthy. A loyalty system or a
+  point-of-sale bridge claims nothing, and could not pair at all. The claim is
+  now optional; one that is made must name protect, access or network.
+
+- **Every paired product has a deadman.** A peer that claimed nothing had its
+  heartbeats recorded nowhere, so if the machine it runs on died, nothing
+  noticed. Any authenticated request from a peer now counts as contact —
+  nothing unauthenticated does, or anybody on the network could keep a dead
+  peer looking alive — and sixteen minutes of silence raises "Peer link: … has
+  gone silent", cleared the moment it is heard from again.
+
+### Fixed
+
+- **An occurrence is stamped with when it happened**, not when it reached this
+  product — a peer replaying events queued during an outage would otherwise
+  list every one at the minute the queue drained. (Found in the live pairing
+  tests, before release.)
+
+- **A peer's momentary events that cleared quickly were never delivered.** Whether
+  a cleared incident is still owed an alert was decided from this product's
+  own catalogue only, so a peer's own declaration — and the operator's override
+  of it — were read by nothing. An event raised and cleared before the first
+  scheduler pass reached nobody. That included Sentry's link test.
+
+- **The pairing request no longer has a field for the pairing code.** It was
+  never read — the proof is what is checked — but a client following the
+  structure would send the code itself, handing it to anything that
+  terminated TLS on the way. A client that still sends it is not refused.
+
+- **After a notification channel was saved, a paired peer was told the health
+  of channels that had been closed.** The reply's delivery status read the
+  channel set as it was at start; since 0.4.2 a save replaces that set. It now
+  reads the one in use.
+
 ## [0.4.2] — 2026-09-21
 
 **Take this one if you have ever waited for a restart to make a setting
@@ -1153,6 +1235,7 @@ They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
 [Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...HEAD
+[0.5.0]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.9...v0.4.0
