@@ -17,7 +17,7 @@ type liveRecorder struct {
 
 func newLiveFixture(start time.Time) (*peerLiveness, *liveRecorder) {
 	r := &liveRecorder{}
-	l := newPeerLiveness(start, 16*time.Minute,
+	l := newPeerLiveness(start, 16*time.Minute, nil,
 		func(_ context.Context, slug, why string) error {
 			r.mu.Lock()
 			defer r.mu.Unlock()

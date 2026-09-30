@@ -84,3 +84,21 @@ func TestAnUnauthenticatedRequestIsNotContact(t *testing.T) {
 			"can reach the port can keep a dead peer looking alive", len(*got))
 	}
 }
+
+// EVERY REPLY TELLS THE PEER HOW OFTEN TO HEARTBEAT, so a window changed here
+// reaches a peer paired months ago at its next contact, with nothing re-paired.
+func TestEveryReplyCarriesThePeersHeartbeatRate(t *testing.T) {
+	h := newHarness(t)
+	h.peer.SilentAfter = 2 * time.Minute
+	for _, route := range []string{RouteHeartbeat, RoutePing} {
+		w := h.post(route, []byte(`{}`), "n-"+route)
+		if got := decode(t, w); got.HeartbeatSeconds != 40 {
+			t.Errorf("%s replied heartbeat_seconds %d, want 40 for a 2m window",
+				route, got.HeartbeatSeconds)
+		}
+	}
+	w := h.post(RouteEvents, h.envelope(t, nil), "n-event")
+	if got := decode(t, w); got.HeartbeatSeconds != 40 {
+		t.Errorf("an event reply carried heartbeat_seconds %d, want 40", got.HeartbeatSeconds)
+	}
+}

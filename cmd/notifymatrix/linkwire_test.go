@@ -76,13 +76,13 @@ func TestReleasingACapabilityStopsSuppressingOurOwnEvents(t *testing.T) {
 	settled := now.Add(link.DefaultResumeAfter + time.Second)
 
 	ev := event.Event{Source: "access"}
-	if !s.suppressedByPeer(ev, settled, peerSilentAfter) {
+	if !s.suppressedByPeer(ev, settled, link.DefaultSilentAfter) {
 		t.Fatal("a serving peer is not suppressing our own source, so this test " +
 			"cannot show that revoking restores it")
 	}
 
 	s.release("access")
-	if s.suppressedByPeer(ev, settled, peerSilentAfter) {
+	if s.suppressedByPeer(ev, settled, link.DefaultSilentAfter) {
 		t.Error("our own access events are still suppressed after the peer was " +
 			"forgotten; nothing is watching the doors and nothing says so")
 	}
@@ -121,7 +121,7 @@ func TestReceiptsAreBoundedAndNewestFirstInTheView(t *testing.T) {
 	s.record(last)
 	now := time.Now()
 	v := s.view(func() *config.Config { return &config.Config{} }, nil, now,
-		now.Add(-90*time.Second))
+		now.Add(-90*time.Second), nil)
 	if len(v.Receipts) != shownReceipts {
 		t.Errorf("the view shows %d receipts, want %d", len(v.Receipts), shownReceipts)
 	}

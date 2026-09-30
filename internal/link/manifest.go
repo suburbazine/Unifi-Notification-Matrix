@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
 )
@@ -114,6 +115,37 @@ type Peer struct {
 	// MaxSeverity optionally caps what this peer may claim. Empty means
 	// uncapped, which is the default: the cascade is the point.
 	MaxSeverity incident.Severity `json:"max_severity,omitempty"`
+
+	// SilentAfter is how long this peer may go without authenticated contact
+	// before it counts as silent. Zero means DefaultSilentAfter.
+	SilentAfter time.Duration `json:"-"`
+}
+
+// DefaultSilentAfter is the window for a peer that has not been given one:
+// three missed five-minute heartbeats, and a minute of margin.
+const DefaultSilentAfter = 16 * time.Minute
+
+// Silence is this peer's window.
+func (p Peer) Silence() time.Duration {
+	if p.SilentAfter > 0 {
+		return p.SilentAfter
+	}
+	return DefaultSilentAfter
+}
+
+// HeartbeatEvery is how often this peer is asked to heartbeat: a third of its
+// window, so that silent always means three missed beats. Never faster than
+// every twenty seconds, and never slower than every five minutes -- the rate
+// every peer was built to before anybody could ask.
+func (p Peer) HeartbeatEvery() time.Duration {
+	d := p.Silence() / 3
+	switch {
+	case d < 20*time.Second:
+		return 20 * time.Second
+	case d > 5*time.Minute:
+		return 5 * time.Minute
+	}
+	return d.Truncate(time.Second)
 }
 
 // MaxSlugChars bounds a product slug.

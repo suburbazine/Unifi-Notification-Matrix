@@ -2570,6 +2570,22 @@ function peerCard(p) {
     p.link_id + " · " + p.conditions +
     (p.conditions === 1 ? " condition" : " conditions"));
   card.appendChild(meta);
+  // The silence window, and whether this peer actually keeps inside it.
+  if (p.silent_after_seconds) {
+    card.appendChild(el("div", "muted small",
+      "Reported silent after " + age(p.silent_after_seconds) + " without contact" +
+      (p.capability ? ", and then stops serving " + p.capability : "") +
+      " · asked to heartbeat every " + age(p.heartbeat_seconds) +
+      " · set with silent_after under this product in config.yaml"));
+  }
+  if (p.behind) {
+    card.appendChild(callout(
+      p.product + " has gone " + age(p.observed_gap_seconds) + " between contacts, " +
+      "longer than its " + age(p.silent_after_seconds) + " window, so it will be " +
+      "reported silent between them. Update " + p.product + " to a release that " +
+      "follows the requested heartbeat rate, or lengthen its window.",
+      "warn", "Not keeping to its window"));
+  }
 
   var rm = el("button", "act danger", "Forget this product");
   rm.type = "button";

@@ -28,6 +28,10 @@ import (
 type peerLiveness struct {
 	silentAfter time.Duration
 
+	// windowFor is each peer's own window, when the operator set one. Nil,
+	// or a zero answer, falls back to silentAfter.
+	windowFor func(slug string) time.Duration
+
 	// raise and resolve open and close the incident. Injected so the decision
 	// can be tested without an engine.
 	raise   func(ctx context.Context, slug, why string) error
@@ -37,14 +41,37 @@ type peerLiveness struct {
 	started time.Time
 	last    map[string]time.Time
 	raised  map[string]bool
+
+	// gap is the longest wait between two contacts from each peer, over the
+	// recent ones. It is what says, before anybody is paged, that a window is
+	// shorter than the peer actually keeps to -- an older client still
+	// heartbeating every five minutes against a two-minute window is
+	// reported silent between every beat.
+	gap map[string]time.Duration
 }
 
+// observedGap is the longest recent wait between two contacts from a peer,
+// and whether there has been enough contact to say.
+func (l *peerLiveness) observedGap(slug string) (time.Duration, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	g, ok := l.gap[slug]
+	return g, ok
+}
+
+// windowFor is REQUIRED, not an optional field set afterwards. It was a field,
+// and the daemon wiring it up was one line no test could see: dropped, every
+// peer fell back to the default window without a sound -- including a
+// critical one set to two minutes. As a parameter, leaving it out does not
+// compile. nil is still accepted, and means the default for everyone.
 func newPeerLiveness(started time.Time, silentAfter time.Duration,
+	windowFor func(slug string) time.Duration,
 	raise func(context.Context, string, string) error,
 	resolve func(context.Context, string) error) *peerLiveness {
 	return &peerLiveness{
-		silentAfter: silentAfter, raise: raise, resolve: resolve,
+		silentAfter: silentAfter, windowFor: windowFor, raise: raise, resolve: resolve,
 		started: started, last: map[string]time.Time{}, raised: map[string]bool{},
+		gap: map[string]time.Duration{},
 	}
 }
 
@@ -53,6 +80,17 @@ func newPeerLiveness(started time.Time, silentAfter time.Duration,
 // news worth delivering the moment it is true.
 func (l *peerLiveness) contact(slug string, now time.Time) {
 	l.mu.Lock()
+	if prev, ok := l.last[slug]; ok && now.After(prev) {
+		// Decays: a new gap replaces the recorded one unless it is longer,
+		// and a recorded one is halved on each shorter gap, so a peer that
+		// has since started keeping to a faster rate stops being flagged
+		// within a few contacts rather than never.
+		g := now.Sub(prev)
+		if old := l.gap[slug]; g < old {
+			g = max(g, old/2)
+		}
+		l.gap[slug] = g
+	}
 	l.last[slug] = now
 	was := l.raised[slug]
 	delete(l.raised, slug)
@@ -91,14 +129,21 @@ func (l *peerLiveness) check(ctx context.Context, paired []string, now time.Time
 			since = l.started
 		}
 		quiet := now.Sub(since)
-		if quiet <= l.silentAfter {
+		window := l.silentAfter
+		if l.windowFor != nil {
+			if w := l.windowFor(slug); w > 0 {
+				window = w
+			}
+		}
+		if quiet <= window {
 			continue
 		}
+		beat := (window / 3).Truncate(time.Second)
 		l.raised[slug] = true
-		why := fmt.Sprintf("Nothing has arrived from %s for %s. It heartbeats every "+
-			"five minutes, so it has missed at least three: whatever it would have "+
-			"sent in that time has not reached this product.",
-			slug, quiet.Round(time.Minute))
+		why := fmt.Sprintf("Nothing has arrived from %s for %s, against a window of %s. "+
+			"It is asked to heartbeat every %s, so it has missed at least three: "+
+			"whatever it would have sent in that time has not reached this product.",
+			slug, quiet.Round(time.Second), window, beat)
 		if !heard {
 			why = fmt.Sprintf("Nothing has arrived from %s since this started %s ago. "+
 				"It is paired, but it may have stopped before this did -- the last "+

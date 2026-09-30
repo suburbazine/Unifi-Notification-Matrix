@@ -1064,7 +1064,8 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	links := newLinkState(linkPeers)
 
 	// Every paired peer's deadman, whether or not it claims anything.
-	peerLive := newPeerLiveness(started, peerSilentAfter,
+	peerLive := newPeerLiveness(started, link.DefaultSilentAfter,
+		func(slug string) time.Duration { return windowForSlug(livePeers(), slug) },
 		func(ctx context.Context, slug, why string) error {
 			_, err := engine.RaiseInternalFor(ctx, peerEntity(slug), event.ConditionSourceSilent,
 				peerSilentSeverity, "Peer link: "+slug+" has gone silent", why)
@@ -1128,7 +1129,7 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			// and the measurement is of the site rather than of what this
 			// installation chose to do about it.
 			activity.observe(ev)
-			if links.suppressedByPeer(ev, time.Now(), peerSilentAfter) {
+			if links.suppressedByPeer(ev, time.Now(), windowForCapability(livePeers(), ev.Source)) {
 				return nil
 			}
 			_, err := engine.Handle(ctx, ev)
@@ -1413,7 +1414,7 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 					cfgMu.RLock()
 					defer cfgMu.RUnlock()
 					return current
-				}, linkPairer.Load(), time.Now(), started)
+				}, linkPairer.Load(), time.Now(), started, peerLive.observedGap)
 			},
 			LinkOfferCode: func() (string, time.Duration, error) {
 				p := linkPairer.Load()
@@ -1882,10 +1883,9 @@ process elevates. This will do it for you, prompting if it has to:
 					_, err := engine.Handle(ctx, ev)
 					return err
 				},
-				auditLog:  auditLog,
-				pairer:    pairer,
-				version:   version,
-				silentFor: peerSilentAfter,
+				auditLog: auditLog,
+				pairer:   pairer,
+				version:  version,
 			}.build())
 
 			linkCtx, stopLink := context.WithCancel(ctx)

@@ -40,14 +40,36 @@ type linkState struct {
 	proposals *link.Proposals
 }
 
-// peerSilentAfter is how long a peer may go without contact before this
-// product takes the capability back.
+// windowForCapability is the silence window of the peer holding a capability.
 //
-// Three missed heartbeats at the five-minute interval the peers agreed, so a
-// single missed beat over a slow minute does not hand authority back and
-// forth. Losing a capability is not a disaster -- our own source resumes and
-// the worst case is a duplicate incident -- but flapping it is.
-const peerSilentAfter = 16 * time.Minute
+// It used to be one constant, sixteen minutes, for every peer: three missed
+// heartbeats at five minutes each. For Sentry, which holds Access, that was
+// sixteen minutes after a bricked update in which nothing watched the doors,
+// because this product's own Access ingest stands down while the claim is
+// held. The window is now the operator's per peer, and the claim lapses at the
+// same moment the silence alarm fires -- one clock, not two that could
+// disagree about whether the peer is there.
+//
+// The default when no peer holds it is irrelevant (nothing is held) but kept
+// sane rather than zero, which Claim.Held reads as "never silent".
+func windowForCapability(peers []link.Peer, capability string) time.Duration {
+	for _, p := range peers {
+		if strings.EqualFold(p.Manifest.Capability, capability) && capability != "" {
+			return p.Silence()
+		}
+	}
+	return link.DefaultSilentAfter
+}
+
+// windowForSlug is one peer's silence window, by name.
+func windowForSlug(peers []link.Peer, slug string) time.Duration {
+	for _, p := range peers {
+		if strings.EqualFold(p.Slug, slug) {
+			return p.Silence()
+		}
+	}
+	return link.DefaultSilentAfter
+}
 
 // maxReceipts bounds the record. The same trade as every other bounded table
 // here: an endpoint reachable from outside must not be able to grow memory.
@@ -212,13 +234,12 @@ type linkDeps struct {
 	// start, and when saving a channel began rebuilding the set, every peer
 	// was told the health of one that had been closed -- "ok" from queues
 	// nothing delivers through any more.
-	delivery  func() *config.Delivery
-	contact   func(slug string, now time.Time)
-	handle    func(context.Context, event.Event) error
-	auditLog  audit.Log
-	pairer    *link.Pairer
-	version   string
-	silentFor time.Duration
+	delivery func() *config.Delivery
+	contact  func(slug string, now time.Time)
+	handle   func(context.Context, event.Event) error
+	auditLog audit.Log
+	pairer   *link.Pairer
+	version  string
 }
 
 func (d linkDeps) build() link.Deps {
@@ -439,8 +460,12 @@ func (d linkDeps) storePeer(p link.Peer, key []byte) error {
 // right now", which is otherwise invisible: a peer can be alive, heartbeating
 // and unable to see a single door, and in that state every other indicator on
 // the page reads healthy.
+//
+// gap reports the longest recent wait between a peer's contacts. Required,
+// like the window it is compared against: nil means "not measured", never
+// "keeping up".
 func (s *linkState) view(cfg func() *config.Config, p *link.Pairer, now time.Time,
-	startedAt time.Time) web.LinkPairing {
+	startedAt time.Time, gap func(slug string) (time.Duration, bool)) web.LinkPairing {
 	c := cfg()
 	out := web.LinkPairing{
 		Available: p != nil,
@@ -465,8 +490,22 @@ func (s *linkState) view(cfg func() *config.Config, p *link.Pairer, now time.Tim
 			Product: l.Slug, LinkID: l.LinkID,
 			Capability: l.Capability, Conditions: len(l.Conditions),
 		}
+		window, _ := l.Silence()
+		v.SilentAfterSeconds = int(window / time.Second)
+		v.HeartbeatSeconds = int(link.Peer{SilentAfter: window}.HeartbeatEvery() / time.Second)
+		// A peer that goes longer between contacts than its window will be
+		// reported silent between every one of them. Said here, where the
+		// window is, before anybody is paged for it -- the ordinary cause is
+		// a short window set on a peer whose client does not yet follow the
+		// requested heartbeat rate.
+		if gap != nil {
+			if g, ok := gap(l.Slug); ok {
+				v.ObservedGapSeconds = int(g / time.Second)
+				v.Behind = g > window
+			}
+		}
 		if l.Capability != "" {
-			v.Holding, v.Why = s.holds(l.Capability, now, peerSilentAfter)
+			v.Holding, v.Why = s.holds(l.Capability, now, window)
 		}
 		out.Peers = append(out.Peers, v)
 	}

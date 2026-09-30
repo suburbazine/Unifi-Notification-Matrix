@@ -165,6 +165,10 @@ type PairResponse struct {
 	Proof string `json:"proof"`
 
 	Capability string `json:"capability"`
+
+	// HeartbeatSeconds is the rate to start at. Every later reply carries the
+	// current one, which is what a peer should follow.
+	HeartbeatSeconds int `json:"heartbeat_seconds,omitempty"`
 }
 
 // Pairer offers a code and completes one pairing with it.
@@ -316,10 +320,11 @@ func (p *Pairer) Complete(req PairRequest) (PairResponse, Peer, error) {
 		Manifest: req.Manifest,
 	}
 	return PairResponse{
-		LinkID:     linkID,
-		Key:        base64.StdEncoding.EncodeToString(key),
-		Proof:      PairProof(p.code, "server", linkID, p.Fingerprint, req.Nonce),
-		Capability: req.Manifest.Capability,
+		LinkID:           linkID,
+		Key:              base64.StdEncoding.EncodeToString(key),
+		Proof:            PairProof(p.code, "server", linkID, p.Fingerprint, req.Nonce),
+		Capability:       req.Manifest.Capability,
+		HeartbeatSeconds: int(peer.HeartbeatEvery() / time.Second),
 	}, peer, nil
 }
 

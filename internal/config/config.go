@@ -442,6 +442,19 @@ type Link struct {
 
 	// MaxSeverity optionally caps what this peer may claim. Empty is uncapped.
 	MaxSeverity incident.Severity `json:"max_severity,omitempty"`
+
+	// SilentAfter is how long this peer may go without authenticated contact
+	// before it is reported silent -- and, for a peer holding a capability,
+	// before this product's own source takes that capability back. Blank is
+	// the default, sixteen minutes. The peer is asked to heartbeat at a third
+	// of it, so three missed heartbeats is what "silent" means at any setting.
+	//
+	// Per peer because the right answer differs by an order of magnitude. A
+	// loyalty system gone for a quarter of an hour costs some stamps. Sentry
+	// gone for a quarter of an hour is a quarter of an hour in which nothing
+	// is watching the doors, because while it holds Access this product's own
+	// Access ingest stands down.
+	SilentAfter string `json:"silent_after,omitempty"`
 }
 
 // LinkCondition is one entry of a peer's approved manifest.
@@ -755,4 +768,44 @@ func (c *Config) Retired(linkID string) (RetiredLink, bool) {
 		}
 	}
 	return RetiredLink{}, false
+}
+
+// The bounds on a peer's silence window.
+//
+// The floor is what a heartbeat can honestly support: a third of a minute is
+// twenty seconds, three requests a minute, well inside the per-peer rate
+// limit and short enough that "silent" still means three missed beats rather
+// than one slow network. The ceiling is a day; past that, "silent" has stopped
+// being an alarm and become a report.
+const (
+	DefaultPeerSilentAfter = 16 * time.Minute
+	MinPeerSilentAfter     = time.Minute
+	MaxPeerSilentAfter     = 24 * time.Hour
+)
+
+// Silence is this peer's window, and a warning when the configured value could
+// not be used as written.
+//
+// CLAMPED AND WARNED, NEVER REFUSED. Refusing would mean a typo in one peer's
+// window stops the daemon starting -- and a monitoring daemon that is not
+// running watches nothing, which is a worse outcome than any window.
+func (l Link) Silence() (time.Duration, string) {
+	v := strings.TrimSpace(l.SilentAfter)
+	if v == "" {
+		return DefaultPeerSilentAfter, ""
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return DefaultPeerSilentAfter, fmt.Sprintf("peer %s: silent_after %q is not a "+
+			"duration like \"2m\"; using %s", l.Slug, v, DefaultPeerSilentAfter)
+	}
+	switch {
+	case d < MinPeerSilentAfter:
+		return MinPeerSilentAfter, fmt.Sprintf("peer %s: silent_after %s is shorter than "+
+			"a heartbeat can support; using %s", l.Slug, d, MinPeerSilentAfter)
+	case d > MaxPeerSilentAfter:
+		return MaxPeerSilentAfter, fmt.Sprintf("peer %s: silent_after %s is longer than "+
+			"a day; using %s", l.Slug, d, MaxPeerSilentAfter)
+	}
+	return d, ""
 }

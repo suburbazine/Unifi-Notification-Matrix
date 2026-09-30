@@ -13,9 +13,28 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Added
+
+- **Each paired product has its own silence window.** It was sixteen minutes
+  for every peer. When a Sentry update left a site's Sentry dead, those were
+  sixteen minutes in which nothing watched the doors: while Sentry holds
+  Access, this product's own Access ingest stands down, and it only took the
+  doors back when the window ran out.
+
+  Set `silent_after` under a product in `config.yaml` — `2m` for Sentry, say —
+  and it applies within seconds, no restart. After that long without contact
+  the product is reported silent and, if it holds a capability, loses it at
+  the same moment, so this product's own source takes over in two minutes
+  instead of sixteen. Blank keeps sixteen minutes; the window is kept between
+  a minute and a day, and a value outside that is used at the nearest limit
+  with a warning rather than refusing to start.
+
+  The product is told how often to heartbeat to meet its window — a third of
+  it — in every reply, so a change reaches it at its next contact. Sentry
+  1.6.15, Lightspeed Rewards and LSProtect follow it; an older release keeps
+  heartbeating every five minutes, and **the Peer link page now warns when a
+  product is going longer between contacts than its window**, before its
+  silence alarm fires for a product that is fine.
 
 ## [0.5.1] — 2026-09-30
 

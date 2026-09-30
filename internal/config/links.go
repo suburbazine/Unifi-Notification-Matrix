@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/suburbazine/Unifi-Notification-Matrix/internal/link"
 )
@@ -42,6 +43,7 @@ func BuildLinks(c *Config) ([]link.Peer, []link.Credential) {
 			},
 			Overrides:   over,
 			MaxSeverity: l.MaxSeverity,
+			SilentAfter: silence(l),
 		})
 		creds = append(creds, link.Credential{LinkID: l.LinkID, Key: []byte(l.Key.Reveal())})
 	}
@@ -162,6 +164,11 @@ func (c Config) linkWarnings() []string {
 			"link routes do not exist and nothing it sends can arrive")
 	}
 	for _, l := range c.Links {
+		if _, warn := l.Silence(); warn != "" {
+			w = append(w, warn)
+		}
+	}
+	for _, l := range c.Links {
 		if l.Capability == "" {
 			continue
 		}
@@ -190,4 +197,9 @@ func (c Config) hasSource(name string) bool {
 		}
 	}
 	return false
+}
+
+func silence(l Link) time.Duration {
+	d, _ := l.Silence()
+	return d
 }

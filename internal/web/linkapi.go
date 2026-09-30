@@ -122,6 +122,18 @@ type LinkPeerView struct {
 	Capability string `json:"capability,omitempty"`
 	Conditions int    `json:"conditions"`
 
+	// SilentAfterSeconds is how long this peer may be quiet before it is
+	// reported silent (and, if it holds a capability, loses it), and
+	// HeartbeatSeconds the rate it is asked to keep to meet that.
+	SilentAfterSeconds int `json:"silent_after_seconds"`
+	HeartbeatSeconds   int `json:"heartbeat_seconds"`
+
+	// ObservedGapSeconds is the longest recent wait between two of its
+	// contacts, and Behind says that is longer than its window -- it will be
+	// reported silent between contacts.
+	ObservedGapSeconds int  `json:"observed_gap_seconds,omitempty"`
+	Behind             bool `json:"behind,omitempty"`
+
 	// Holding says the peer is currently serving its capability, and Why
 	// explains it when it is not.
 	//

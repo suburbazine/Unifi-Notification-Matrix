@@ -178,7 +178,16 @@ type reply struct {
 	// ServerTime lets a peer log clock skew. It never adjusts its own clock
 	// from it, and this product never asks it to.
 	ServerTime string `json:"server_time"`
+
+	// HeartbeatSeconds is how often this peer should heartbeat: a third of
+	// the silence window the operator set for it. On EVERY reply rather than
+	// only at pairing, so a window changed here reaches a peer that paired
+	// months ago at its next contact, with nothing re-paired. A peer that
+	// does not read it keeps its own rate and is judged by the window anyway.
+	HeartbeatSeconds int `json:"heartbeat_seconds,omitempty"`
 }
+
+func heartbeatSeconds(p Peer) int { return int(p.HeartbeatEvery() / time.Second) }
 
 func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	now := rc.deps.Now()
@@ -302,13 +311,13 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch r.URL.Path {
 	case RoutePing:
-		rc.ok(w, now, reply{Accepted: true})
+		rc.ok(w, now, reply{Accepted: true, HeartbeatSeconds: heartbeatSeconds(peer)})
 	case RouteHeartbeat:
 		if c := rc.claim(peer.Slug); c != nil {
 			c.Heartbeat(now)
 		}
 		rc.record(Receipt{At: now, LinkID: cred.LinkID, Route: r.URL.Path, Accepted: true})
-		rc.ok(w, now, reply{Accepted: true})
+		rc.ok(w, now, reply{Accepted: true, HeartbeatSeconds: heartbeatSeconds(peer)})
 	case RouteEvents:
 		rc.events(w, r, cred, peer, body, now, deny)
 	}
@@ -359,7 +368,7 @@ func (rc *Receiver) events(w http.ResponseWriter, r *http.Request, cred Credenti
 		if seen {
 			rc.record(Receipt{At: now, LinkID: cred.LinkID, Route: r.URL.Path,
 				Accepted: true, Duplicate: true})
-			rc.ok(w, now, reply{Accepted: true, Duplicate: true})
+			rc.ok(w, now, reply{Accepted: true, Duplicate: true, HeartbeatSeconds: heartbeatSeconds(peer)})
 			return
 		}
 	}
@@ -387,7 +396,7 @@ func (rc *Receiver) events(w http.ResponseWriter, r *http.Request, cred Credenti
 	}
 
 	rc.record(Receipt{At: now, LinkID: cred.LinkID, Route: r.URL.Path, Accepted: true})
-	rc.ok(w, now, reply{Accepted: true})
+	rc.ok(w, now, reply{Accepted: true, HeartbeatSeconds: heartbeatSeconds(peer)})
 }
 
 // ok writes the bounded reply, filling in the delivery status.
