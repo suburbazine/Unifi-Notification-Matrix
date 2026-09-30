@@ -15,7 +15,12 @@ var REFRESH_MS = 5000;
 var state = {
   authed: false, setupRequired: false, minPassword: 12, tab: "incidents",
   section: "", ready: true, todo: 0, serviceState: "", setupKnown: false,
-  silencing: null // { id, err } while a card's silence panel is open; see silencePanel
+  silencing: null, // { id, err } while a card's silence panel is open; see silencePanel
+  // { id, data, err, all } while a card's occurrence list is open; see
+  // occurrencePanel. Kept here for the same reason as silencing: the board
+  // redraws every few seconds and a redraw replaces the card, so an open list
+  // is re-opened from state rather than kept.
+  occurrences: null
 };
 
 function el(tag, cls, text) {
@@ -61,6 +66,19 @@ function stamp(iso) {
   var d = new Date(iso);
   if (isNaN(d.getTime())) return "never";
   return d.toLocaleString();
+}
+// whenShort is a time for a row that already knows roughly when it is: the
+// clock alone for today, the date and the clock otherwise. Same zone as
+// stamp() -- the browser's -- so it agrees with every other time on the card.
+function whenShort(iso) {
+  if (!iso) return "";
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  var now = new Date();
+  var sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (sameDay) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 function badge(text, cls) { return el("span", "badge " + (cls || ""), text); }
 
@@ -435,7 +453,13 @@ var ENTITY_ICONS = {
 // description that happens to contain a colon cannot be eaten. Anything not
 // recognised stays in the prose, which is the safe direction: the worst case
 // is that it looks exactly as it did before.
-function incidentDetail(card, detail) {
+//
+// opts.near is a time the caller already shows beside this detail (an
+// occurrence row's own time); an "At" fact within a minute of it is dropped
+// rather than shown twice on one row. "Received" is kept whatever it says,
+// because its word is the information.
+function incidentDetail(card, detail, opts) {
+  opts = opts || {};
   var lines = String(detail).split(/\r?\n/);
   var facts = [];
   while (lines.length > 1) {
@@ -444,6 +468,14 @@ function incidentDetail(card, detail) {
     facts.unshift({ key: m[1], value: m[2] });
     lines.pop();
     if (facts.length >= 4) break;
+  }
+  if (opts.near) {
+    var near = new Date(opts.near).getTime();
+    facts = facts.filter(function (f) {
+      if (f.key.toLowerCase() !== "at" || isNaN(near)) return true;
+      var t = new Date(f.value).getTime();
+      return isNaN(t) || Math.abs(t - near) >= 60000;
+    });
   }
 
   var prose = lines.join("\n").trim();
@@ -503,7 +535,7 @@ function incidentCard(inc, showActions) {
     meta.push("acknowledged " + stamp(inc.acked_at) + (inc.ack_via ? " via " + inc.ack_via : ""));
   }
   if (inc.resolved) meta.push("condition cleared " + stamp(inc.resolved_at));
-  if (inc.predecessor_id) meta.push("recurrence of " + inc.predecessor_id);
+  if (inc.predecessor_id) meta.push(predecessorNote(inc));
   // The reason is the only trace on a closed card of WHY it closed -- and for
   // a card closed by silencing it, the only place that names the rule.
   if (inc.state === "closed" && inc.close_reason) meta.push(inc.close_reason);
@@ -519,6 +551,32 @@ function incidentCard(inc, showActions) {
   // treatment on the page.
   if (inc.last_delivery_error) {
     card.appendChild(el("div", "delivery-error", "Delivery failed: " + inc.last_delivery_error));
+  }
+
+  // A per-occurrence condition that has arrived more than once. The card's
+  // title and detail are the NEWEST arrival's, which is exactly what hides
+  // the others: "Sale voided at Register 1" with one invoice under it reads
+  // as one void when there were seven. The count is the sign, and it opens
+  // the list of every arrival the incident kept. Directly above the mount
+  // the list opens into, so the disclosure and what it discloses are
+  // adjacent, and the card's own buttons stay at the bottom.
+  var occToggle = null, occMount = null;
+  if (inc.occurrences > 1) {
+    occToggle = el("button", "occ-toggle");
+    occToggle.type = "button";
+    occToggle.setAttribute("aria-expanded", "false");
+    occToggle.setAttribute("aria-controls", "occ-" + inc.id);
+    occToggle.appendChild(icon("list", "sm"));
+    occToggle.appendChild(el("b", "", inc.occurrences + " occurrences"));
+    occToggle.appendChild(document.createTextNode(" since " + whenShort(inc.opened_at)));
+    occToggle.appendChild(icon("chevron", "sm chev"));
+    var occRow = el("div", "occ-row");
+    occRow.appendChild(occToggle);
+    card.appendChild(occRow);
+    occMount = el("div", "occ-mount");
+    occMount.id = "occ-" + inc.id;
+    card.appendChild(occMount);
+    occToggle.addEventListener("click", function () { occurrencePanel(inc, occToggle, occMount); });
   }
 
   if (showActions && state.authed && inc.state !== "closed") {
@@ -553,7 +611,150 @@ function incidentCard(inc, showActions) {
     // stays live and the panel stays put. After the bar, where it opened.
     if (silBtn && state.silencing && state.silencing.id === inc.id) silencePanel(card, inc, silBtn);
   }
+  // The occurrence list, likewise: re-opened from state into the mount the
+  // card already placed for it, so a redraw cannot move it.
+  if (occToggle && state.occurrences && state.occurrences.id === inc.id) {
+    occurrencePanel(inc, occToggle, occMount);
+  }
   return card;
+}
+
+// boardIndex is the incident list as last drawn, by id, so a card can say
+// something about the incident it follows rather than printing its id.
+var boardIndex = {};
+
+// predecessorNote says what a card's predecessor_id means. A per-occurrence
+// incident that was acknowledged is CLOSED by the next arrival, and the fresh
+// one that arrival opens is linked back to it: "follows one reviewed at 13:02"
+// is the fact a manager needs, and "recurrence of inc-8f3a" is not.
+function predecessorNote(inc) {
+  var prev = boardIndex[inc.predecessor_id];
+  if (!prev) return "recurrence of an earlier incident (" + inc.predecessor_id + ")";
+  if (/^reviewed:/.test(prev.close_reason || "") && prev.acked_at) {
+    return "follows an incident reviewed at " + whenShort(prev.acked_at) +
+      " — this arrived after it was acknowledged";
+  }
+  return "recurrence — the previous one closed " + whenShort(prev.closed_at) +
+    (prev.close_reason ? " (" + prev.close_reason + ")" : "");
+}
+
+// OCC_FIRST_PAGE is how many occurrences the list opens with. A hundred rows
+// unfolding inside one card would push every other card off the screen; the
+// rest are one press away, and that press survives a redraw.
+var OCC_FIRST_PAGE = 10;
+
+// occurrencePanel opens (or closes) the list of every arrival an incident
+// kept, inside the mount the card placed for it.
+//
+// The board redraws every few seconds and a redraw replaces the card, so the
+// open list is state (state.occurrences) and this is called again by every
+// redraw: it draws from what it fetched last time straight away, so the list
+// never flickers to "loading", and fetches again so a void that arrived since
+// appears without anybody pressing anything.
+function occurrencePanel(inc, button, mount) {
+  var fresh = !state.occurrences || state.occurrences.id !== inc.id;
+  if (!fresh && mount.firstChild) {
+    // A press on an open list closes it. A redraw never gets here: the
+    // redraw's mount is empty.
+    clear(mount);
+    button.setAttribute("aria-expanded", "false");
+    state.occurrences = null;
+    return;
+  }
+  if (fresh) {
+    // One list open at a time. Another card's closes now rather than at the
+    // next redraw, so two lists are never open for the seconds between.
+    if (state.occurrences) {
+      var other = byId("occ-" + state.occurrences.id);
+      if (other) {
+        clear(other);
+        var ob = other.parentNode && other.parentNode.querySelector(".occ-toggle");
+        if (ob) ob.setAttribute("aria-expanded", "false");
+      }
+    }
+    state.occurrences = { id: inc.id, data: null, raw: "", err: "", all: false };
+  }
+  button.setAttribute("aria-expanded", "true");
+
+  var panel = el("div", "occurrences");
+  panel.setAttribute("role", "region");
+  panel.setAttribute("aria-label", "Occurrences of " + (inc.title || inc.dedup_key));
+  mount.appendChild(panel);
+  var draw = function () {
+    clear(panel);
+    var s = state.occurrences;
+    if (s.err) panel.appendChild(callout(s.err, "err", "The list did not load"));
+    else if (!s.data) panel.appendChild(loadingState("Loading occurrences…"));
+    else occurrenceList(panel, inc, s.data);
+  };
+  draw();
+
+  api("GET", "api/incidents/" + encodeURIComponent(inc.id) + "/occurrences").then(function (res) {
+    var s = state.occurrences;
+    if (!s || s.id !== inc.id) return; // closed, or another card's, while this was in flight
+    if (!res.ok) {
+      s.err = (res.data && res.data.error) || "that did not load";
+    } else {
+      var raw = JSON.stringify(res.data);
+      if (raw === s.raw && !s.err) return; // nothing new: leave the drawn list alone
+      s.raw = raw; s.data = res.data; s.err = "";
+    }
+    if (document.body.contains(panel)) draw();
+  });
+}
+
+// occurrenceList draws the arrivals, newest first, the way the card draws
+// its own detail: the time, the severity only where it differs from the
+// incident's, the title only where it differs from the row above, and the
+// detail with its facts as chips.
+function occurrenceList(panel, inc, data) {
+  var s = state.occurrences;
+  var rows = data.occurrences || [];
+  var kept = data.kept || 0;
+  var total = inc.occurrences || rows.length;
+
+  // The count is exact and the list is not: past the cap the oldest details
+  // are dropped. Said plainly, or "100 rows" reads as "100 voids".
+  if (rows.length < total) {
+    panel.appendChild(el("div", "occ-note",
+      total > kept && kept
+        ? "The latest " + rows.length + " of " + total + ". Older ones are not kept; the count is."
+        : "Showing " + rows.length + " of " + total + "."));
+  }
+  if (!rows.length) {
+    panel.appendChild(el("div", "occ-note", "Nothing kept for this incident."));
+    return;
+  }
+
+  var shown = s.all ? rows : rows.slice(0, OCC_FIRST_PAGE);
+  var prevTitle = inc.title;
+  shown.forEach(function (o) {
+    var row = el("div", "occ");
+    var head = el("div", "occ-head");
+    head.appendChild(el("span", "occ-seq", "#" + o.seq));
+    var when = el("span", "occ-when", whenShort(o.at));
+    when.setAttribute("title", stamp(o.at));
+    head.appendChild(when);
+    if (o.severity && o.severity !== inc.severity) head.appendChild(badge(o.severity, "sev-" + o.severity));
+    if (o.title && o.title !== prevTitle) head.appendChild(el("span", "occ-title", o.title));
+    if (o.title) prevTitle = o.title;
+    row.appendChild(head);
+    if (o.detail) incidentDetail(row, o.detail, { near: o.at });
+    panel.appendChild(row);
+  });
+
+  if (shown.length < rows.length) {
+    var more = el("button", "act small", "Show the other " + (rows.length - shown.length));
+    more.type = "button";
+    more.addEventListener("click", function () {
+      s.all = true;
+      clear(panel);
+      occurrenceList(panel, inc, data);
+    });
+    var bar = el("div", "formbar occ-more");
+    bar.appendChild(more);
+    panel.appendChild(bar);
+  }
 }
 
 // silenceable mirrors the API's refusals so the page does not offer a click
@@ -697,6 +898,8 @@ function refreshIncidents() {
     var open = byId("open-incidents"), recent = byId("recent-incidents");
     clear(open); clear(recent);
     var list = res.data.incidents || [];
+    boardIndex = {};
+    list.forEach(function (inc) { boardIndex[inc.id] = inc; });
     var nOpen = 0, nDone = 0, nAlert = 0, nAcked = 0;
     list.forEach(function (inc) {
       if (inc.state === "closed") { recent.appendChild(incidentCard(inc, false)); nDone++; }

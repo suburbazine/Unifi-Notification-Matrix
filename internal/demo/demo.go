@@ -83,15 +83,172 @@ func RefuseDelivery(context.Context, *incident.Incident, int, []string) error {
 // failing, and a recurrence. Those are the states a notification list cannot
 // represent, and they are the argument for incidents existing at all.
 func Seed(ctx context.Context, st incident.Store, now time.Time) error {
-	for _, s := range script(now) {
-		if err := st.Put(ctx, s); err != nil {
+	keeper, keeps := st.(occurrenceStore)
+	for _, s := range board(now) {
+		if err := st.Put(ctx, s.inc); err != nil {
 			return fmt.Errorf("demo: seeding: %w", err)
+		}
+		if !keeps {
+			continue
+		}
+		for _, o := range s.occ {
+			if err := keeper.AddOccurrence(ctx, s.inc.ID, o, 0); err != nil {
+				return fmt.Errorf("demo: seeding occurrences of %s: %w", s.inc.ID, err)
+			}
 		}
 	}
 	return nil
 }
 
+// occurrenceStore is the part of a store that keeps each arrival of a
+// per-occurrence condition in full. Optional, as it is in the web package: a
+// store without it still gets the incident and its count.
+type occurrenceStore interface {
+	AddOccurrence(ctx context.Context, incidentID string, o incident.Occurrence, keep int) error
+}
+
+// seeded is one fabricated incident and, for a per-occurrence condition, every
+// arrival that was folded into it.
+type seeded struct {
+	inc *incident.Incident
+	occ []incident.Occurrence
+}
+
 func script(now time.Time) []*incident.Incident {
+	var out []*incident.Incident
+	for _, s := range board(now) {
+		out = append(out, s.inc)
+	}
+	return out
+}
+
+// board is the script with the per-occurrence incidents' arrivals beside them.
+func board(now time.Time) []seeded {
+	var out []seeded
+	for _, inc := range ordinary(now) {
+		out = append(out, seeded{inc: inc})
+	}
+	return append(out, perOccurrence(now)...)
+}
+
+// perOccurrence fabricates the incidents a paired point-of-sale peer raises:
+// conditions where every arrival is a new fact, folded into one live incident
+// that keeps each of them.
+//
+// Three states, because each is a thing the board has to show: a run of voids
+// that was acknowledged and then CLOSED by the next void arriving -- reviewed
+// once does not mean reviewed for ever -- and the fresh incident that void
+// opened, linked back to it; and a condition that has happened more times
+// than the incident keeps the detail of, so the board has to say that the
+// older ones are gone rather than imply the list is complete.
+func perOccurrence(now time.Time) []seeded {
+	var out []seeded
+
+	// The voids that were reviewed. Three of them, acknowledged from the web,
+	// and then a fourth arrived: that one closed this and opened the next.
+	voidKey := incident.Key("lsprotect", "Register 1", "sale-voided")
+	reviewed := incident.Open(
+		"demo-0007", voidKey, incident.SeverityMedium, "lsprotect",
+		"[DEMO] Sale voided at Register 1",
+		voidDetail(10418, 18.00, "Dana M", now.Add(-2*time.Hour)),
+		now.Add(-2*time.Hour))
+	_ = reviewed.RecordAlert(now.Add(-2*time.Hour), 0)
+	occ := []incident.Occurrence{reviewed.FirstOccurrence()}
+	for i, v := range []struct {
+		ago     time.Duration
+		invoice int
+		amount  float64
+	}{{113 * time.Minute, 10421, 9.50}, {104 * time.Minute, 10427, 61.20}} {
+		at := now.Add(-v.ago)
+		o, _ := reviewed.Occur(at, incident.SeverityMedium, "[DEMO] Sale voided at Register 1",
+			voidDetail(v.invoice, v.amount, "Dana M", at))
+		occ = append(occ, o)
+		if i == 0 {
+			_ = reviewed.RecordAlert(at, 1)
+		}
+	}
+	_ = reviewed.Acknowledge(now.Add(-95*time.Minute), "web")
+	reviewed.Close(now.Add(-41*time.Minute), "reviewed: a new occurrence arrived after it was acknowledged")
+	out = append(out, seeded{inc: reviewed, occ: occ})
+
+	// The void that closed it opened this, and six more have followed. The
+	// register has been voiding a sale every few minutes for most of an hour
+	// and nobody has looked yet.
+	fresh := reviewed.Recur("demo-0008", now.Add(-41*time.Minute))
+	fresh.Title = "[DEMO] Sale voided at Register 1"
+	fresh.Detail = voidDetail(10433, 42.50, "Dana M", now.Add(-41*time.Minute))
+	_ = fresh.RecordAlert(now.Add(-41*time.Minute), 0)
+	_ = fresh.RecordAlert(now.Add(-26*time.Minute), 1)
+	occ = []incident.Occurrence{fresh.FirstOccurrence()}
+	for _, v := range []struct {
+		ago     time.Duration
+		invoice int
+		amount  float64
+		who     string
+	}{
+		{34 * time.Minute, 10436, 7.25, "Dana M"},
+		{29 * time.Minute, 10438, 128.00, "Dana M"},
+		{22 * time.Minute, 10440, 12.75, "Sam K"},
+		{15 * time.Minute, 10441, 340.00, "Sam K"},
+		{8 * time.Minute, 10443, 5.00, "Sam K"},
+		{2 * time.Minute, 10444, 42.50, "Sam K"},
+	} {
+		at := now.Add(-v.ago)
+		o, _ := fresh.Occur(at, incident.SeverityMedium, "[DEMO] Sale voided at Register 1",
+			voidDetail(v.invoice, v.amount, v.who, at))
+		occ = append(occ, o)
+	}
+	out = append(out, seeded{inc: fresh, occ: occ})
+
+	// More arrivals than the incident keeps the detail of. The count is exact;
+	// the oldest details have been dropped, and the board has to say so.
+	// Acknowledged, so it also shows a reviewed per-occurrence incident that
+	// is still open: the next arrival will close it and open another.
+	rewards := incident.Open(
+		"demo-0009",
+		incident.Key("lightspeed-rewards", "Register 2", "unearned-reward"),
+		incident.SeverityLow, "lightspeed-rewards",
+		"[DEMO] Reward applied with nothing earned — Register 2",
+		"", now.Add(-9*time.Hour))
+	const rewardsTotal = 112
+	occ = nil
+	for i := 0; i < rewardsTotal; i++ {
+		// Roughly every five minutes across the day, drifting so the times
+		// do not read as a clock.
+		at := now.Add(-9*time.Hour + time.Duration(i)*283*time.Second)
+		amount := []float64{4.50, 6.00, 3.25, 9.75, 4.50, 12.00}[i%6]
+		detail := rewardDetail(70210+i*3, amount, at)
+		if i == 0 {
+			rewards.Detail = detail
+			occ = append(occ, rewards.FirstOccurrence())
+			continue
+		}
+		o, _ := rewards.Occur(at, incident.SeverityLow, rewards.Title, detail)
+		occ = append(occ, o)
+	}
+	_ = rewards.RecordAlert(now.Add(-9*time.Hour), 0)
+	_ = rewards.Acknowledge(now.Add(-6*time.Minute), "pushover")
+	out = append(out, seeded{inc: rewards, occ: occ})
+
+	return out
+}
+
+// voidDetail is a void as the LSProtect peer describes one: its own prose,
+// then the actor, the context and the entity as "key: value" lines, in the
+// shape the link envelope renders them.
+func voidDetail(invoice int, amount float64, cashier string, at time.Time) string {
+	return fmt.Sprintf("Sale %d was voided after it was tendered.\n"+
+		"Cashier: %s\namount: %.2f\ninvoice: %d\nRegister: Register 1\nAt: %s",
+		invoice, cashier, amount, invoice, at.UTC().Format(time.RFC3339))
+}
+
+func rewardDetail(ticket int, amount float64, at time.Time) string {
+	return fmt.Sprintf("A reward discount was applied under an account with no reward earned.\n"+
+		"amount: %.2f\nticket: %d\nRegister: Register 2\nAt: %s",
+		amount, ticket, at.UTC().Format(time.RFC3339))
+}
+
+func ordinary(now time.Time) []*incident.Incident {
 	var out []*incident.Incident
 
 	// Still shouting. Nobody has acknowledged it, and it has alerted four

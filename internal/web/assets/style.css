@@ -875,6 +875,46 @@ table.matrix input[type=checkbox]:disabled{opacity:.3}
 }
 .fact .icon{opacity:.8}
 
+/* The occurrence log. A per-occurrence condition -- a sale voided, a reward
+   applied with nothing earned -- folds every arrival into one incident, and
+   the card's own title and detail are the newest arrival's. That is right for
+   the alert and hides the rest on the board, so the card carries a count, and
+   the count opens the list.
+
+   The toggle is a pill in the fact chips' shape but in the accent, because it
+   is the one chip on the card that does something; the count is bold so it
+   reads from across the room. The list is a column of rows under it, each
+   row a quieter copy of the card's own detail: seq and time on one line, the
+   prose and its chips beneath. */
+.occ-row{margin-top:var(--sp-2)}
+.occ-toggle{
+  display:inline-flex;align-items:center;gap:6px;
+  font:400 var(--fs-sm)/1.5 var(--font);color:var(--accent);
+  background:var(--accent-tint);border:1px solid var(--accent);border-radius:var(--r-pill);
+  padding:2px 10px 2px 8px;cursor:pointer;white-space:nowrap;
+  /* No transition: the fill goes tint->accent while the text goes
+     accent->bg, and halfway through both are the same blue and the count
+     is invisible for a frame. Snapping is fine for a pill this size. */
+}
+.occ-toggle>b{font-weight:600;font-variant-numeric:tabular-nums}
+.occ-toggle:hover{background:var(--accent);color:var(--bg)}
+.occ-toggle[aria-expanded="true"]{background:var(--accent);color:var(--bg)}
+.occ-toggle>.icon.chev{margin-left:2px}
+.occ-toggle[aria-expanded="true"]>.icon.chev{transform:rotate(90deg)}
+.occurrences{
+  margin-top:var(--sp-2);border-top:1px solid var(--line);
+}
+.occ-note{font-size:var(--fs-sm);color:var(--muted);padding:var(--sp-2) 0 0;max-width:var(--measure-sm)}
+.occ{padding:var(--sp-2) 0 var(--sp-2) 10px;border-left:2px solid var(--line)}
+.occ+.occ{border-top:1px solid var(--line)}
+.occ-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);font-size:var(--fs-sm)}
+.occ-seq{font-family:var(--mono);font-size:var(--fs-xs);color:var(--muted);min-width:2.5em}
+.occ-when{color:var(--fg);font-weight:500;font-variant-numeric:tabular-nums}
+.occ-title{font-weight:600;color:var(--fg)}
+.occ .detail{margin-top:2px;font-size:var(--fs-sm)}
+.occ .facts{margin-top:var(--sp-1)}
+.occ-more{margin-top:var(--sp-2)}
+
 /* The filter above the record. Two hundred rows with no way through them is a
    log file with borders. */
 .audit-filter{margin-bottom:var(--sp-3)}
