@@ -240,7 +240,7 @@ func TestAckURLBecomesActionButton(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 	actions := (*got)[0].query.Get("actions")
-	want := `http, Acknowledge, https://alerts.example.net/ack/inc-1/9f3a, method=GET, clear=true`
+	want := `http, Acknowledge, https://alerts.example.net/ack/inc-1/9f3a?via=ntfy, method=POST, clear=true`
 	if actions != want {
 		t.Errorf("actions = %q\nwant        %q", actions, want)
 	}
@@ -256,25 +256,25 @@ func TestAckURLWithSeparatorsIsQuoted(t *testing.T) {
 		{
 			name: "plain url needs no quoting",
 			url:  "https://h/ack/1/ab",
-			want: `http, Acknowledge, https://h/ack/1/ab, method=GET, clear=true`,
+			want: `http, Acknowledge, https://h/ack/1/ab?via=ntfy, method=POST, clear=true`,
 			ok:   true,
 		},
 		{
 			name: "comma in url is double quoted",
 			url:  "https://h/ack/1,2/ab",
-			want: `http, Acknowledge, "https://h/ack/1,2/ab", method=GET, clear=true`,
+			want: `http, Acknowledge, "https://h/ack/1,2/ab?via=ntfy", method=POST, clear=true`,
 			ok:   true,
 		},
 		{
 			name: "semicolon in url is double quoted",
 			url:  "https://h/ack/1;2/ab",
-			want: `http, Acknowledge, "https://h/ack/1;2/ab", method=GET, clear=true`,
+			want: `http, Acknowledge, "https://h/ack/1;2/ab?via=ntfy", method=POST, clear=true`,
 			ok:   true,
 		},
 		{
 			name: "double quote in url falls back to single quotes",
 			url:  `https://h/ack/1"2/ab`,
-			want: `http, Acknowledge, 'https://h/ack/1"2/ab', method=GET, clear=true`,
+			want: `http, Acknowledge, 'https://h/ack/1"2/ab?via=ntfy', method=POST, clear=true`,
 			ok:   true,
 		},
 		{

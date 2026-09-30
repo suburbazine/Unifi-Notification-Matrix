@@ -618,10 +618,29 @@ const ackLabel = "Acknowledge"
 // whole notification is published as a JSON body, which would cost us the
 // query-parameter delivery this file exists to preserve.
 //
-// method=GET because the ack route is designed to be opened by a phone and
-// answers with a confirmation page; clear=true because an acknowledged alert
-// that stays on the lock screen gets acknowledged again on the next glance,
-// and the operator learns the button does nothing.
+// METHOD=POST, AND IT WAS GET, WHICH DID NOTHING WHILE LOOKING DONE.
+//
+// An ntfy `http` action does not open anything. The app sends the request in
+// the background and shows nobody the response. The ack route answers a GET
+// with a confirmation page -- deliberately, because mail scanners prefetch
+// links, and a GET that acknowledged would let one acknowledge an alarm nobody
+// saw -- so the button fetched that page, rendered it to no one, acknowledged
+// nothing, and then clear=true removed the notification. The operator saw the
+// alert go away and believed it acknowledged; the incident went on escalating.
+// Found on a real site's topic.
+//
+// A POST to the signed link acknowledges on its own, and a tapped action
+// button is a person, not a prefetcher -- the reason for the confirmation
+// page does not apply to it. So this is the one-tap acknowledgement it always
+// claimed to be.
+//
+// clear=true, because an acknowledged alert left on the lock screen gets
+// tapped again. ntfy clears only when the request SUCCEEDS, so a phone that
+// cannot reach the ack listener keeps the notification and shows the error --
+// which is the truth.
+//
+// via=ntfy, so the audit record says which channel the acknowledgement came
+// through instead of "an unnamed channel".
 //
 // This is NOT wired to ntfy's "click" parameter, which would acknowledge on a
 // tap of the notification body itself. Acknowledgement asserts that a human
@@ -635,6 +654,16 @@ func ackAction(ackURL string) (string, bool) {
 	if strings.ContainsAny(ackURL, "\n\r") {
 		return "", false
 	}
+	// Appended as text, never by parsing and re-serialising: that re-encodes
+	// the path, and the path is what the token signs -- a link "tidied" by a
+	// URL library is a link that no longer acknowledges anything.
+	if !strings.Contains(ackURL, "via=") {
+		sep := "?"
+		if strings.Contains(ackURL, "?") {
+			sep = "&"
+		}
+		ackURL += sep + "via=ntfy"
+	}
 	quoted, ok := quoteActionValue(ackURL)
 	if !ok {
 		// Unrepresentable in the short format. Emitting it anyway would
@@ -642,7 +671,7 @@ func ackAction(ackURL string) (string, bool) {
 		// button that acknowledges the wrong thing is worse than no button.
 		return "", false
 	}
-	return fmt.Sprintf("http, %s, %s, method=GET, clear=true", ackLabel, quoted), true
+	return fmt.Sprintf("http, %s, %s, method=POST, clear=true", ackLabel, quoted), true
 }
 
 func quoteActionValue(v string) (string, bool) {

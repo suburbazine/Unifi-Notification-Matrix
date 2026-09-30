@@ -13,6 +13,28 @@ view against the release before them.
 
 ## [Unreleased]
 
+**Take this one if you acknowledge alerts from ntfy.** The Acknowledge button
+did not acknowledge anything — and made it look as though it had.
+
+### Fixed
+
+- **ntfy's Acknowledge button acknowledged nothing, then cleared the
+  notification.** The button is a background request: ntfy sends it and shows
+  nobody the answer. It sent a GET, and the acknowledgement link answers a GET
+  with an "are you sure?" page — on purpose, because mail scanners open links,
+  and a link that acknowledged on a GET would let one acknowledge an alarm
+  nobody saw. So the page was rendered to nobody, nothing was acknowledged,
+  and the notification then disappeared from the phone. The operator believed
+  the alarm was dealt with while it went on escalating.
+
+  The button now POSTs, which acknowledges in one tap — a tapped button is a
+  person, not a prefetcher. The acknowledgement is recorded as coming through
+  ntfy. If the phone cannot reach the acknowledgement address, ntfy keeps the
+  notification and shows the error, rather than clearing it.
+
+  Alerts sent before you upgrade still carry the old button. Acknowledge those
+  from the incident board, or by opening the link and confirming.
+
 ### Added
 
 - **Each paired product has its own silence window.** It was sixteen minutes
