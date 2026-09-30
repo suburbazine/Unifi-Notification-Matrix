@@ -88,6 +88,39 @@ type Incident struct {
 	LastDeliveryError string
 
 	UpdatedAt time.Time
+
+	// Occurrences is how many times the thing this incident is about has
+	// HAPPENED, for a condition where each arrival is a new fact -- a sale
+	// voided at a register, a free item handed out with no reward behind it.
+	// One for anything else, and for every incident that opens.
+	//
+	// It exists because folding a repeat into a live incident used to discard
+	// it: the incident kept the first arrival's detail and nothing recorded
+	// that a second had come at all. For a door still open that is right --
+	// "still open" is not news. For a second void at the same till it lost the
+	// only record of a second void.
+	Occurrences int
+}
+
+// MaxOccurrences is how many occurrences an incident keeps the detail of.
+//
+// The COUNT is never capped; only the detail is. A register producing dozens
+// of voids in a day keeps an exact total and the most recent hundred in full,
+// and the oldest are dropped as new ones are written -- so a busy till cannot
+// grow the database without bound, and nothing about how many there were is
+// ever lost.
+const MaxOccurrences = 100
+
+// Occurrence is one arrival of a per-occurrence condition, as it arrived.
+type Occurrence struct {
+	// Seq is 1 for the arrival that opened the incident and counts up. It is
+	// what the pruning keys on, and it survives pruning, so "occurrence 57"
+	// still means the fifty-seventh after the first forty have been dropped.
+	Seq      int
+	At       time.Time
+	Severity Severity
+	Title    string
+	Detail   string
 }
 
 // Key builds a dedup key. Dedup is not an optimisation, it is correctness: a
@@ -217,6 +250,9 @@ func Open(id, dedupKey string, sev Severity, source, title, detail string, now t
 		Detail:    detail,
 		OpenedAt:  now,
 		UpdatedAt: now,
+		// The arrival that opened it is the first occurrence. Recur goes
+		// through here too, so a successor starts counting again at one.
+		Occurrences: 1,
 	}
 }
 
@@ -302,6 +338,35 @@ func (i *Incident) Close(at time.Time, reason string) {
 	i.ClosedAt = &t
 	i.CloseReason = reason
 	i.touch(at)
+}
+
+// Occur records another arrival of a per-occurrence condition on a live
+// incident, and returns it for the caller to store in full.
+//
+// The incident's title and detail become the NEWEST arrival's. They are what
+// an alert is built from, and an alert saying "voided: $12 at 09:14" about a
+// void of $340 at 11:02 would be the product describing the wrong event. The
+// first arrival is not lost: it is occurrence one, kept with the rest.
+func (i *Incident) Occur(at time.Time, sev Severity, title, detail string) (Occurrence, error) {
+	if i.Terminal() {
+		return Occurrence{}, ErrClosed
+	}
+	if i.Occurrences < 1 {
+		i.Occurrences = 1
+	}
+	i.Occurrences++
+	if title != "" {
+		i.Title = title
+	}
+	i.Detail = detail
+	i.touch(at)
+	return Occurrence{Seq: i.Occurrences, At: at, Severity: sev, Title: i.Title, Detail: detail}, nil
+}
+
+// FirstOccurrence is the arrival that opened the incident, for storing beside
+// the ones that follow it.
+func (i *Incident) FirstOccurrence() Occurrence {
+	return Occurrence{Seq: 1, At: i.OpenedAt, Severity: i.Severity, Title: i.Title, Detail: i.Detail}
 }
 
 // Recur builds the successor for a condition that cleared and came back.

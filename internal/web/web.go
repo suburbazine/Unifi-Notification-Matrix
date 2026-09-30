@@ -483,6 +483,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /static/{file}", s.handleAsset)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/incidents", s.handleIncidents)
+	// Public for the same reason, and to the same audience, as the list above.
+	mux.HandleFunc("GET /api/incidents/{id}/occurrences", s.handleOccurrences)
 	mux.HandleFunc("GET /api/checklist", s.handleChecklist)
 	// Unauthenticated on purpose, and it says nothing this listener was not
 	// already saying: GET / serves the product name and version to anybody.

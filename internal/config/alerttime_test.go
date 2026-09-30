@@ -141,3 +141,37 @@ func TestTheZoneWarningDefersToTheStartupRefusal(t *testing.T) {
 		t.Error("an enabled window with a bad zone was accepted")
 	}
 }
+
+// AN ALERT ABOUT THE SEVENTH VOID MUST SAY IT IS THE SEVENTH.
+//
+// The title and detail are the newest arrival's -- right for what the alert
+// is about, and silent about the one fact a manager most needs when there has
+// been more than one.
+func TestAnAlertSaysHowManyTimesAndSinceWhen(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened := time.Date(2026, 9, 30, 13, 14, 0, 0, time.UTC) // 09:14 in New York
+	inc := incident.Open("i1", "lsprotect/wv01-register-1/lsprotect-sale-voided",
+		incident.SeverityMedium, "lsprotect", "Sale voided at Register 1", "invoice 1007, $340", opened)
+
+	one := (&Delivery{site: newYork}).alertFor(inc, 0)
+	if strings.Contains(one.Body, "Occurrence") {
+		t.Errorf("a first occurrence announces itself as one: %q", one.Body)
+	}
+
+	for i := 0; i < 6; i++ {
+		if _, err := inc.Occur(opened.Add(time.Hour), incident.SeverityMedium,
+			"Sale voided at Register 1", "invoice 1007, $340"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := (&Delivery{site: newYork}).alertFor(inc, 0)
+	if !strings.Contains(a.Body, "Occurrence 7 since 09:14") {
+		t.Errorf("body = %q; want it to say this is occurrence 7 since 09:14 site time", a.Body)
+	}
+	if !strings.HasPrefix(a.Body, "invoice 1007") {
+		t.Errorf("body = %q; the count must follow the detail, not push it off the top of a phone", a.Body)
+	}
+}

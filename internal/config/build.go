@@ -325,6 +325,19 @@ func (d *Delivery) alertFor(inc *incident.Incident, stage int) channel.Alert {
 	if inc.LastAlertAt != nil {
 		a.At = d.inSiteZone(*inc.LastAlertAt)
 	}
+	// How many times, since when. The title and detail are the NEWEST
+	// arrival's, which is right for what the alert is about and hides the one
+	// fact a manager most needs when there has been more than one: that there
+	// has been more than one. "Sale voided at Register 1" read once and
+	// "Sale voided at Register 1 -- 7th since 09:14" are different mornings.
+	if inc.Occurrences > 1 {
+		line := fmt.Sprintf("Occurrence %d since %s.", inc.Occurrences,
+			d.inSiteZone(inc.OpenedAt).Format("15:04 Mon 2 Jan"))
+		if a.Body != "" {
+			a.Body += "\n\n"
+		}
+		a.Body += line
+	}
 	// Appended rather than prefixed: the incident's own detail is what the
 	// alert is ABOUT, and context that pushed it off the top of a phone
 	// notification would be context that cost somebody the alarm.

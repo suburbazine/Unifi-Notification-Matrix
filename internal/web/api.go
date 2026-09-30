@@ -103,6 +103,10 @@ type incidentView struct {
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 	ClosedAt   *time.Time `json:"closed_at,omitempty"`
 
+	// Occurrences is how many times it has happened: 1 for anything but a
+	// per-occurrence condition that has arrived more than once.
+	Occurrences int `json:"occurrences"`
+
 	CloseReason       string    `json:"close_reason,omitempty"`
 	PredecessorID     string    `json:"predecessor_id,omitempty"`
 	LastDeliveryError string    `json:"last_delivery_error,omitempty"`
@@ -131,6 +135,7 @@ func (s *Server) viewOf(inc *incident.Incident) incidentView {
 		AckVia:            inc.AckVia,
 		ResolvedAt:        inc.ResolvedAt,
 		ClosedAt:          inc.ClosedAt,
+		Occurrences:       max(inc.Occurrences, 1),
 		CloseReason:       inc.CloseReason,
 		PredecessorID:     inc.PredecessorID,
 		LastDeliveryError: inc.LastDeliveryError,
@@ -444,4 +449,54 @@ func (s *Server) mutate(
 	// continuously. Say so rather than reporting a success that did not happen.
 	writeJSON(w, http.StatusConflict,
 		errorBody("that incident is being changed by something else; try again"))
+}
+
+// occurrenceView is one arrival, as the board shows it.
+type occurrenceView struct {
+	Seq      int       `json:"seq"`
+	At       time.Time `json:"at"`
+	Severity string    `json:"severity"`
+	Title    string    `json:"title"`
+	Detail   string    `json:"detail,omitempty"`
+}
+
+// occurrenceReader is the part of a store that keeps occurrences in full.
+// Optional: a store without it answers with an empty list rather than an error,
+// because the COUNT is on the incident either way.
+type occurrenceReader interface {
+	Occurrences(ctx context.Context, incidentID string) ([]incident.Occurrence, error)
+}
+
+// handleOccurrences lists an incident's recent occurrences, newest first.
+//
+// Readable by the same audience as the incident list and no wider: it carries
+// exactly the titles and details the board already shows, one per arrival
+// instead of only the newest. A site that keeps its board to managers keeps
+// this to managers by the same means.
+func (s *Server) handleOccurrences(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := s.deps.Store.Get(r.Context(), id); err != nil {
+		if errors.Is(err, incident.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, errorBody("no such incident"))
+			return
+		}
+		s.fail(w, r, "reading the incident", err)
+		return
+	}
+	out := []occurrenceView{}
+	if rd, ok := s.deps.Store.(occurrenceReader); ok {
+		got, err := rd.Occurrences(r.Context(), id)
+		if err != nil {
+			s.fail(w, r, "reading occurrences", err)
+			return
+		}
+		for _, o := range got {
+			out = append(out, occurrenceView{Seq: o.Seq, At: o.At,
+				Severity: string(o.Severity), Title: o.Title, Detail: o.Detail})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"occurrences": out,
+		"kept":        incident.MaxOccurrences,
+	})
 }

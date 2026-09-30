@@ -92,3 +92,49 @@ func TestAConditionIsFoundAsTheSchedulerSpellsIt(t *testing.T) {
 			"lsrewards-Decline-Spike")
 	}
 }
+
+// WHICH EVENTS KEEP EVERY ARRIVAL. A paired peer's momentary conditions -- a
+// void, a free item -- and nothing native: motion arrives in bursts, and a new
+// incident for every burst after an acknowledgement would page somebody all
+// afternoon.
+func TestOnlyAPeersMomentaryConditionsArePerOccurrence(t *testing.T) {
+	peers := []link.Peer{rewardsPeer(nil)}
+	ev := func(source, cond string) event.Event {
+		return event.Event{Source: source, Condition: cond}
+	}
+
+	if !occurrenceFor(peers, ev("lsrewards", "lsrewards-redemption-without-reward")) {
+		t.Error("a peer's momentary condition is not per-occurrence, so a second free " +
+			"item at the same till is folded away and recorded nowhere")
+	}
+	if occurrenceFor(peers, ev("lsrewards", "lsrewards-backup-failing")) {
+		t.Error("a peer's STATE condition was made per-occurrence: every repeat report " +
+			"of a failing backup would be counted as a new fact")
+	}
+
+	var native string
+	for _, c := range event.Catalogue() {
+		if event.IsMomentary(c.Name) {
+			native = c.Name
+			break
+		}
+	}
+	if occurrenceFor(peers, ev("protect", native)) {
+		t.Errorf("native momentary %q became per-occurrence; motion bursts after an "+
+			"acknowledgement would each open a new incident", native)
+	}
+
+	// Another peer sending a condition that happens to share the name is not
+	// this peer's: the manifest that decides is the sender's own.
+	if occurrenceFor(peers, ev("impostor", "lsrewards-redemption-without-reward")) {
+		t.Error("a condition was classified by a manifest that does not belong to its sender")
+	}
+
+	// And the operator's override moves it, with the delivery flag, as one decision.
+	no := false
+	over := []link.Peer{rewardsPeer(map[string]link.Override{
+		"lsrewards-redemption-without-reward": {Momentary: &no}})}
+	if occurrenceFor(over, ev("lsrewards", "lsrewards-redemption-without-reward")) {
+		t.Error("the operator overrode momentary to false and the condition is still per-occurrence")
+	}
+}

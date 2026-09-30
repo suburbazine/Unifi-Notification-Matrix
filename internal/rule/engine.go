@@ -66,6 +66,49 @@ type Engine struct {
 	// server whose clock is UTC while the site it watches is not, so a window
 	// evaluated in the host's zone is active at the wrong hours.
 	loc *time.Location
+
+	// perOccurrence reports whether each arrival of an event is a NEW FACT --
+	// a sale voided, a free item given away -- rather than a repeat report of
+	// one that is still true. Set via WithOccurrences; nil means none are.
+	perOccurrence func(event.Event) bool
+}
+
+// WithOccurrences marks the events whose every arrival is worth keeping.
+//
+// For those, folding into a live incident records the arrival in full instead
+// of discarding it, and an arrival after the incident was ACKNOWLEDGED starts
+// a fresh one that alerts. For everything else nothing changes: a door still
+// open, reported again, is not news, and a camera flapping fifty times a
+// minute is one incident nagging on its own schedule, not fifty alerts.
+func WithOccurrences(f func(event.Event) bool) Option {
+	return func(e *Engine) { e.perOccurrence = f }
+}
+
+func (e *Engine) isOccurrence(ev event.Event) bool {
+	return e.perOccurrence != nil && e.perOccurrence(ev)
+}
+
+// occurrenceWriter is the part of a store that keeps occurrences in full.
+// Optional, so a store that cannot -- every test double written before this
+// existed -- still counts them on the incident.
+type occurrenceWriter interface {
+	AddOccurrence(ctx context.Context, incidentID string, o incident.Occurrence, keep int) error
+}
+
+// recordOccurrence stores one arrival in full, where the store can.
+//
+// A failure here is reported but does not undo the incident write that came
+// before it: the count on the incident is the half that must not be lost, and
+// it has already been stored.
+func (e *Engine) recordOccurrence(ctx context.Context, inc *incident.Incident, o incident.Occurrence) error {
+	w, ok := e.store.(occurrenceWriter)
+	if !ok {
+		return nil
+	}
+	if err := w.AddOccurrence(ctx, inc.ID, o, incident.MaxOccurrences); err != nil {
+		return fmt.Errorf("rule: recording occurrence %d of %s: %w", o.Seq, inc.ID, err)
+	}
+	return nil
 }
 
 // Option configures an Engine.
@@ -196,6 +239,30 @@ func (e *Engine) handle(ctx context.Context, ev event.Event) (Result, error) {
 				continue
 			}
 
+			if e.isOccurrence(ev) {
+				// AN ACKNOWLEDGEMENT IS A REVIEW, and it covers what had arrived
+				// when it was given. A void after a manager has looked at the
+				// earlier ones is not something they have seen, so it must not
+				// fold silently into an incident marked as dealt with.
+				//
+				// Closed and succeeded rather than un-acknowledged: the
+				// acknowledgement happened and stays on the record exactly as
+				// it was given, and the new incident walks its ladder from the
+				// start, which is what a thing nobody has seen should do.
+				if open.Acknowledged() {
+					open.Close(now, "reviewed: a new occurrence arrived after it was acknowledged")
+					if err := e.store.Put(ctx, open); err != nil {
+						return Result{}, err
+					}
+					continue
+				}
+				res, retry, err := e.occur(ctx, open, ev, d, now)
+				if retry {
+					continue
+				}
+				return res, err
+			}
+
 			// Already live: fold in. Deliberately does NOT re-alert or reset
 			// the escalation ladder -- a camera flapping fifty times a minute
 			// is one incident nagging on its own schedule, not fifty alerts.
@@ -249,7 +316,45 @@ func (e *Engine) open(ctx context.Context, key string, ev event.Event, d Decisio
 	if err := e.store.Put(ctx, inc); err != nil {
 		return Result{}, err
 	}
+	if e.isOccurrence(ev) {
+		// The arrival that opened it is occurrence one, kept like the rest, so
+		// the list on the incident starts where the incident did.
+		if err := e.recordOccurrence(ctx, inc, inc.FirstOccurrence()); err != nil {
+			return Result{Outcome: outcome, Incident: inc, Decision: d}, err
+		}
+	}
 	return Result{Outcome: outcome, Incident: inc, Decision: d}, nil
+}
+
+// occur folds one more arrival into a live, unacknowledged incident.
+//
+// Compare-and-swap rather than a plain write. The old fold wrote only when a
+// severity rose, which is rare; this writes on EVERY arrival, and a plain write
+// landing between a manager acknowledging and this having read the incident
+// would erase the acknowledgement -- the one write this product must never
+// lose. On a conflict the caller re-reads and decides again, which may now
+// mean the acknowledged branch above.
+func (e *Engine) occur(ctx context.Context, inc *incident.Incident, ev event.Event,
+	d Decision, now time.Time) (Result, bool, error) {
+	expect := inc.UpdatedAt
+
+	// Severity only rises on a live incident, for the reason update gives.
+	if severityRank(d.Severity) > severityRank(inc.Severity) {
+		inc.Severity = d.Severity
+	}
+	title, detail := render(ev, d)
+	o, err := inc.Occur(now, d.Severity, title, detail)
+	if err != nil {
+		return Result{}, true, nil // terminal under us: re-read
+	}
+	if err := e.store.PutIfUnchanged(ctx, inc, expect); err != nil {
+		if errors.Is(err, incident.ErrConflict) {
+			return Result{}, true, nil
+		}
+		return Result{}, false, err
+	}
+	res := Result{Outcome: OutcomeUpdated, Incident: inc, Decision: d}
+	return res, false, e.recordOccurrence(ctx, inc, o)
 }
 
 // update folds a repeat event into a live incident.

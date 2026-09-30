@@ -191,6 +191,37 @@ var migrations = []migration{
 			) STRICT`,
 		},
 	},
+	{
+		version: 5,
+		stmts: []string{
+			// How many times the thing an incident is about has happened.
+			// Default 1 because every incident already stored opened once, and
+			// that is exactly what it has recorded.
+			`ALTER TABLE incidents ADD COLUMN occurrences INTEGER NOT NULL DEFAULT 1`,
+
+			// Every arrival of a per-occurrence condition, as it arrived.
+			//
+			// Folding a repeat into a live incident used to keep the first
+			// arrival's detail and nothing else, so a second void at the same
+			// till was recorded nowhere. BOUNDED PER INCIDENT, and by the
+			// write rather than by a sweeper: the oldest are deleted as new ones
+			// arrive, and the count on the incident is never capped, so a busy
+			// register loses detail beyond the most recent hundred and never
+			// loses the total.
+			//
+			// seq is the arrival number within the incident and survives
+			// pruning, so "occurrence 57" keeps meaning the fifty-seventh.
+			`CREATE TABLE incident_occurrences (
+				incident_id TEXT    NOT NULL,
+				seq         INTEGER NOT NULL,
+				at          TEXT    NOT NULL,
+				severity    TEXT    NOT NULL,
+				title       TEXT    NOT NULL,
+				detail      TEXT    NOT NULL,
+				PRIMARY KEY (incident_id, seq)
+			) STRICT`,
+		},
+	},
 }
 
 func latestVersion() int {

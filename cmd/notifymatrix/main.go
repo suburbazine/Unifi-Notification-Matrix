@@ -867,9 +867,24 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 		fmt.Fprintf(os.Stderr, "      edit %s\n", config.Path(dataDir))
 	}
 
+	// The paired peers as the configuration has them NOW. The configuration
+	// the daemon started with until the live one exists, further down, where
+	// this is replaced with a reader of it -- before the scheduler's goroutine
+	// starts, so nothing reads it while it is being swapped.
+	livePeers := func() []link.Peer {
+		p, _ := config.BuildLinks(cfg)
+		return p
+	}
+
 	engine, err := rule.New(db, cfg.Rules,
 		// Rule windows are clock times at the SITE, not on this machine.
 		rule.WithLocation(cfg.QuietHours.SiteLocation()),
+		// A paired peer's momentary conditions are per-occurrence: every
+		// arrival is a new fact and is kept, and one after an acknowledgement
+		// alerts again. Nothing native changes.
+		rule.WithOccurrences(func(ev event.Event) bool {
+			return occurrenceFor(livePeers(), ev)
+		}),
 		rule.WithAuditHook(func(res rule.Result, ev event.Event) {
 			kind := map[rule.Outcome]audit.Kind{
 				rule.OutcomeOpened:   audit.KindIncidentOpened,
@@ -957,15 +972,6 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 				fmt.Fprintln(os.Stderr, "         could not raise it as an incident:", err)
 			}
 		}
-	}
-
-	// The paired peers as the configuration has them NOW. The configuration
-	// the daemon started with until the live one exists, further down, where
-	// this is replaced with a reader of it -- before the scheduler's goroutine
-	// starts, so nothing reads it while it is being swapped.
-	livePeers := func() []link.Peer {
-		p, _ := config.BuildLinks(cfg)
-		return p
 	}
 
 	sched, err := escalate.NewScheduler(db, policies, deliver,

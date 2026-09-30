@@ -72,7 +72,7 @@ const nonTerminal = `closed_at IS NULL AND (acked_at IS NULL OR resolved_at IS N
 const incidentColumns = `id, dedup_key, severity, source, title, detail, opened_at,
 	first_alert_at, last_alert_at, alert_count, stage,
 	acked_at, ack_via, resolved_at, closed_at, close_reason,
-	predecessor_id, last_delivery_error, updated_at`
+	predecessor_id, last_delivery_error, updated_at, occurrences`
 
 // SQLite is an incident.Store backed by an on-disk SQLite database.
 //
@@ -250,7 +250,7 @@ func (s *SQLite) Put(ctx context.Context, inc *incident.Incident) error {
 
 	const q = `
 INSERT INTO incidents (` + incidentColumns + `)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
 	dedup_key           = excluded.dedup_key,
 	severity            = excluded.severity,
@@ -269,7 +269,8 @@ ON CONFLICT(id) DO UPDATE SET
 	close_reason        = excluded.close_reason,
 	predecessor_id      = excluded.predecessor_id,
 	last_delivery_error = excluded.last_delivery_error,
-	updated_at          = excluded.updated_at`
+	updated_at          = excluded.updated_at,
+	occurrences         = excluded.occurrences`
 
 	// ON CONFLICT(id), never INSERT OR REPLACE. OR REPLACE resolves a conflict
 	// on ANY uniqueness constraint by deleting the conflicting row -- so a
@@ -287,7 +288,7 @@ ON CONFLICT(id) DO UPDATE SET
 		encTimePtr(inc.AckedAt), inc.AckVia, encTimePtr(inc.ResolvedAt),
 		encTimePtr(inc.ClosedAt), inc.CloseReason,
 		inc.PredecessorID, inc.LastDeliveryError,
-		encTime(inc.UpdatedAt),
+		encTime(inc.UpdatedAt), inc.Occurrences,
 	)
 	s.writeMu.Unlock()
 
@@ -345,7 +346,8 @@ UPDATE incidents SET
 	close_reason        = ?,
 	predecessor_id      = ?,
 	last_delivery_error = ?,
-	updated_at          = ?
+	updated_at          = ?,
+	occurrences         = ?
 WHERE id = ? AND updated_at = ?`
 
 	s.writeMu.Lock()
@@ -357,7 +359,7 @@ WHERE id = ? AND updated_at = ?`
 		encTimePtr(inc.AckedAt), inc.AckVia, encTimePtr(inc.ResolvedAt),
 		encTimePtr(inc.ClosedAt), inc.CloseReason,
 		inc.PredecessorID, inc.LastDeliveryError,
-		encTime(inc.UpdatedAt),
+		encTime(inc.UpdatedAt), inc.Occurrences,
 		inc.ID, encTime(expect),
 	)
 	s.writeMu.Unlock()
@@ -509,7 +511,7 @@ func scanIncident(sc rowScanner) (*incident.Incident, error) {
 		&inc.ID, &inc.DedupKey, &severity, &inc.Source, &inc.Title, &inc.Detail,
 		&openedAt, &firstAlert, &lastAlert, &inc.AlertCount, &inc.Stage,
 		&acked, &inc.AckVia, &resolved, &closed, &inc.CloseReason,
-		&inc.PredecessorID, &inc.LastDeliveryError, &updatedAt,
+		&inc.PredecessorID, &inc.LastDeliveryError, &updatedAt, &inc.Occurrences,
 	)
 	if err != nil {
 		return nil, err

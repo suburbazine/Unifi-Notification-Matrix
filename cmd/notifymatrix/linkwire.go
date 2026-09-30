@@ -676,3 +676,34 @@ func momentaryFor(peers []link.Peer, condition string) bool {
 	}
 	return false
 }
+
+// occurrenceFor reports whether each arrival of this event is a new fact to
+// keep, rather than a repeat report of something still true.
+//
+// A paired peer's momentary conditions, and nothing else. Momentary already
+// means "a thing that happened" -- a void, a free item handed out -- which is
+// exactly an event whose second arrival is news. The operator's override of
+// the flag moves both behaviours together, so there is one decision about a
+// condition rather than two that could disagree.
+//
+// Native momentary conditions are left alone on purpose. Motion and smart
+// detections arrive in bursts, and making every burst after an acknowledgement
+// open a new incident would page somebody all afternoon; for those, one
+// incident nagging on its own schedule is the design.
+func occurrenceFor(peers []link.Peer, ev event.Event) bool {
+	clean := func(s string) string {
+		return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "/", "_")
+	}
+	want := clean(ev.Condition)
+	for _, p := range peers {
+		if !strings.EqualFold(p.Slug, ev.Source) {
+			continue
+		}
+		for _, spec := range p.Manifest.Conditions {
+			if clean(spec.Name) == want {
+				return p.IsMomentary(spec.Name)
+			}
+		}
+	}
+	return false
+}
