@@ -319,7 +319,9 @@ func (e *Engine) open(ctx context.Context, key string, ev event.Event, d Decisio
 	if e.isOccurrence(ev) {
 		// The arrival that opened it is occurrence one, kept like the rest, so
 		// the list on the incident starts where the incident did.
-		if err := e.recordOccurrence(ctx, inc, inc.FirstOccurrence()); err != nil {
+		first := inc.FirstOccurrence()
+		first.At = occurredAt(ev, now)
+		if err := e.recordOccurrence(ctx, inc, first); err != nil {
 			return Result{Outcome: outcome, Incident: inc, Decision: d}, err
 		}
 	}
@@ -347,6 +349,7 @@ func (e *Engine) occur(ctx context.Context, inc *incident.Incident, ev event.Eve
 	if err != nil {
 		return Result{}, true, nil // terminal under us: re-read
 	}
+	o.At = occurredAt(ev, now)
 	if err := e.store.PutIfUnchanged(ctx, inc, expect); err != nil {
 		if errors.Is(err, incident.ErrConflict) {
 			return Result{}, true, nil
@@ -543,4 +546,19 @@ func randomID() string {
 		panic("rule: no randomness available for incident ids: " + err.Error())
 	}
 	return hex.EncodeToString(b[:])
+}
+
+// occurredAt is when an arrival HAPPENED, which is what an occurrence records.
+//
+// Not when it reached this product. A peer holding events in a queue while the
+// link was down replays them hours later, and a list of voids all stamped with
+// the minute the queue drained describes the outage, not the till. The
+// incident's own timestamps stay on this product's clock -- they order its
+// writes, and the compare-and-swap depends on that -- so only the occurrence
+// takes the event's time.
+func occurredAt(ev event.Event, now time.Time) time.Time {
+	if !ev.At.IsZero() {
+		return ev.At
+	}
+	return now
 }

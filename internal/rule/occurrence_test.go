@@ -66,9 +66,14 @@ func TestEveryOccurrenceIsKeptInFull(t *testing.T) {
 	e, clk := occurrenceEngine(t, db)
 	ctx := context.Background()
 
+	// Each happened an hour before it arrived -- a queue draining after the
+	// link came back.
+	happened := func(i int) time.Time { return t0.Add(time.Duration(i)*time.Minute - time.Hour) }
 	for i, d := range []string{"invoice 1001, $12", "invoice 1002, $340", "invoice 1003, $8"} {
 		*clk = t0.Add(time.Duration(i) * time.Minute)
-		if _, err := e.Handle(ctx, voided("wv01-register-1", d)); err != nil {
+		ev := voided("wv01-register-1", d)
+		ev.At = happened(i)
+		if _, err := e.Handle(ctx, ev); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -96,6 +101,10 @@ func TestEveryOccurrenceIsKeptInFull(t *testing.T) {
 	for i, o := range got {
 		if !strings.Contains(o.Detail, want[i]) || o.Seq != 3-i {
 			t.Errorf("occurrence %d = seq %d %q, want seq %d with %s", i, o.Seq, o.Detail, 3-i, want[i])
+		}
+		if !o.At.Equal(happened(2 - i)) {
+			t.Errorf("occurrence %d is stamped %s, want %s -- when it HAPPENED, not when "+
+				"a queue delivered it", o.Seq, o.At, happened(2-i))
 		}
 	}
 }
