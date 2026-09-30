@@ -61,8 +61,12 @@ func TestADefaultNeverOverridesADecision(t *testing.T) {
 		"another product with that name": {Slug: "lsprotect", Conditions: sentryLink(nil, nil).Conditions},
 	} {
 		c := &Config{Links: []Link{l}}
-		if ApplyPeerDefaults(c) {
-			t.Errorf("%s, and the default was written anyway", name)
+		before := c.Links[0].Overrides["sentry-access-denied"]
+		ApplyPeerDefaults(c)
+		after := c.Links[0].Overrides["sentry-access-denied"]
+		if (before.PerOccurrence == nil) != (after.PerOccurrence == nil) ||
+			(before.PerOccurrence != nil && *before.PerOccurrence != *after.PerOccurrence) {
+			t.Errorf("%s, and the per_occurrence default was written anyway", name)
 		}
 	}
 }
@@ -112,5 +116,68 @@ links:
 	if o := back.Links[0].Overrides["sentry-access-denied"]; o.PerOccurrence == nil || *o.PerOccurrence {
 		t.Error("the decision was applied in memory and never written to config.yaml, " +
 			"so nobody reading the file can see why access denials fold")
+	}
+}
+
+// A STOPPED SENTRY HANDS THE DOORS BACK AT EVERY SITE, NOT ONLY RE-PAIRED ONES.
+//
+// A site paired before Sentry 1.6.16 has no sentry-monitoring-stopped at all,
+// and approving it from the card deliberately leaves demotes_claim off -- so
+// Stop kept the doors with a Sentry watching nothing until the silence window
+// ran out. The operator asked for it to work without a re-pair.
+func TestAStoppedSentryHandsBackAccessAtAnOldPairing(t *testing.T) {
+	old := sentryLink(nil, nil) // paired before 1.6.16: no such condition
+	c := &Config{Links: []Link{withKey(old)}}
+	if !ApplyPeerDefaults(c) {
+		t.Fatal("nothing was applied to a Sentry pairing without monitoring-stopped")
+	}
+	peers, _ := BuildLinks(c)
+	if !peers[0].Allows("sentry-monitoring-stopped") {
+		t.Fatal("monitoring-stopped is still not accepted; Sentry's Stop is refused and " +
+			"offered for approval, and the doors stay with it")
+	}
+	if !peers[0].DemotesClaim("sentry-monitoring-stopped") {
+		t.Error("monitoring-stopped is accepted but does not hand Access back")
+	}
+
+	// Approved from the card, which leaves demotion off: switched on.
+	card := sentryLink(nil, nil)
+	card.Conditions = append(card.Conditions, LinkCondition{Name: "sentry-monitoring-stopped",
+		Meaning: "approved from the card", Severity: "medium"})
+	c = &Config{Links: []Link{withKey(card)}}
+	ApplyPeerDefaults(c)
+	peers, _ = BuildLinks(c)
+	if !peers[0].DemotesClaim("sentry-monitoring-stopped") {
+		t.Error("monitoring-stopped approved from the card still does not demote")
+	}
+	n := 0
+	for _, cond := range c.Links[0].Conditions {
+		if cond.Name == "sentry-monitoring-stopped" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("monitoring-stopped appears %d times; it was added again beside the approved one", n)
+	}
+}
+
+// Applied on a copy, it must not write into the condition list the running
+// configuration still holds -- Config is copied by value on every save, and
+// its slices are shared.
+func TestTheConditionDefaultNeverWritesIntoTheRunningConfiguration(t *testing.T) {
+	card := sentryLink(nil, nil)
+	card.Conditions = append(card.Conditions, LinkCondition{Name: "sentry-monitoring-stopped",
+		Meaning: "approved from the card", Severity: "medium"})
+	running := Config{Links: []Link{card}}
+	next := running
+	next.Links = append([]Link(nil), running.Links...) // as storePeer clones
+
+	ApplyPeerDefaults(&next)
+
+	for _, cond := range running.Links[0].Conditions {
+		if cond.Name == "sentry-monitoring-stopped" && cond.DemotesClaim {
+			t.Fatal("applying the default to a copy switched demotion on in the RUNNING " +
+				"configuration, before -- or without -- the copy ever being saved")
+		}
 	}
 }

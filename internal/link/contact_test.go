@@ -102,3 +102,27 @@ func TestEveryReplyCarriesThePeersHeartbeatRate(t *testing.T) {
 		t.Errorf("an event reply carried heartbeat_seconds %d, want 40", got.HeartbeatSeconds)
 	}
 }
+
+// THE REPLY TO AN EVENT SAYS WHETHER RAISING IT HANDS THE CAPABILITY BACK --
+// the effective value, so a peer states what will happen instead of guessing
+// from how old its pairing is.
+func TestAnEventReplySaysWhetherItDemotesTheClaim(t *testing.T) {
+	h := newHarness(t)
+
+	blocked := h.post(RouteEvents, h.envelope(t, func(e *Envelope) {
+		e.Condition, e.State, e.EventID = "sentry-blocked-locally", StateRaised, "evt-demote"
+	}), "n-demote")
+	if got := decode(t, blocked); got.DemotesClaim == nil || !*got.DemotesClaim {
+		t.Errorf("a demoting condition's reply carried demotes_claim %v, want true", got.DemotesClaim)
+	}
+
+	sweep := h.post(RouteEvents, h.envelope(t, nil), "n-sweep")
+	if got := decode(t, sweep); got.DemotesClaim == nil || *got.DemotesClaim {
+		t.Errorf("an ordinary condition's reply carried demotes_claim %v, want false", got.DemotesClaim)
+	}
+
+	beat := h.post(RouteHeartbeat, []byte(`{}`), "n-beat2")
+	if got := decode(t, beat); got.DemotesClaim != nil {
+		t.Error("a heartbeat reply carried demotes_claim; it is about an event's condition")
+	}
+}

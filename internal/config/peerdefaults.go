@@ -1,5 +1,11 @@
 package config
 
+import (
+	"slices"
+
+	"github.com/suburbazine/Unifi-Notification-Matrix/internal/incident"
+)
+
 // Decisions the operator has made about a first-party peer's conditions,
 // applied to sites that paired before the peer could declare them itself.
 //
@@ -34,6 +40,32 @@ var firstPartyDefaults = map[string]map[string]LinkOverride{
 
 func boolPtr(b bool) *bool { return &b }
 
+// firstPartyConditions are conditions a first-party peer sends that the
+// operator has decided to accept -- behaviour included -- without an approval
+// click at every site.
+//
+// SENTRY'S MONITORING-STOPPED. Sentry 1.6.16 raises it while it is running but
+// watching nothing, and it is meant to hand Access straight back to this
+// product's own ingest. But a site paired before 1.6.16 stores a manifest
+// without it: the condition is refused, then offered for approval, and
+// approving it from the card deliberately does NOT carry demotes_claim -- so
+// a stopped Sentry kept the doors for the whole silence window, watched by
+// nothing. The operator asked for it to work everywhere without a re-pair.
+//
+// Safe to accept unreviewed for one reason, and the reason is the whole
+// justification: raising it can ONLY make this product take the doors back.
+// It cannot silence, lower or suppress anything.
+var firstPartyConditions = map[string][]LinkCondition{
+	"sentry": {{
+		Name: "sentry-monitoring-stopped",
+		Meaning: "Sentry is running but no watch is active, so it is not watching " +
+			"the doors; this product watches them itself until Sentry starts again.",
+		Severity:     incident.SeverityMedium,
+		Momentary:    false,
+		DemotesClaim: true,
+	}},
+}
+
 // ApplyPeerDefaults writes any first-party default that applies into c, and
 // reports whether it changed anything.
 func ApplyPeerDefaults(c *Config) bool {
@@ -43,6 +75,9 @@ func ApplyPeerDefaults(c *Config) bool {
 	changed := false
 	for i := range c.Links {
 		l := &c.Links[i]
+		if applyFirstPartyConditions(l) {
+			changed = true
+		}
 		defaults, ok := firstPartyDefaults[l.Slug]
 		if !ok {
 			continue
@@ -73,6 +108,44 @@ func ApplyPeerDefaults(c *Config) bool {
 			l.Overrides[cond] = o
 			changed = true
 		}
+	}
+	return changed
+}
+
+// applyFirstPartyConditions makes sure a first-party peer's accepted
+// conditions are present and behave as decided.
+//
+// The condition list is REPLACED rather than written into. A Config is copied
+// by value on every save, so its Links' condition slices are shared with the
+// configuration the daemon is running; setting a field through them would
+// change the running configuration before this one was saved -- or when it
+// never is.
+func applyFirstPartyConditions(l *Link) bool {
+	want, ok := firstPartyConditions[l.Slug]
+	if !ok {
+		return false
+	}
+	conds := slices.Clone(l.Conditions)
+	changed := false
+	for _, w := range want {
+		found := false
+		for j := range conds {
+			if conds[j].Name != w.Name {
+				continue
+			}
+			found = true
+			if w.DemotesClaim && !conds[j].DemotesClaim {
+				conds[j].DemotesClaim = true
+				changed = true
+			}
+		}
+		if !found {
+			conds = append(conds, w)
+			changed = true
+		}
+	}
+	if changed {
+		l.Conditions = conds
 	}
 	return changed
 }

@@ -185,6 +185,14 @@ type reply struct {
 	// months ago at its next contact, with nothing re-paired. A peer that
 	// does not read it keeps its own rate and is judged by the window anyway.
 	HeartbeatSeconds int `json:"heartbeat_seconds,omitempty"`
+
+	// DemotesClaim is, for an accepted event, whether raising this condition
+	// hands the peer's capability back to this product's own source -- the
+	// EFFECTIVE value, after first-party defaults and approvals, not what the
+	// peer declared. So a peer can say truthfully "stopping hands the doors
+	// back" or "it will not, and here is how to fix that", instead of guessing
+	// from how old its pairing is. Absent on anything but an event reply.
+	DemotesClaim *bool `json:"demotes_claim,omitempty"`
 }
 
 func heartbeatSeconds(p Peer) int { return int(p.HeartbeatEvery() / time.Second) }
@@ -368,7 +376,9 @@ func (rc *Receiver) events(w http.ResponseWriter, r *http.Request, cred Credenti
 		if seen {
 			rc.record(Receipt{At: now, LinkID: cred.LinkID, Route: r.URL.Path,
 				Accepted: true, Duplicate: true})
-			rc.ok(w, now, reply{Accepted: true, Duplicate: true, HeartbeatSeconds: heartbeatSeconds(peer)})
+			demotes := peer.DemotesClaim(env.Condition)
+			rc.ok(w, now, reply{Accepted: true, Duplicate: true,
+				HeartbeatSeconds: heartbeatSeconds(peer), DemotesClaim: &demotes})
 			return
 		}
 	}
@@ -396,7 +406,9 @@ func (rc *Receiver) events(w http.ResponseWriter, r *http.Request, cred Credenti
 	}
 
 	rc.record(Receipt{At: now, LinkID: cred.LinkID, Route: r.URL.Path, Accepted: true})
-	rc.ok(w, now, reply{Accepted: true, HeartbeatSeconds: heartbeatSeconds(peer)})
+	demotes := peer.DemotesClaim(env.Condition)
+	rc.ok(w, now, reply{Accepted: true, HeartbeatSeconds: heartbeatSeconds(peer),
+		DemotesClaim: &demotes})
 }
 
 // ok writes the bounded reply, filling in the delivery status.

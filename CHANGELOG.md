@@ -13,9 +13,24 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Changed
+
+- **A stopped Sentry hands the doors back at every site, with nothing to
+  re-pair or edit.** Sentry 1.6.16 reports when it is running but watching
+  nothing, and that is meant to put this product's own Access ingest straight
+  back in charge. At a site paired on an earlier Sentry, though, that report
+  was refused until somebody approved it — and approving it from the Peer link
+  page deliberately does not let it take anything back, so a stopped Sentry
+  kept the doors, watched by nothing, until its silence window ran out.
+
+  This release accepts Sentry's monitoring-stopped report on its own, at start
+  and at pairing, and makes it hand Access back. It is safe to accept
+  unreviewed for one reason: all it can ever do is make this product watch the
+  doors itself. It cannot silence anything.
+
+  The reply to a paired product's event now says whether raising it hands the
+  capability back, so Sentry's log can say what will happen when it is stopped
+  instead of guessing from how old its pairing is.
 
 ## [0.5.2] — 2026-09-30
 
