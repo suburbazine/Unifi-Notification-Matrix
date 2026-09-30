@@ -204,11 +204,16 @@ func linkCertificate(cfg *config.Config, save func(*config.Config) error) (certP
 
 // linkDeps assembles what the receiver needs from the running daemon.
 type linkDeps struct {
-	cfg       func() *config.Config
-	saveCfg   func(*config.Config) error
-	state     *linkState
-	db        *store.SQLite
-	delivery  *config.Delivery
+	cfg     func() *config.Config
+	saveCfg func(*config.Config) error
+	state   *linkState
+	db      *store.SQLite
+	// delivery is the channel set AS IT IS NOW. It was a pointer captured at
+	// start, and when saving a channel began rebuilding the set, every peer
+	// was told the health of one that had been closed -- "ok" from queues
+	// nothing delivers through any more.
+	delivery  func() *config.Delivery
+	contact   func(slug string, now time.Time)
 	handle    func(context.Context, event.Event) error
 	auditLog  audit.Log
 	pairer    *link.Pairer
@@ -227,7 +232,8 @@ func (d linkDeps) build() link.Deps {
 			_, c := config.BuildLinks(d.cfg())
 			return c
 		},
-		Ingest: d.handle,
+		Ingest:  d.handle,
+		Contact: d.contact,
 		Seen: func(ctx context.Context, linkID, eventID string, now time.Time, ttl time.Duration) (bool, error) {
 			return d.db.SeenEvent(ctx, linkID, eventID, now, ttl)
 		},
@@ -236,7 +242,7 @@ func (d linkDeps) build() link.Deps {
 		},
 		Channels: func() []link.ChannelState {
 			var out []link.ChannelState
-			for _, st := range d.delivery.Stats() {
+			for _, st := range d.delivery().Stats() {
 				out = append(out, link.ChannelState{
 					Name: st.Channel, Enabled: true,
 					ConsecutiveFails: st.ConsecutiveFails,
@@ -635,4 +641,38 @@ func manifestConditions(in []config.LinkCondition) []link.ConditionSpec {
 		})
 	}
 	return out
+}
+
+// momentaryFor decides whether a condition is owed a delivery even after it
+// has cleared: this product's own catalogue for its own conditions, and the
+// paired peer's approved manifest -- with the operator's override -- for a
+// peer's.
+//
+// THE SECOND HALF WAS MISSING. The scheduler was built with the native
+// catalogue alone, so a peer's `momentary` proposal and the operator's
+// override of it were stored, shown, argued over in the design, and read by
+// nothing. Every peer condition behaved as state: a one-shot event the peer
+// raised and cleared before the first scheduler tick was never delivered at
+// all, and that included Sentry's own link test. Found by the Lightspeed
+// Rewards session reading the scheduler before writing a client for it.
+//
+// The condition arrives as the scheduler has it -- read back out of a dedup
+// key, so lower-cased with "/" replaced -- and is compared after the same
+// cleaning, or a manifest name with a capital in it would never match.
+func momentaryFor(peers []link.Peer, condition string) bool {
+	if event.IsMomentary(condition) {
+		return true
+	}
+	clean := func(s string) string {
+		return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(s)), "/", "_")
+	}
+	want := clean(condition)
+	for _, p := range peers {
+		for _, spec := range p.Manifest.Conditions {
+			if clean(spec.Name) == want {
+				return p.IsMomentary(spec.Name)
+			}
+		}
+	}
+	return false
 }

@@ -63,9 +63,47 @@ func TestAManifestMustBeReviewable(t *testing.T) {
 		t.Errorf("an empty manifest was accepted: %v", err)
 	}
 
-	noCap := Manifest{Conditions: []ConditionSpec{spec("sentry-x")}}
-	if err := noCap.Validate("sentry"); !errors.Is(err, ErrNoCapability) {
-		t.Errorf("a manifest claiming no capability was accepted: %v", err)
+	// A capability that names nothing this product runs would suppress nothing
+	// and still be shown as SERVING it: coverage on the page, none in fact.
+	bogus := Manifest{Capability: "rewards", Conditions: []ConditionSpec{spec("sentry-x")}}
+	if err := bogus.Validate("sentry"); !errors.Is(err, ErrCapability) {
+		t.Errorf("a capability naming no source this product has was accepted: %v", err)
+	}
+}
+
+// A PEER THAT STANDS IN FOR NOTHING CAN STILL PAIR.
+//
+// The capability was required, which meant a product with no counterpart here
+// -- a loyalty system, a backup agent -- could not pair at all, or could only
+// by inventing a claim to a source that does not exist. Most peers are that
+// kind: they add events, they displace nothing.
+func TestAPeerWithNoCapabilityPairs(t *testing.T) {
+	m := Manifest{Conditions: []ConditionSpec{{
+		Name: "lsrewards-redemption-without-reward", Meaning: "A free item was " +
+			"given at the till with no reward behind it.",
+		Severity: "high", Momentary: true,
+	}}}
+	if err := m.Validate("lsrewards"); err != nil {
+		t.Fatalf("a manifest that claims no capability was refused: %v -- a product "+
+			"that stands in for none of this product's sources cannot pair at all", err)
+	}
+
+	p := NewPairer("aa:bb")
+	p.NewKey = func() (string, []byte, error) { return "lnk_TEST", make([]byte, KeyBytes), nil }
+	code, err := p.Offer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, peer, err := p.Complete(PairRequest{
+		Slug: "lsrewards", Fingerprint: "aabb", Nonce: "n1",
+		Proof:    PairProof(code, "client", "lsrewards", "aabb", "n1"),
+		Manifest: m,
+	})
+	if err != nil {
+		t.Fatalf("pairing a capability-less peer failed: %v", err)
+	}
+	if res.Capability != "" || peer.Manifest.Capability != "" {
+		t.Errorf("a peer that claimed nothing came out holding %q", res.Capability)
 	}
 }
 

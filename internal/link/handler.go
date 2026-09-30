@@ -98,6 +98,20 @@ type Deps struct {
 	// returned to the caller: the wire answer is always the same.
 	Record func(Receipt)
 
+	// Contact records that a paired peer was heard from, for its deadman.
+	//
+	// Called for EVERY authenticated request, not only heartbeats: an event is
+	// as good a proof of life as a heartbeat is, and a peer busy sending must
+	// not be reported silent because its heartbeat timer happened to be late.
+	// Called for NOTHING unauthenticated. A peer's liveness that anybody on the
+	// network could refresh by sending garbage at the port is a deadman anybody
+	// can disarm.
+	//
+	// It exists because heartbeats used to land only in a capability claim, so
+	// a peer that claims nothing -- most of them -- could die and be noticed by
+	// nothing at all.
+	Contact func(slug string, now time.Time)
+
 	// Propose remembers a condition an AUTHENTICATED peer sent that its
 	// approved manifest does not contain, so the operator can approve it from
 	// the page instead of editing the configuration file.
@@ -257,6 +271,13 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// impossible; treated as a failure rather than assumed away.
 		deny(cred.LinkID, CauseNoPeer, "no peer for this link")
 		return
+	}
+
+	// Authenticated and resolved to a peer: that is proof of life, whatever
+	// the request turns out to contain. Recorded before the route is handled,
+	// so an event refused for its content still says the peer is there.
+	if rc.deps.Contact != nil {
+		rc.deps.Contact(peer.Slug, now)
 	}
 
 	switch r.URL.Path {

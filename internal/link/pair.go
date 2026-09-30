@@ -129,8 +129,20 @@ func proofBytes(code, role, party, fingerprint, nonce string) []byte {
 }
 
 // PairRequest is what a peer sends to /link/pair.
+//
+// THERE IS NO CODE IN IT, and there must never be one. It had a `code` field,
+// which Complete never read -- it checks the proof against the code it offered
+// -- and which a peer following the struct would fill in. That sent the code
+// itself to whatever terminated TLS on the way, and anything that can
+// terminate TLS can reach this port: holding the code, it pairs as the peer
+// inside the window and the proof protected nothing. The proof exists so that
+// knowing the code can be demonstrated without the code ever travelling.
+// Found by the Lightspeed Rewards session reading this file.
+//
+// A peer that still sends one is not refused: that would protect nothing,
+// since the thing in the middle would simply strip it. The field is gone so
+// that nobody writing a client from this struct is invited to send it.
 type PairRequest struct {
-	Code string `json:"code"`
 	Slug string `json:"product"`
 
 	// Fingerprint is the certificate the peer SAW. Sent so the two sides can

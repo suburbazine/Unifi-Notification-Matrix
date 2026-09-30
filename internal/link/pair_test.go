@@ -1,6 +1,7 @@
 package link
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -24,7 +25,7 @@ func pairer(t *testing.T) (*Pairer, string) {
 func pairReq(code, fingerprint string) PairRequest {
 	m := sentry().Manifest
 	return PairRequest{
-		Code: code, Slug: "sentry", Fingerprint: fingerprint, Nonce: "pair-nonce",
+		Slug: "sentry", Fingerprint: fingerprint, Nonce: "pair-nonce",
 		Proof:    PairProof(code, "client", "sentry", fingerprint, "pair-nonce"),
 		Manifest: m,
 	}
@@ -266,5 +267,47 @@ func TestAPeerCannotPairUnderAnUnusableSlug(t *testing.T) {
 		if _, _, err := p.Complete(req); !errors.Is(err, ErrManifestNeeded) {
 			t.Errorf("slug %q paired, or failed for the wrong reason: %v", bad, err)
 		}
+	}
+}
+
+// THE PAIRING CODE NEVER TRAVELS.
+//
+// The request had a `code` field that nothing read. A client following the
+// struct filled it in, which sent the code itself to anything terminating TLS
+// on the way -- and that thing, holding the code, could pair as the peer inside
+// the window. The proof is what exists to demonstrate knowledge of the code
+// without sending it, and a field carrying the code alongside undid that.
+func TestThePairingRequestHasNowhereToPutTheCode(t *testing.T) {
+	_, code := pairer(t)
+	b, err := json.Marshal(pairReq(code, fpA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), code) {
+		t.Errorf("the pairing request carries the pairing code itself: %s -- anything "+
+			"terminating TLS in between can read it and pair in the peer's place", b)
+	}
+	if strings.Contains(string(b), `"code"`) {
+		t.Errorf("the pairing request has a code field again: %s", b)
+	}
+}
+
+// And a client that still sends one pairs anyway. Refusing it would protect
+// nothing -- the thing in the middle would just strip the field -- and it
+// would break every peer written before the field was removed.
+func TestAClientThatStillSendsTheCodeIsNotRefused(t *testing.T) {
+	p, code := pairer(t)
+	b, err := json.Marshal(pairReq(code, fpA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := strings.Replace(string(b), "{", `{"code":"`+code+`",`, 1)
+
+	var req PairRequest
+	if err := json.Unmarshal([]byte(legacy), &req); err != nil {
+		t.Fatalf("a request with a code field no longer decodes: %v", err)
+	}
+	if _, _, err := p.Complete(req); err != nil {
+		t.Errorf("a peer that still sends the code was refused: %v", err)
 	}
 }

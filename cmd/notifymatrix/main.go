@@ -959,8 +959,23 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 		}
 	}
 
+	// The paired peers as the configuration has them NOW. The configuration
+	// the daemon started with until the live one exists, further down, where
+	// this is replaced with a reader of it -- before the scheduler's goroutine
+	// starts, so nothing reads it while it is being swapped.
+	livePeers := func() []link.Peer {
+		p, _ := config.BuildLinks(cfg)
+		return p
+	}
+
 	sched, err := escalate.NewScheduler(db, policies, deliver,
-		escalate.WithQuietHours(cfg.QuietHours))
+		escalate.WithQuietHours(cfg.QuietHours),
+		// Peers' conditions too, so a peer's momentary proposal and the
+		// operator's override of it are what decide, and a peer paired or an
+		// override changed after start counts at once.
+		escalate.WithMomentary(func(condition string) bool {
+			return momentaryFor(livePeers(), condition)
+		}))
 	if err != nil {
 		return err
 	}
@@ -1041,6 +1056,18 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	// Peer state. Empty and inert unless something is paired.
 	linkPeers, _ := config.BuildLinks(cfg)
 	links := newLinkState(linkPeers)
+
+	// Every paired peer's deadman, whether or not it claims anything.
+	peerLive := newPeerLiveness(started, peerSilentAfter,
+		func(ctx context.Context, slug, why string) error {
+			_, err := engine.RaiseInternalFor(ctx, peerEntity(slug), event.ConditionSourceSilent,
+				peerSilentSeverity, "Peer link: "+slug+" has gone silent", why)
+			return err
+		},
+		func(ctx context.Context, slug string) error {
+			_, err := engine.ResolveInternalFor(ctx, peerEntity(slug), event.ConditionSourceSilent)
+			return err
+		})
 
 	// Held so the interface can offer a pairing code. Nil until the listener
 	// starts, which is also the honest answer: with no listener there is
@@ -1182,6 +1209,13 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 		// it; every change needs the password.
 		var cfgMu sync.RWMutex
 		current := cfg
+		livePeers = func() []link.Peer {
+			cfgMu.RLock()
+			c := current
+			cfgMu.RUnlock()
+			p, _ := config.BuildLinks(c)
+			return p
+		}
 
 		// The amendment path needs the same things the link receiver's deps
 		// need, and it is built HERE rather than inside the listener block
@@ -1835,7 +1869,8 @@ process elevates. This will do it for you, prompting if it has to:
 				},
 				state:    links,
 				db:       db,
-				delivery: delivery,
+				delivery: func() *config.Delivery { return deliveryRef.Load() },
+				contact:  peerLive.contact,
 				handle: func(ctx context.Context, ev event.Event) error {
 					activity.observe(ev)
 					_, err := engine.Handle(ctx, ev)
@@ -1894,6 +1929,14 @@ process elevates. This will do it for you, prompting if it has to:
 	// absence of one.
 	go activity.run(ingestCtx)
 	go cfgWatch.run(ingestCtx)
+	go peerLive.run(ingestCtx, func() []string {
+		ps := livePeers()
+		slugs := make([]string, 0, len(ps))
+		for _, p := range ps {
+			slugs = append(slugs, p.Slug)
+		}
+		return slugs
+	}, 30*time.Second)
 
 	var ingestDone sync.WaitGroup
 	ingestDone.Add(1)

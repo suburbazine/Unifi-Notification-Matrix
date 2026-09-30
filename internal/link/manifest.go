@@ -57,7 +57,16 @@ type ConditionSpec struct {
 type Manifest struct {
 	// Capability is what this peer claims to serve, named after the source it
 	// displaces: "access". At most one peer may hold a capability.
-	Capability string          `json:"capability"`
+	//
+	// OPTIONAL, and empty is the ordinary case for most peers. A capability is
+	// a claim to stand in for one of THIS product's own sources, so that ours
+	// stands down while the peer is healthy -- Sentry watching the doors in
+	// place of our Access ingest. A product with no counterpart here, a loyalty
+	// system or a backup agent, displaces nothing and has nothing to claim. It
+	// was required, and the only way to pair such a product was to invent a
+	// capability, which the page then reported as "SERVING REWARDS": a claim to
+	// be standing in for a source that does not exist.
+	Capability string          `json:"capability,omitempty"`
 	Conditions []ConditionSpec `json:"conditions"`
 }
 
@@ -108,6 +117,11 @@ var reservedSlugs = map[string]bool{
 	"inbound": true, "internal": true,
 }
 
+// claimable are the sources a peer may stand in for. The same three as the
+// reserved slugs that are sources; inbound and internal are not things a peer
+// could serve in their place.
+var claimable = map[string]bool{"protect": true, "access": true, "network": true}
+
 // ValidSlug reports whether a product slug is usable.
 //
 // Lower-case, digits and hyphens, starting with an alphanumeric. The slug is
@@ -137,7 +151,7 @@ var (
 
 	ErrManifestEmpty    = errors.New("link: a manifest with no conditions declares nothing")
 	ErrManifestTooLarge = errors.New("link: manifest is too large to review")
-	ErrNoCapability     = errors.New("link: manifest declares no capability")
+	ErrCapability       = errors.New("link: capability names no source this product has")
 	ErrConditionPrefix  = errors.New("link: condition name must begin with the peer's slug")
 	ErrConditionDup     = errors.New("link: condition declared twice")
 	ErrNoMeaning        = errors.New("link: condition has no meaning for the operator to approve")
@@ -153,8 +167,15 @@ func (m Manifest) Validate(slug string) error {
 			"hyphens, at most %d, and not one of this product's own source "+
 			"names)", ErrSlug, slug, MaxSlugChars)
 	}
-	if strings.TrimSpace(m.Capability) == "" {
-		return ErrNoCapability
+	// A capability, when there is one, must name a source this product
+	// actually runs. Suppression is keyed on it -- our own events from that
+	// source stand down while the claim is held -- so a capability naming
+	// nothing suppresses nothing, while the page reports the peer as SERVING
+	// it. That is a claim with no substance, shown as coverage.
+	if c := strings.TrimSpace(m.Capability); c != "" && !claimable[c] {
+		return fmt.Errorf("%w: %q (a peer claims one of protect, access or network, "+
+			"or leaves capability empty when it stands in for none of them)",
+			ErrCapability, c)
 	}
 	if len(m.Conditions) == 0 {
 		return ErrManifestEmpty
