@@ -423,6 +423,13 @@ func LoadOrCreate(dataDir string) (*Config, error) {
 					"not be generated: %w", why, err)
 			}
 		}
+		// A first-party peer's condition that its old pairing could not
+		// declare -- see peerdefaults.go. Applied in memory whatever happens
+		// to the write, so it is in force this run; a failed write means it
+		// is applied again next start rather than that the daemon refuses to.
+		if ApplyPeerDefaults(cfg) {
+			_ = Save(dataDir, cfg)
+		}
 		return cfg, nil
 	}
 	if !errors.Is(err, ErrNotFound) {

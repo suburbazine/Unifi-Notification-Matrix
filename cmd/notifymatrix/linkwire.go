@@ -383,6 +383,9 @@ func (d linkDeps) storePeer(p link.Peer, key []byte) error {
 		next.Links = append(next.Links, entry)
 	}
 
+	// A peer pairing on a release older than its own declaration gets the
+	// operator's decision now, rather than at the next restart.
+	config.ApplyPeerDefaults(&next)
 	if err := d.saveCfg(&next); err != nil {
 		return err
 	}

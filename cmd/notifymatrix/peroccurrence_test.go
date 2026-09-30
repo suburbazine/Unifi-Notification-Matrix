@@ -104,3 +104,30 @@ func TestPerOccurrenceSurvivesPairingIntoTheConfiguration(t *testing.T) {
 			"decision; an operator at an already-paired site has no way to apply it")
 	}
 }
+
+// A SENTRY OLDER THAN ITS OWN DECLARATION, PAIRING TODAY, folds access denials
+// after review at once -- not at the next restart, when the startup pass would
+// otherwise have been the first thing to write the default in.
+func TestAnOldSentryPairingFoldsAccessDenialsImmediately(t *testing.T) {
+	cfg := &config.Config{}
+	d := linkDeps{
+		cfg:      func() *config.Config { return cfg },
+		saveCfg:  func(c *config.Config) error { cfg = c; return nil },
+		state:    newLinkState(nil),
+		auditLog: &capturingLog{},
+	}
+	old := link.Peer{Slug: "sentry", LinkID: "lnk_S", Manifest: link.Manifest{
+		Capability: "access",
+		Conditions: []link.ConditionSpec{{Name: "sentry-access-denied",
+			Meaning: "a door refused somebody", Severity: incident.SeverityHigh,
+			Momentary: true}}, // no per_occurrence: a Sentry older than 1.6.12
+	}}
+	if err := d.storePeer(old, make([]byte, link.KeyBytes)); err != nil {
+		t.Fatal(err)
+	}
+	peers, _ := config.BuildLinks(cfg)
+	if len(peers) != 1 || peers[0].IsPerOccurrence("sentry-access-denied") {
+		t.Error("an old Sentry paired today still re-alerts on every access denial " +
+			"after review until the daemon restarts")
+	}
+}
