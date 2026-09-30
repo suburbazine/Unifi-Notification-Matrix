@@ -47,6 +47,12 @@ type Config struct {
 	// ordinary case: nothing is paired and the listener does not exist.
 	Links []Link `json:"links,omitempty"`
 
+	// RetiredLinks are peer credentials this installation no longer honours,
+	// and why -- kept so a peer still sending with one is named on the Peer
+	// link page instead of being "a credential this installation has no
+	// record of". Link ids are not secrets; nothing here authenticates.
+	RetiredLinks []RetiredLink `json:"retired_links,omitempty"`
+
 	Channels Channels `json:"channels,omitempty"`
 
 	// Policies overrides the shipped defaults, keyed by severity. Absent means
@@ -698,4 +704,55 @@ func parseDuration(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("%q is negative", s)
 	}
 	return d, nil
+}
+
+// RetiredLink is a peer credential that was replaced or removed.
+type RetiredLink struct {
+	LinkID    string    `json:"link_id"`
+	Slug      string    `json:"slug"`
+	RetiredAt time.Time `json:"retired_at"`
+
+	// Why is "re-paired" or "unpaired": the two want different fixes. A
+	// product that re-paired and still sends the old id has part of itself
+	// that did not notice, and wants restarting. One that was unpaired here
+	// and was never told wants forgetting on its own side too.
+	Why string `json:"why"`
+}
+
+// MaxRetiredLinks bounds the list. A retired credential matters while the
+// product it belonged to might still be using it; after sixteen re-pairings,
+// the oldest is not the one anybody is chasing.
+const MaxRetiredLinks = 16
+
+// RetireLink records that a link id is no longer honoured.
+//
+// Builds a NEW slice rather than appending in place: a Config is copied by
+// value on every save, and an append into shared spare capacity would write
+// into the configuration the daemon is still using -- the aliasing bug the
+// Links list already had once.
+func (c *Config) RetireLink(linkID, slug string, at time.Time, why string) {
+	if linkID == "" {
+		return
+	}
+	next := make([]RetiredLink, 0, len(c.RetiredLinks)+1)
+	for _, r := range c.RetiredLinks {
+		if r.LinkID != linkID {
+			next = append(next, r)
+		}
+	}
+	next = append(next, RetiredLink{LinkID: linkID, Slug: slug, RetiredAt: at, Why: why})
+	if len(next) > MaxRetiredLinks {
+		next = next[len(next)-MaxRetiredLinks:]
+	}
+	c.RetiredLinks = next
+}
+
+// Retired returns what is known about a link id that is no longer honoured.
+func (c *Config) Retired(linkID string) (RetiredLink, bool) {
+	for i := len(c.RetiredLinks) - 1; i >= 0; i-- {
+		if c.RetiredLinks[i].LinkID == linkID {
+			return c.RetiredLinks[i], true
+		}
+	}
+	return RetiredLink{}, false
 }

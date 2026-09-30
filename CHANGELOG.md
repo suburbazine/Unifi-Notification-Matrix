@@ -13,9 +13,17 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Changed
+
+- **A product still sending with a credential this installation retired is
+  named on the Peer link page**, instead of being reported as "a credential
+  this installation has no record of". Re-pairing a product, or unpairing it
+  here, retires its previous credential, and part of the product may not
+  notice: a Sentry watch kept signing its heartbeats and its door events with
+  the credential a re-pair had replaced, and every one was refused as if a
+  stranger were knocking. The receipt now says whose credential it was, when
+  and why it was retired, and what to do — restart the product rather than
+  pair it again, which would only retire another.
 
 ## [0.5.0] — 2026-09-30
 

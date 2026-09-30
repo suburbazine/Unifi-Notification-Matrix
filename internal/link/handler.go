@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -97,6 +98,10 @@ type Deps struct {
 	// Record notes what happened for the operator-facing receipt. Never
 	// returned to the caller: the wire answer is always the same.
 	Record func(Receipt)
+
+	// Retired looks up a link id this installation used to honour. Nil, or
+	// not found, leaves an unknown id as unknown. See RetiredLink.
+	Retired func(linkID string) (RetiredLink, bool)
 
 	// Contact records that a paired peer was heard from, for its deadman.
 	//
@@ -253,7 +258,22 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		given := r.Header.Get(HeaderLinkID)
-		deny(given, verifyCause(creds, given, err), err.Error())
+		cause, reason := verifyCause(creds, given, err), err.Error()
+		// An id this installation has no credential for may be one it USED
+		// to have. Said by name on the receipt, because "no record of it"
+		// sends the operator looking for a stranger, when it is their own
+		// product with part of itself still holding the old pairing -- which
+		// is exactly what a Sentry watch did after a re-pair, heartbeats and
+		// door events alike.
+		//
+		// Receipt only. The wire answer is the same bare 404 as ever, and
+		// nothing here counts as contact: an old credential proves nothing.
+		if cause == CauseUnknownLink && given != "" && rc.deps.Retired != nil {
+			if old, ok := rc.deps.Retired(given); ok {
+				cause, reason = CauseRetiredLink, old.Sentence(given)
+			}
+		}
+		deny(given, cause, reason)
 		return
 	}
 
@@ -507,4 +527,21 @@ func causeFor(err error) Cause {
 	default:
 		return CauseInvalidEnvelope
 	}
+}
+
+// RetiredLink is a credential this installation used to honour.
+type RetiredLink struct {
+	Slug string
+	At   time.Time
+	Why  string // "re-paired" or "unpaired"
+}
+
+// Sentence says what happened, for the receipt.
+func (r RetiredLink) Sentence(linkID string) string {
+	who := r.Slug
+	if who == "" {
+		who = "a peer"
+	}
+	return fmt.Sprintf("%s was %s's credential until it was %s here on %s, and %s is "+
+		"still sending with it", linkID, who, r.Why, r.At.Format("Jan 2 at 15:04"), who)
 }

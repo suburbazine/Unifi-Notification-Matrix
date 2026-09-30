@@ -31,12 +31,16 @@ const (
 	CauseUnsigned       Cause = "unsigned"
 	CauseMalformedAuth  Cause = "malformed-auth"
 	CauseUnknownLink    Cause = "unknown-link-id"
-	CauseBadSignature   Cause = "bad-signature"
-	CauseClockSkew      Cause = "clock-skew"
-	CauseReplay         Cause = "replayed-nonce"
-	CauseNonceFull      Cause = "nonce-table-full"
-	CauseNoPeer         Cause = "no-peer-for-link"
-	CauseRateLimited    Cause = "over-the-rate-limit"
+	// CauseRetiredLink is an unknown id this installation USED to honour: a
+	// product still sending with the credential a re-pair or an unpair
+	// retired. Split out because it has a fix the generic one cannot name.
+	CauseRetiredLink  Cause = "retired-link-id"
+	CauseBadSignature Cause = "bad-signature"
+	CauseClockSkew    Cause = "clock-skew"
+	CauseReplay       Cause = "replayed-nonce"
+	CauseNonceFull    Cause = "nonce-table-full"
+	CauseNoPeer       Cause = "no-peer-for-link"
+	CauseRateLimited  Cause = "over-the-rate-limit"
 
 	// The request authenticated and its contents did not hold up.
 	CauseMalformedEnvelope Cause = "malformed-envelope"
@@ -172,7 +176,7 @@ func AllCauses() []Cause {
 	return []Cause{
 		CauseUndeclaredCondition,
 		CauseMethod, CauseNoRoute, CauseBodyUnreadable, CauseBodyTooLarge,
-		CauseUnsigned, CauseMalformedAuth, CauseUnknownLink, CauseBadSignature,
+		CauseUnsigned, CauseMalformedAuth, CauseUnknownLink, CauseRetiredLink, CauseBadSignature,
 		CauseClockSkew, CauseReplay, CauseNonceFull, CauseNoPeer,
 		CauseRateLimited,
 		CauseMalformedEnvelope, CauseInvalidEnvelope, CauseEnvelopeVersion,

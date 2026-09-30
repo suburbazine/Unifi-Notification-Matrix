@@ -2616,6 +2616,7 @@ var LINK_CAUSES = {
   "unsigned": "It sent no signature at all. That is usually something other than a peer knocking on the port.",
   "malformed-auth": "Its authentication headers were missing or unreadable.",
   "unknown-link-id": "It used a credential this installation has no record of. Either it was paired somewhere else, or you have forgotten it here and it has not been told.",
+  "retired-link-id": "It is still sending with a credential this installation retired — the line below says which product and when. If it re-paired, part of that product did not notice: restart it (for Sentry, stop and start the watch) so it picks up its current pairing. Do not pair again; that retires another. If it was unpaired here on purpose, remove the pairing on that product too.",
   "bad-signature": "Its credential is one we know and the signature did not match it. The two ends disagree about the key, so pair again rather than hunting for a typo.",
   "clock-skew": "Its clock is too far from this machine's. Fix the time on one of them; signed requests expire on purpose.",
   "replayed-nonce": "It reused a request identifier. Ordinarily a retry gone wrong, and the refusal is what stops it counting twice.",

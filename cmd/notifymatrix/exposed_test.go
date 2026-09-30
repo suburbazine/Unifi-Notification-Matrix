@@ -87,6 +87,7 @@ func TestAnUnauthenticatedRefusalIsNotWrittenToTheAuditLog(t *testing.T) {
 		link.CauseUnsigned,
 		link.CauseMalformedAuth,
 		link.CauseUnknownLink,
+		link.CauseRetiredLink,
 		link.CauseBadSignature,
 		link.CauseClockSkew,
 		link.CauseReplay,
@@ -151,7 +152,10 @@ func TestEveryRefusalCauseHasBeenDecidedAboutTheAuditLog(t *testing.T) {
 		link.CauseBodyUnreadable: true, link.CauseBodyTooLarge: true,
 		link.CauseUnsigned: true, link.CauseMalformedAuth: true,
 		link.CauseUnknownLink: true, link.CauseBadSignature: true,
-		link.CauseClockSkew: true, link.CauseReplay: true,
+		// Link ids are not secrets: anyone can send a retired one, so auditing
+		// it would let a stranger fill the audit log. Same reasoning as unknown.
+		link.CauseRetiredLink: true,
+		link.CauseClockSkew:   true, link.CauseReplay: true,
 		link.CauseNonceFull: true, link.CauseHelloClosed: true,
 		link.CausePairUnavailable: true, link.CausePairBody: true,
 		link.CausePairNoneOffered: true, link.CausePairExpired: true,

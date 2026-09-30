@@ -232,6 +232,10 @@ func (d linkDeps) build() link.Deps {
 			_, c := config.BuildLinks(d.cfg())
 			return c
 		},
+		Retired: func(id string) (link.RetiredLink, bool) {
+			r, ok := d.cfg().Retired(id)
+			return link.RetiredLink{Slug: r.Slug, At: r.RetiredAt, Why: r.Why}, ok
+		},
 		Ingest:  d.handle,
 		Contact: d.contact,
 		Seen: func(ctx context.Context, linkID, eventID string, now time.Time, ttl time.Duration) (bool, error) {
@@ -381,6 +385,12 @@ func (d linkDeps) storePeer(p link.Peer, key []byte) error {
 	}
 	if replaced == "" {
 		next.Links = append(next.Links, entry)
+	}
+	// The credential a re-pair replaces is retired by name, so a part of the
+	// product still sending with it is identified on the receipts instead of
+	// being reported as a stranger.
+	if replaced != "" && replaced != p.LinkID {
+		next.RetireLink(replaced, p.Slug, time.Now(), "re-paired")
 	}
 
 	// A peer pairing on a release older than its own declaration gets the
@@ -536,6 +546,7 @@ func forgetPeer(cur *config.Config, slug string) (next *config.Config, capabilit
 		if strings.EqualFold(l.Slug, slug) {
 			capability = l.Capability
 			found = true
+			n.RetireLink(l.LinkID, l.Slug, time.Now(), "unpaired")
 			continue
 		}
 		n.Links = append(n.Links, l)
