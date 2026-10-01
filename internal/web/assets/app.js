@@ -1396,6 +1396,7 @@ function refreshStatus(done) {
     renderDemoBanner(d.demo);
     state.selfWatch = d.self_watch || {};
     renderSelfWatchBanner(state.selfWatch);
+    renderDecisionsBanner(d.decisions);
     renderHealth(d.health);
     // Redrawn when either fact changes, because the tab may already have been
     // drawn without it. refreshAll fetches this and the tab side by side, and
@@ -2337,6 +2338,13 @@ function renderLinkSection(body, ctx) {
     return;
   }
 
+  // A DECISION WAITING COMES FIRST. Every banner and receipt sends the
+  // operator here, and the card used to sit three cards down, under the
+  // address, the pairing code and the paired products -- so following the
+  // banner landed on the fingerprint. Empty, it keeps its old place below.
+  var pending = st.proposals || [];
+  if (pending.length) body.appendChild(proposalsCard(pending));
+
   // What the peer needs, and the fingerprint in full: it is the value the
   // peer PINS, and a truncated one is something somebody pastes and then
   // wonders about.
@@ -2370,7 +2378,7 @@ function renderLinkSection(body, ctx) {
   // ABOVE the receipts, deliberately. Without it, a peer shipping a new
   // condition is a run of identical refusals in a log, and the only way
   // forward was a text editor.
-  body.appendChild(proposalsCard(st.proposals || []));
+  if (!pending.length) body.appendChild(proposalsCard(pending));
 
   body.appendChild(receiptsCard(st.receipts || [], st.since_seconds || 0));
 }
@@ -2388,16 +2396,25 @@ function renderLinkSection(body, ctx) {
 // revoked by accident.
 function proposalsCard(list) {
   var card = el("div", "card");
+  card.id = "link-decisions";
   card.appendChild(el("div", "card-title", "Waiting for your decision"));
   if (!list.length) {
     card.appendChild(el("div", "muted",
       "No peer is sending anything it has not declared."));
     return card;
   }
-  card.appendChild(el("div", "muted small",
-    "These events were REFUSED and stay refused until you approve them. A " +
-    "peer's next release usually does this: it has learned to report " +
-    "something your approved list does not have a name for."));
+  // Said as a warning, not as a muted note. At a real site a new release's
+  // events were refused for as long as it took somebody to notice a receipt
+  // further down this page; the answer was this card, drawn like a list.
+  var refused = list.reduce(function (n, p) { return n + (p.count || 0); }, 0);
+  card.appendChild(callout(
+    "These events are being REFUSED, and every one like them will be until you " +
+    "approve it here. A peer's next release usually does this: it has learned " +
+    "to report something your approved list does not have a name for. Nothing " +
+    "is lost while you decide -- it keeps retrying -- and there is no need to " +
+    "pair again.", "warn",
+    list.length + (list.length === 1 ? " kind" : " kinds") + " of event refused " +
+    refused + (refused === 1 ? " time" : " times")));
   list.forEach(function (p) { card.appendChild(proposalRow(p)); });
   return card;
 }
@@ -2728,7 +2745,7 @@ var LINK_CAUSES = {
   "malformed-envelope": "It authenticated and then sent something that is not an event.",
   "invalid-envelope": "It sent something outside the manifest you approved — a severity, a state or a field that does not match what it declared.",
   "dedup-key-disagreement": "Its idempotency key disagrees with the one this end computes, so the two products would file this alarm as two incidents that never merge. NOTHING IS WRONG WITH YOUR MANIFEST and there is nothing to approve: the peer is building the key from something other than the entity it sent. Both keys are in the line below — send them to whoever maintains that product. If it simply stops sending a key, this end computes one and the event goes through.",
-  "undeclared-condition": "It sent a condition its approved manifest does not contain, and the event was refused. Usually its next release doing something new. There is nothing to fix at the other end: the proposal is above, with what it means and what it wants to raise, and approving it is what lets the next one through.",
+  "undeclared-condition": "A DECISION IS WAITING FOR YOU. It sent a condition its approved manifest does not contain, so the event was refused — and every one like it will be until you approve it under “Waiting for your decision”. Usually its next release reporting something new. There is nothing to fix at the other end, and no need to pair again: it keeps retrying, and approving is what lets the next one through.",
   "envelope-version": "It speaks a different version of the link protocol. Nothing is wrong with your setup; one of the two products needs upgrading.",
   "over-the-rate-limit": "It sent far more in a minute than any working peer does. Nothing is lost — it will retry — but something on that end is looping, or somebody has a credential they should not.",
   "store-failed": "This machine could not record the event id. The peer will retry.",
@@ -2798,6 +2815,8 @@ function receiptsCard(rs, sinceSeconds) {
     // got wrong -- that no fixed translation can.
     var said = LINK_CAUSES[r.cause];
     if (said) why.appendChild(el("div", r.accepted ? "" : "audit-error", said));
+    // The refusal that is a question, not a fault: take them to the answer.
+    if (r.cause === "undeclared-condition") why.appendChild(decideButton());
     if (r.reason && r.reason !== said) {
       why.appendChild(el("div", said ? "muted small" : (r.accepted ? "" : "audit-error"), r.reason));
     }
@@ -5380,6 +5399,61 @@ function renderActivity(a) {
 // nothing outside this machine would notice it stop, and pairing a peer
 // elsewhere makes that false. An operator who fixes it watches this go away
 // rather than reading that it is fixed.
+// decideButton takes the operator from a refusal to the decision it is
+// waiting on: the "Waiting for your decision" card in Peer link.
+function decideButton() {
+  var b = el("button", "act small", "Decide now");
+  b.type = "button";
+  b.addEventListener("click", goToDecisions);
+  return b;
+}
+
+function goToDecisions() {
+  var card = byId("link-decisions");
+  if (card) { card.scrollIntoView({ block: "start" }); return; }
+  location.hash = "#settings/link";
+}
+
+// renderDecisionsBanner says, on every tab and to everyone, that a paired
+// product's events are being refused until somebody decides.
+//
+// It was a card inside Settings -> Peer link and a line in a receipts table,
+// and at a real site a new release's events were refused for as long as it
+// took somebody to open that section. Nobody opens a settings section to find
+// out that something is not arriving. Counts only: which product and which
+// conditions are behind the sign-in.
+function renderDecisionsBanner(dec) {
+  var existing = byId("decisions-banner");
+  var kinds = (dec && dec.kinds) || 0;
+  setTabCount("settings", kinds || "", "err");
+  if (!kinds) {
+    if (existing) existing.parentNode.removeChild(existing);
+    return;
+  }
+  var said = "A paired product is sending " + kinds + (kinds === 1 ? " kind" : " kinds") +
+    " of event nobody has approved yet, and each one is refused until somebody " +
+    "does (" + dec.refused + " refused so far). ";
+  // Updated IN PLACE on every poll, never rebuilt: a link replaced every few
+  // seconds can swallow the click aimed at it, and drops keyboard focus.
+  if (existing) { existing.firstChild.nodeValue = said; return; }
+  var b = el("div", "banner is-warn");
+  b.id = "decisions-banner";
+  b.appendChild(document.createTextNode(said));
+  var a = el("a", "", "Decide in Settings → Peer link");
+  a.href = "#settings/link";
+  a.addEventListener("click", function (e) {
+    if (state.tab === "settings" && byId("link-decisions")) { e.preventDefault(); goToDecisions(); }
+  });
+  b.appendChild(a);
+  // After the demo and self-watch banners: those say what this screen IS,
+  // which is the first thing to know about it.
+  var banners = document.querySelectorAll("body > .banner");
+  var last = banners.length ? banners[banners.length - 1] : null;
+  if (last && last.nextSibling) document.body.insertBefore(b, last.nextSibling);
+  else if (last) document.body.appendChild(b);
+  else document.body.insertBefore(b, document.body.firstChild);
+}
+
 function renderSelfWatchBanner(sw) {
   var existing = byId("selfwatch-banner");
   if (!sw || !sw.at_risk || !sw.detail) {

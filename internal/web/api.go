@@ -246,7 +246,15 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"health":              s.healthView(s.deps.Health()),
 		"setup":               s.setupSummary(),
 		"self_watch":          s.selfWatch(),
+		"decisions":           s.pendingDecisions(),
 	})
+}
+
+func (s *Server) pendingDecisions() PendingDecisions {
+	if s.deps.PendingDecisions == nil {
+		return PendingDecisions{}
+	}
+	return s.deps.PendingDecisions()
 }
 
 // selfWatch reports whether anything would notice this installation stopping.

@@ -1449,6 +1449,9 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			// Coverage means a paired peer today. An off-site heartbeat would
 			// count too and does not exist yet; when it does it belongs in
 			// this condition and nowhere else.
+			PendingDecisions: func() web.PendingDecisions {
+				return pendingDecisions(links.proposals.All())
+			},
 			SelfWatch: func() web.SelfWatch {
 				if !service.OnUniFiOS() {
 					return web.SelfWatch{}

@@ -762,3 +762,14 @@ func occurrenceFor(peers []link.Peer, ev event.Event) bool {
 	}
 	return false
 }
+
+// pendingDecisions is what the status page says is waiting in Peer link:
+// how many kinds of event are being refused, and how many times in all.
+func pendingDecisions(all []link.Proposal) web.PendingDecisions {
+	var p web.PendingDecisions
+	for _, pr := range all {
+		p.Kinds++
+		p.Refused += pr.Count
+	}
+	return p
+}

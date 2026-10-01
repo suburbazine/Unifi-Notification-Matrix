@@ -186,6 +186,11 @@ type Deps struct {
 	// yes by construction.
 	SelfWatch func() SelfWatch
 
+	// PendingDecisions counts the conditions paired peers are sending that
+	// their approved manifests do not contain -- refused until somebody
+	// approves them. Optional: nil means none.
+	PendingDecisions func() PendingDecisions
+
 	// Checklist reports what is still needed to make this installation work.
 	//
 	// Optional: a build that does not supply it simply has no setup panel. The
@@ -256,6 +261,21 @@ var ErrNotProposed = errors.New("web: that condition has not been proposed by th
 // died an hour ago. The demo banner is here for the same reason -- somebody
 // arriving at a tab somebody else left open has to be able to tell what they
 // are looking at without reading anything else.
+// PendingDecisions is what is waiting in Settings -> Peer link.
+//
+// ON THE PUBLIC STATUS, and counts only. A paired product's events being
+// refused is something the wall display should say, because nobody opens a
+// settings section to find out that alarms are not arriving: at a real site a
+// new Rewards release's events were refused for as long as it took somebody
+// to notice a receipt. Which conditions, and from what, stays behind the
+// sign-in with the rest of the pairing detail.
+type PendingDecisions struct {
+	// Kinds is how many distinct conditions are waiting.
+	Kinds int `json:"kinds"`
+	// Refused is how many events have been turned away for them so far.
+	Refused int `json:"refused"`
+}
+
 type SelfWatch struct {
 	// AtRisk is true when the daemon shares fate with what it watches AND
 	// nothing outside this machine would notice it stop.

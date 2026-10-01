@@ -39,6 +39,23 @@ view against the release before them.
   find. `notifymatrix uninstall` removes them. The router still needs its own
   forward for anything reached from outside the building.
 
+- **A paired product's refused events are now impossible to miss.** When a
+  peer sends a kind of event its approved list does not include, which is
+  usually its next release reporting something new, every one is refused
+  until somebody approves it. All that said so was a card well down Settings
+  → Peer link and a line in its receipts. At a real site, a new Rewards
+  release's events were refused for as long as it took somebody to look
+  there.
+
+  Now a banner on every tab, the wall board included, says how many kinds of
+  event are waiting and how many have been refused, and links to the
+  decision. The Settings tab carries the count. In Peer link the decision
+  comes first, as a warning, and every refusal in the receipts has a
+  *Decide now* button that goes to it. The banner shows counts only; which
+  product and which conditions stay behind the sign-in. Nothing changes for
+  the paired product: refused events are answered exactly as before, and it
+  keeps retrying until the decision is made.
+
 ### Changed
 
 - **The Ack-only listener's help now says the link needs the same port.**
