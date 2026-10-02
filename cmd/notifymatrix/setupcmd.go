@@ -141,6 +141,7 @@ func consoleCanAuthenticate(c config.Console) bool {
 
 func fromConfig(in setup.Input, cfg *config.Config) setup.Input {
 	in.Consoles = len(cfg.Consoles)
+	in.PairedPeers = len(cfg.Links)
 	seen := map[string]bool{}
 	in.HasConsoleKey = len(cfg.Consoles) > 0
 	for _, con := range cfg.Consoles {

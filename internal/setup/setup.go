@@ -160,6 +160,12 @@ type Input struct {
 	SourceNames   []string
 	HasConsoleKey bool
 
+	// PairedPeers is how many products are paired over the peer link. Each
+	// raises incidents here as surely as a console does, so an installation
+	// fed only by them -- Rewards, LSProtect, Sentry, with no UniFi at all --
+	// is watching something and is not "not set up".
+	PairedPeers int
+
 	ChannelsEnabled []string
 	AckBaseURL      string
 	Listen          string
@@ -271,9 +277,26 @@ func Remaining(in Input) []Step {
 // Deliberately NOT "everything is done". A product with a console, a source
 // and a channel works; the rest makes it better. Telling somebody they are not
 // ready when they are is how a checklist gets ignored.
+//
+// Something to watch is a console with a key and a source, OR a paired
+// product. An installation used only with paired products was called not set
+// up everywhere -- the header, the Setup count and a box across the incident
+// board saying nothing could raise an incident -- while its peers were
+// raising them.
 func Ready(in Input) bool {
-	return in.Consoles > 0 && in.HasConsoleKey &&
-		len(in.SourceNames) > 0 && len(in.ChannelsEnabled) > 0
+	unifi := in.Consoles > 0 && in.HasConsoleKey && len(in.SourceNames) > 0
+	return (unifi || in.PairedPeers > 0) && len(in.ChannelsEnabled) > 0
+}
+
+// peersOnly is an installation with paired products and no UniFi console,
+// for which the UniFi steps are a choice rather than something missing.
+func peersOnly(in Input) bool { return in.Consoles == 0 && in.PairedPeers > 0 }
+
+func pairedNote(in Input) string {
+	if in.PairedPeers == 1 {
+		return "not needed: 1 paired product raises incidents here"
+	}
+	return fmt.Sprintf("not needed: %d paired products raise incidents here", in.PairedPeers)
 }
 
 func consoleStep(in Input) Step {
@@ -295,6 +318,8 @@ func consoleStep(in Input) Step {
 		},
 	}
 	switch {
+	case peersOnly(in):
+		s.Status, s.State = Optional, "no console -- "+pairedNote(in)
 	case in.Consoles == 0:
 		s.Status, s.State = Todo, "no console configured"
 	case !in.HasConsoleKey:
@@ -321,6 +346,8 @@ func sourcesStep(in Input) Step {
 		},
 	}
 	switch {
+	case peersOnly(in):
+		s.Status, s.State = Optional, "no console to watch -- "+pairedNote(in)
 	case len(in.SourceNames) == 0:
 		s.Status, s.State = Todo, "no sources enabled on any console"
 	default:

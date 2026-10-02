@@ -63,6 +63,18 @@ view against the release before them.
   deliberately forwards a different outside port to it. It used to say only
   "never your public hostname", which read as if the two should differ.
 
+### Fixed
+
+- **An install fed only by paired products is no longer called "not set
+  up".** With Rewards, LSProtect or Sentry paired and no UniFi console, the
+  header said *not set up*, Setup showed a red count, and a large box across
+  the incident board said *Nothing is being watched yet … nothing can raise
+  one*, while the paired products were raising incidents. A paired product
+  now counts as something being watched. The board shows its usual *Nothing
+  open* state, and the console and sources steps are marked optional ("not
+  needed: 1 paired product raises incidents here") rather than to-do. A
+  console that is configured but broken is still a to-do.
+
 ## [0.5.5] — 2026-09-30
 
 ### Fixed
