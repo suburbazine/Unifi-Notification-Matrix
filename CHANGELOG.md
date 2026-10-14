@@ -13,6 +13,15 @@ view against the release before them.
 
 ## [Unreleased]
 
+Nothing yet. Entries land here as work merges, and the heading is renamed to
+the version on the day it ships — writing a release's section from scratch at
+tag time is how 0.1.8 nearly went out with none.
+
+## [0.6.0] — 2026-10-14
+
+**Update Lightspeed Rewards to 0.3.9 and LSProtect to 1.0.62 first.** A paired
+product older than those grants nothing, and this release refuses its events.
+
 ### Added
 
 - **Paired products grant commercial use, and without it their events are
@@ -1480,6 +1489,7 @@ They are not listed individually. Nothing was installed from them that a 0.1
 release does not supersede.
 
 [Unreleased]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.3.4...HEAD
+[0.6.0]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.6...v0.6.0
 [0.5.6]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/suburbazine/Unifi-Notification-Matrix/compare/v0.5.3...v0.5.4
