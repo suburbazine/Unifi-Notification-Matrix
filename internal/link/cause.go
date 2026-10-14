@@ -65,6 +65,10 @@ const (
 	// propose.go.
 	CauseUndeclaredCondition Cause = "undeclared-condition"
 
+	// CauseNoCommercialPermission is a partner event refused because no paired
+	// partner grants commercial use of this product. See commercial.go.
+	CauseNoCommercialPermission Cause = "no-commercial-permission"
+
 	// CauseDedupKey is split out for the third time this pattern has been
 	// needed, and for the same reason: the operator does a different thing
 	// about it.
@@ -174,7 +178,7 @@ func pairCause(err error) Cause {
 // forgetting visible.
 func AllCauses() []Cause {
 	return []Cause{
-		CauseUndeclaredCondition,
+		CauseUndeclaredCondition, CauseNoCommercialPermission,
 		CauseMethod, CauseNoRoute, CauseBodyUnreadable, CauseBodyTooLarge,
 		CauseUnsigned, CauseMalformedAuth, CauseUnknownLink, CauseRetiredLink, CauseBadSignature,
 		CauseClockSkew, CauseReplay, CauseNonceFull, CauseNoPeer,

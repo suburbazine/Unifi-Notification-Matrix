@@ -13,9 +13,37 @@ view against the release before them.
 
 ## [Unreleased]
 
-Nothing yet. Entries land here as work merges, and the heading is renamed to
-the version on the day it ships — writing a release's section from scratch at
-tag time is how 0.1.8 nearly went out with none.
+### Added
+
+- **Paired products grant commercial use, and without it their events are
+  refused.** NotifyMatrix still checks no licence of its own. Its commercial
+  partners, Lightspeed Rewards and LSProtect, include commercial use of
+  NotifyMatrix in their Pro tiers, and say so on the peer link. They send
+  `"commercial_permission": true` in the signed body of every heartbeat, ping
+  and event, and when they pair. When at least one product is paired and none
+  of them grants it, NotifyMatrix refuses their events. Nothing is lost: they
+  keep retrying, and their events land once any paired product grants it.
+
+  Heartbeats are still accepted, so a partner is never reported silent over
+  this, and the heartbeat reply tells the partner
+  (`commercial_permission_required`) so it can show its own operator why its
+  events aren't landing. Pairing still works, because pairing a Pro product is
+  how the refusal ends. While events are refused, no partner keeps a
+  capability it has taken over. A Sentry whose door events are being refused
+  does not hold the doors: NotifyMatrix watches them itself. Alarms from UniFi
+  are never affected.
+
+  A banner on every tab says when partner events are being refused. Peer link
+  leads with it, and shows each product's *commercial use: granted / not
+  granted / not heard yet*. Each refusal is recorded with its reason in the
+  receipts and the Activity log. After a restart, a paired product has 10
+  minutes to say what it grants before it counts as granting nothing, so a
+  restart never briefly refuses a Pro site's events.
+
+  **Update the partner products first.** A paired product that doesn't send
+  the field yet grants nothing. That includes Sentry: on a site where Sentry
+  is the only paired product, its events are refused until it sends the field
+  too.
 
 ## [0.5.6] — 2026-10-01
 

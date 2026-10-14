@@ -38,6 +38,12 @@ type linkState struct {
 	// receipts: a proposal is a prompt to look rather than a record, and the
 	// peer re-sends within minutes.
 	proposals *link.Proposals
+
+	// permissions is what each partner last said about commercial use of this
+	// product, and paired lists the partners it is judged across. See
+	// internal/link/commercial.go. paired nil means nothing is ever rejected.
+	permissions *link.Permissions
+	paired      func() []link.Peer
 }
 
 // windowForCapability is the silence window of the peer holding a capability.
@@ -81,7 +87,8 @@ const maxReceipts = 200
 const shownReceipts = 25
 
 func newLinkState(peers []link.Peer) *linkState {
-	s := &linkState{claims: map[string]*link.Claim{}, proposals: link.NewProposals()}
+	s := &linkState{claims: map[string]*link.Claim{}, proposals: link.NewProposals(),
+		permissions: link.NewPermissions(time.Now(), link.DefaultPermissionGrace)}
 	for _, p := range peers {
 		if cap := strings.TrimSpace(p.Manifest.Capability); cap != "" {
 			s.claims[cap] = link.NewClaim(cap, 0)
@@ -103,8 +110,50 @@ func (s *linkState) claimFor(peers []link.Peer, slug string) *link.Claim {
 	return nil
 }
 
+// setPaired tells the state where the paired partners are read from.
+func (s *linkState) setPaired(f func() []link.Peer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.paired = f
+}
+
+// rejecting reports whether partner events are refused because no paired
+// partner grants commercial use of this product.
+func (s *linkState) rejecting(now time.Time) bool {
+	s.mu.RLock()
+	paired := s.paired
+	s.mu.RUnlock()
+	if paired == nil {
+		return false
+	}
+	var slugs []string
+	for _, p := range paired() {
+		slugs = append(slugs, p.Slug)
+	}
+	return s.permissions.Rejecting(slugs, now)
+}
+
+// noPermission is why a claim is not honoured while partner events are
+// refused.
+const noPermission = "not honoured: no paired product grants commercial use, " +
+	"so partner events are refused and this product watches for itself"
+
 // holds reports whether a peer currently holds a capability, and why not.
+//
+// NOT WHILE PARTNER EVENTS ARE REFUSED. A claim makes this product's own
+// source stand down; honouring Sentry's hold on the doors while refusing every
+// door event it sends would leave nothing watching them. Checked before the
+// lock: rejecting takes it too.
 func (s *linkState) holds(capability string, now time.Time, silentAfter time.Duration) (bool, string) {
+	if s.rejecting(now) {
+		s.mu.RLock()
+		c := s.claims[capability]
+		s.mu.RUnlock()
+		if c == nil {
+			return false, ""
+		}
+		return false, noPermission
+	}
 	s.mu.RLock()
 	c := s.claims[capability]
 	s.mu.RUnlock()
@@ -277,6 +326,10 @@ func (d linkDeps) build() link.Deps {
 			return out
 		},
 		Claim: func(slug string) *link.Claim { return d.state.claimFor(peers(), slug) },
+		Permit: func(slug string, granted bool, now time.Time) {
+			d.state.permissions.Note(slug, granted, now)
+		},
+		Rejecting: d.state.rejecting,
 		Propose: func(slug, condition string, sev incident.Severity, title string, now time.Time) {
 			d.state.proposals.Note(slug, condition, sev, title, now)
 		},
@@ -338,8 +391,11 @@ var auditedCause = map[link.Cause]bool{
 	link.CauseInvalidEnvelope:     true,
 	link.CauseEnvelopeVersion:     true,
 	link.CauseUndeclaredCondition: true,
-	link.CauseStore:               true,
-	link.CauseIngest:              true,
+	// Only an authenticated partner reaches it, and it is a paired product's
+	// alarms going nowhere: durable, like the condition refusal above.
+	link.CauseNoCommercialPermission: true,
+	link.CauseStore:                  true,
+	link.CauseIngest:                 true,
 	// After a pairing proof was accepted: the peer got in and this product
 	// then failed to keep it, which leaves the two ends disagreeing about
 	// whether a credential exists. That is worth a durable line.
@@ -471,6 +527,8 @@ func (s *linkState) view(cfg func() *config.Config, p *link.Pairer, now time.Tim
 		Available: p != nil,
 		Address:   strings.TrimSpace(c.Web.LinkListen),
 		Peers:     []web.LinkPeerView{},
+
+		CommercialRejecting: s.rejecting(now),
 	}
 	// What the listener BOUND beats what the file asked for. They differ
 	// whenever the file says "auto", and the operator is being told what to
@@ -507,6 +565,7 @@ func (s *linkState) view(cfg func() *config.Config, p *link.Pairer, now time.Tim
 		if l.Capability != "" {
 			v.Holding, v.Why = s.holds(l.Capability, now, window)
 		}
+		v.Commercial = string(s.permissions.State(l.Slug))
 		out.Peers = append(out.Peers, v)
 	}
 

@@ -191,6 +191,11 @@ type Deps struct {
 	// approves them. Optional: nil means none.
 	PendingDecisions func() PendingDecisions
 
+	// CommercialRejecting reports whether partner events are being refused
+	// because no paired product grants commercial use of this one. Optional:
+	// nil means never.
+	CommercialRejecting func() bool
+
 	// Checklist reports what is still needed to make this installation work.
 	//
 	// Optional: a build that does not supply it simply has no setup panel. The

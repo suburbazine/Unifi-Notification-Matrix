@@ -125,6 +125,13 @@ type Deps struct {
 	// say yes stops being a text editor. See propose.go.
 	Propose func(slug, condition string, sev incident.Severity, title string, now time.Time)
 
+	// Permit records what an AUTHENTICATED partner said about commercial use
+	// of this product, and Rejecting reports whether partner events are being
+	// refused because no paired partner grants it. See commercial.go. Both nil
+	// means this build does not care, and nothing is ever refused for it.
+	Permit    func(slug string, granted bool, now time.Time)
+	Rejecting func(now time.Time) bool
+
 	Now      func() time.Time
 	SeenFor  time.Duration
 	Verifier *Verifier
@@ -193,6 +200,12 @@ type reply struct {
 	// back" or "it will not, and here is how to fix that", instead of guessing
 	// from how old its pairing is. Absent on anything but an event reply.
 	DemotesClaim *bool `json:"demotes_claim,omitempty"`
+
+	// CommercialPermissionRequired says this product is refusing partner
+	// events because no paired partner grants commercial use, so a partner
+	// can tell its own operator why its events are not landing. On heartbeat
+	// and ping replies, which are still answered while events are refused.
+	CommercialPermissionRequired bool `json:"commercial_permission_required,omitempty"`
 }
 
 func heartbeatSeconds(p Peer) int { return int(p.HeartbeatEvery() / time.Second) }
@@ -319,13 +332,20 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch r.URL.Path {
 	case RoutePing:
-		rc.ok(w, now, reply{Accepted: true, HeartbeatSeconds: heartbeatSeconds(peer)})
+		rc.permit(peer.Slug, commercialSignal(body), now)
+		rc.ok(w, now, reply{Accepted: true, HeartbeatSeconds: heartbeatSeconds(peer),
+			CommercialPermissionRequired: rc.rejecting(now)})
 	case RouteHeartbeat:
+		// Taken whatever the permission says: it carries the permission, and
+		// the silence alarm. Refusing it would make a lapsed licence look like
+		// a dead product, and leave the rejection with no way to end.
+		rc.permit(peer.Slug, commercialSignal(body), now)
 		if c := rc.claim(peer.Slug); c != nil {
 			c.Heartbeat(now)
 		}
 		rc.record(Receipt{At: now, LinkID: cred.LinkID, Route: r.URL.Path, Accepted: true})
-		rc.ok(w, now, reply{Accepted: true, HeartbeatSeconds: heartbeatSeconds(peer)})
+		rc.ok(w, now, reply{Accepted: true, HeartbeatSeconds: heartbeatSeconds(peer),
+			CommercialPermissionRequired: rc.rejecting(now)})
 	case RouteEvents:
 		rc.events(w, r, cred, peer, body, now, deny)
 	}
@@ -359,6 +379,19 @@ func (rc *Receiver) events(w http.ResponseWriter, r *http.Request, cred Credenti
 				incident.Severity(env.Severity), env.Title, now)
 		}
 		deny(cred.LinkID, cause, err.Error())
+		return
+	}
+
+	// THE COMMERCIAL REJECTION. The event's own word counts first, so a Pro
+	// partner's event is never refused for want of the permission it carries.
+	// After validation, so an undeclared condition is still proposed and the
+	// operator can be ready the moment permission arrives; before idempotency
+	// and ingest, so a refused event is not remembered as seen and its retry
+	// lands once a partner grants permission.
+	rc.permit(peer.Slug, env.CommercialPermission, now)
+	if rc.rejecting(now) {
+		deny(cred.LinkID, CauseNoCommercialPermission, "no paired product grants "+
+			"commercial use of NotifyMatrix (a Pro tier does), so partner events are refused")
 		return
 	}
 
@@ -458,6 +491,16 @@ func (rc *Receiver) claim(slug string) *Claim {
 	return rc.deps.Claim(slug)
 }
 
+func (rc *Receiver) permit(slug string, granted bool, now time.Time) {
+	if rc.deps.Permit != nil {
+		rc.deps.Permit(slug, granted, now)
+	}
+}
+
+func (rc *Receiver) rejecting(now time.Time) bool {
+	return rc.deps.Rejecting != nil && rc.deps.Rejecting(now)
+}
+
 // propose hands an undeclared condition to whatever is collecting them.
 func (rc *Receiver) propose(slug, condition string, sev incident.Severity,
 	title string, now time.Time) {
@@ -529,6 +572,9 @@ func (rc *Receiver) pair(w http.ResponseWriter, r *http.Request, now time.Time,
 		}
 	}
 
+	// Only once the pairing has been stored: a pairing that failed grants
+	// nothing.
+	rc.permit(peer.Slug, req.CommercialPermission, now)
 	rc.record(Receipt{At: now, LinkID: res.LinkID, Route: r.URL.Path, Accepted: true})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

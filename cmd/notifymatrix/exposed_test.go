@@ -127,6 +127,7 @@ func TestARefusalThatRequiredACredentialIsStillAudited(t *testing.T) {
 		link.CauseInvalidEnvelope,
 		link.CauseEnvelopeVersion,
 		link.CauseUndeclaredCondition,
+		link.CauseNoCommercialPermission,
 		link.CauseStore,
 		link.CauseIngest,
 		link.CausePairStore,

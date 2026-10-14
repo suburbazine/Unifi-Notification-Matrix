@@ -152,6 +152,11 @@ type PairRequest struct {
 	Proof       string `json:"proof"`
 
 	Manifest Manifest `json:"manifest"`
+
+	// CommercialPermission is the partner granting commercial use of this
+	// product from the moment it pairs, so a Pro partner's first event is not
+	// refused while its first heartbeat is still on the way. See commercial.go.
+	CommercialPermission bool `json:"commercial_permission,omitempty"`
 }
 
 // PairResponse is what this product returns on success.

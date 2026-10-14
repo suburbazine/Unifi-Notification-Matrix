@@ -1069,6 +1069,9 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 	// Peer state. Empty and inert unless something is paired.
 	linkPeers, _ := config.BuildLinks(cfg)
 	links := newLinkState(linkPeers)
+	// Read through the variable, not captured: livePeers is replaced once the
+	// configuration watcher is running.
+	links.setPaired(func() []link.Peer { return livePeers() })
 
 	// Every paired peer's deadman, whether or not it claims anything.
 	peerLive := newPeerLiveness(started, link.DefaultSilentAfter,
@@ -1449,6 +1452,7 @@ func runDaemon(ctx context.Context, dataDir string) (retErr error) {
 			// Coverage means a paired peer today. An off-site heartbeat would
 			// count too and does not exist yet; when it does it belongs in
 			// this condition and nowhere else.
+			CommercialRejecting: func() bool { return links.rejecting(time.Now()) },
 			PendingDecisions: func() web.PendingDecisions {
 				return pendingDecisions(links.proposals.All())
 			},

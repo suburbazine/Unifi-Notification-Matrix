@@ -1397,6 +1397,7 @@ function refreshStatus(done) {
     state.selfWatch = d.self_watch || {};
     renderSelfWatchBanner(state.selfWatch);
     renderDecisionsBanner(d.decisions);
+    renderCommercialBanner(d.commercial_rejecting);
     renderHealth(d.health);
     // Redrawn when either fact changes, because the tab may already have been
     // drawn without it. refreshAll fetches this and the tab side by side, and
@@ -2342,6 +2343,12 @@ function renderLinkSection(body, ctx) {
   // operator here, and the card used to sit three cards down, under the
   // address, the pairing code and the paired products -- so following the
   // banner landed on the fingerprint. Empty, it keeps its old place below.
+  // Before everything, including a waiting decision: approving a condition
+  // lets nothing through while every partner event is refused.
+  if (st.commercial_rejecting) {
+    body.appendChild(callout(COMMERCIAL_REFUSED, "err", "Partner events are being refused"));
+  }
+
   var pending = st.proposals || [];
   if (pending.length) body.appendChild(proposalsCard(pending));
 
@@ -2674,6 +2681,12 @@ function peerCard(p) {
     p.link_id + " · " + p.conditions +
     (p.conditions === 1 ? " condition" : " conditions"));
   card.appendChild(meta);
+  // What it last said about commercial use of this product. One partner
+  // granting it is enough for all of them.
+  var cm = el("div", "row");
+  cm.appendChild(badge("commercial use: " + (p.commercial || "not heard yet"),
+    p.commercial === "granted" ? "ok" : (p.commercial === "not granted" ? "warn" : "is-muted")));
+  card.appendChild(cm);
   // The silence window, and whether this peer actually keeps inside it.
   if (p.silent_after_seconds) {
     card.appendChild(el("div", "muted small",
@@ -2745,6 +2758,7 @@ var LINK_CAUSES = {
   "malformed-envelope": "It authenticated and then sent something that is not an event.",
   "invalid-envelope": "It sent something outside the manifest you approved — a severity, a state or a field that does not match what it declared.",
   "dedup-key-disagreement": "Its idempotency key disagrees with the one this end computes, so the two products would file this alarm as two incidents that never merge. NOTHING IS WRONG WITH YOUR MANIFEST and there is nothing to approve: the peer is building the key from something other than the entity it sent. Both keys are in the line below — send them to whoever maintains that product. If it simply stops sending a key, this end computes one and the event goes through.",
+  "no-commercial-permission": "Refused because no paired product grants commercial use of NotifyMatrix. A Pro tier of Lightspeed Rewards or LSProtect does, and says so to this product on its own. Nothing is lost: the product keeps retrying, and its events land once any paired product grants it. Its heartbeats are still taken, so it is not reported silent.",
   "undeclared-condition": "A DECISION IS WAITING FOR YOU. It sent a condition its approved manifest does not contain, so the event was refused — and every one like it will be until you approve it under “Waiting for your decision”. Usually its next release reporting something new. There is nothing to fix at the other end, and no need to pair again: it keeps retrying, and approving is what lets the next one through.",
   "envelope-version": "It speaks a different version of the link protocol. Nothing is wrong with your setup; one of the two products needs upgrading.",
   "over-the-rate-limit": "It sent far more in a minute than any working peer does. Nothing is lost — it will retry — but something on that end is looping, or somebody has a credential they should not.",
@@ -5399,6 +5413,28 @@ function renderActivity(a) {
 // nothing outside this machine would notice it stop, and pairing a peer
 // elsewhere makes that false. An operator who fixes it watches this go away
 // rather than reading that it is fixed.
+// COMMERCIAL_REFUSED is the one sentence for "partner events are refused",
+// shared by the banner and the Peer link section so the two cannot disagree.
+var COMMERCIAL_REFUSED = "None of the paired products grants commercial use " +
+  "of NotifyMatrix, so their events are being refused and raise nothing here. " +
+  "A Pro tier of Lightspeed Rewards or LSProtect grants it, and tells this " +
+  "product so by itself. Nothing is lost: they keep retrying, and their " +
+  "events land once one of them grants it. Alarms from UniFi are not affected.";
+
+// renderCommercialBanner says so on every tab and to everyone: a paired
+// product's alarms being refused is something the wall display must show.
+function renderCommercialBanner(on) {
+  var existing = byId("commercial-banner");
+  if (!on) {
+    if (existing) existing.parentNode.removeChild(existing);
+    return;
+  }
+  if (existing) return;
+  var b = el("div", "banner is-err", COMMERCIAL_REFUSED);
+  b.id = "commercial-banner";
+  document.body.insertBefore(b, document.body.firstChild);
+}
+
 // decideButton takes the operator from a refusal to the decision it is
 // waiting on: the "Waiting for your decision" card in Peer link.
 function decideButton() {

@@ -38,6 +38,10 @@ type LinkPairing struct {
 	// Peers is what is paired now.
 	Peers []LinkPeerView `json:"peers"`
 
+	// CommercialRejecting says partner events are being refused because no
+	// paired product grants commercial use of this one.
+	CommercialRejecting bool `json:"commercial_rejecting"`
+
 	// Receipts is what peers have actually done here, most recent first,
 	// INCLUDING every refusal and why.
 	//
@@ -117,7 +121,12 @@ type LinkProposalView struct {
 
 // LinkPeerView is one paired peer, as an operator needs to see it.
 type LinkPeerView struct {
-	Product    string `json:"product"`
+	Product string `json:"product"`
+
+	// Commercial is what this partner last said about commercial use of this
+	// product: "granted", "not granted" or "not heard yet".
+	Commercial string `json:"commercial"`
+
 	LinkID     string `json:"link_id"`
 	Capability string `json:"capability,omitempty"`
 	Conditions int    `json:"conditions"`

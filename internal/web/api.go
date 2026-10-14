@@ -247,6 +247,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"setup":               s.setupSummary(),
 		"self_watch":          s.selfWatch(),
 		"decisions":           s.pendingDecisions(),
+		// Public, like the decisions count: the wall display has to say that
+		// a paired product's alarms are being refused, and why.
+		"commercial_rejecting": s.deps.CommercialRejecting != nil && s.deps.CommercialRejecting(),
 	})
 }
 

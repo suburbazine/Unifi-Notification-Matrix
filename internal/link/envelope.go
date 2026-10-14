@@ -88,6 +88,10 @@ type Envelope struct {
 	// Context is rendered into the incident body, not stored typed. If it ever
 	// needs to be queryable that is a store migration and a conversation.
 	Context map[string]any `json:"context,omitempty"`
+
+	// CommercialPermission is the sending partner granting commercial use of
+	// this product -- its Pro tier saying so. See commercial.go.
+	CommercialPermission bool `json:"commercial_permission,omitempty"`
 }
 
 var (
